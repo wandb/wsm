@@ -23,7 +23,6 @@ builds:
       - windows
       - darwin
     main: ./cmd/wsm
-    binary: bin/wsm
 
 archives:
   - format: tar.gz

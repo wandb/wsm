@@ -10,7 +10,7 @@ import (
 	"path"
 
 	"github.com/spf13/cobra"
-	"github.com/wandb/wsm/cmds/wbs/deploy"
+	"github.com/wandb/wsm/cmd/wsm/deploy"
 	"github.com/wandb/wsm/pkg/crd"
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/helm"
@@ -21,7 +21,7 @@ import (
 
 func RootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use: "wbs",
+		Use: "wsm",
 	}
 
 	return cmd

@@ -8,11 +8,10 @@ permissions:
   contents: write
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag_name:
-        required: true
-        type: string
+  push:
+    # run only against tags
+    tags:
+      - "*"
 
 jobs:
   linux:
@@ -26,7 +25,8 @@ jobs:
       - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@v5
         with:
-          version: "~1.24.0"
+          distribution: goreleaser
+          version: latest
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}

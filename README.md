@@ -1,4 +1,4 @@
-# wsm
+# Weights & Biases Server Manager
 
 ## Install
 

@@ -299,7 +299,7 @@ func DeployCmd() *cobra.Command {
 
 	cmd.Flags().BoolVarP(&deployWithHelm, "helm", "", false, "Deploy the system using the helm (not recommended).")
 	cmd.Flags().StringVarP(&bundlePath, "bundle", "b", "", "Path to the bundle to deploy with.")
-	cmd.Flags().StringVarP(&valuesPath, "values", "v", "", "Values file to apply to the helm chart yaml.")
+	cmd.Flags().StringVarP(&valuesPath, "spec", "s", "", "Spec file to apply to the helm chart yaml.")
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "wandb", "Namespace to deploy into.")
 	cmd.Flags().StringVarP(&chartPath, "chart", "c", "", "Path to W&B helm chart.")
 	cmd.Flags().BoolVarP(&airgapped, "airgapped", "a", false, "Deploy in airgapped mode.")

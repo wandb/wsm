@@ -68,7 +68,7 @@ func NewWeightsAndBiases(chartPath string, vals values.Values) *WeightsAndBiases
 }
 
 func ApplyWeightsAndBiases(wb *WeightsAndBiases) error {
-	_, cs, err := kubectl.GetClientset()
+	_, cs, err := kubectl.GetDynamicClientset()
 	if err != nil {
 		return err
 	}

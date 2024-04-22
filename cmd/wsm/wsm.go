@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/cmd/wsm/deploy"
+	"github.com/wandb/wsm/pkg/configmaps"
 	"github.com/wandb/wsm/pkg/crd"
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/helm"
@@ -150,7 +151,7 @@ func deployOperator(chartsDir string, namespace string, releaseName string, airg
 			return err
 		}
 
-		operatorValues.SetValue("charts", map[string]string{
+		configmaps.UpsertConfigMap(map[string]string{
 			helm.WandbChart: wandbChartBinary,
 		})
 	}

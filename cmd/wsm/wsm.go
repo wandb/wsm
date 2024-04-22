@@ -127,7 +127,7 @@ func base64EncodeFile(filePath string) (string, error) {
 	return base64.StdEncoding.EncodeToString(fileContents), nil
 }
 
-func deployOperator(chartsDir string, namespace string, releaseName string) error {
+func deployOperator(chartsDir string, namespace string, releaseName string, airgapped bool) error {
 	operatorChartPath := deploy.DownloadHelmChart(
 		helm.WandbHelmRepoURL, helm.WandbOperatorChart, "", chartsDir,
 	)
@@ -137,21 +137,23 @@ func deployOperator(chartsDir string, namespace string, releaseName string) erro
 		return errors.New("could not find operator chart")
 	}
 
-	wandbChartPath := deploy.DownloadHelmChart(
-		helm.WandbHelmRepoURL, helm.WandbChart, "", chartsDir,
-	)
-
-	wandbChartBinary, err := base64EncodeFile(wandbChartPath)
-	if err != nil {
-		return err
-	}
-
 	operatorValues := values.Values{}
-	operatorValues.SetValue("airgapped", true)
+	if airgapped {
+		operatorValues.SetValue("airgapped", true)
 
-	operatorValues.SetValue("charts", map[string]string{
-		helm.WandbChart: wandbChartBinary,
-	})
+		wandbChartPath := deploy.DownloadHelmChart(
+			helm.WandbHelmRepoURL, helm.WandbChart, "", chartsDir,
+		)
+
+		wandbChartBinary, err := base64EncodeFile(wandbChartPath)
+		if err != nil {
+			return err
+		}
+
+		operatorValues.SetValue("charts", map[string]string{
+			helm.WandbChart: wandbChartBinary,
+		})
+	}
 
 	deploy.DeployChart(namespace, releaseName, operatorChart, operatorValues.AsMap())
 
@@ -172,6 +174,7 @@ func DeployCmd() *cobra.Command {
 	releaseName := "wandb"
 	var valuesPath string
 	var chartPath string
+	var airgapped bool
 
 	cmd := &cobra.Command{
 		Use: "deploy",
@@ -208,7 +211,7 @@ func DeployCmd() *cobra.Command {
 				os.Exit(0)
 			}
 
-			if err := deployOperator(chartsDir, namespace, "operator"); err != nil {
+			if err := deployOperator(chartsDir, namespace, "operator", airgapped); err != nil {
 				fmt.Println("Error deploying operator:", err)
 				os.Exit(1)
 			}
@@ -299,6 +302,7 @@ func DeployCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&valuesPath, "values", "v", "", "Values file to apply to the helm chart yaml.")
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "wandb", "Namespace to deploy into.")
 	cmd.Flags().StringVarP(&chartPath, "chart", "c", "", "Path to W&B helm chart.")
+	cmd.Flags().BoolVarP(&airgapped, "airgapped", "a", false, "Deploy in airgapped mode.")
 
 	cmd.Flags().MarkHidden("helm")
 

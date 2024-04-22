@@ -22,7 +22,6 @@ func UpsertConfigMap(data map[string]string) error {
 		Data: data,
 	}
 
-	// check if configmap exists because otherwise we need to do update instead of create
 	_, err = cs.CoreV1().ConfigMaps("default").Get(ctx, "wandb-charts", metav1.GetOptions{})
 	if err != nil {
 		_, err = cs.CoreV1().ConfigMaps("default").Create(ctx, configMap, metav1.CreateOptions{})

@@ -16,8 +16,9 @@ import (
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/helm"
 	"github.com/wandb/wsm/pkg/helm/values"
+	"github.com/wandb/wsm/pkg/spec"
 	"github.com/wandb/wsm/pkg/utils"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 func RootCmd() *cobra.Command {
@@ -165,6 +166,21 @@ func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath s
 	return nil
 }
 
+func specFromBundle(bundlePath string) (*spec.Spec, error) {
+	specPath := path.Join(bundlePath, "spec.yaml")
+	specData, err := os.ReadFile(specPath)
+	if err != nil {
+		return nil, err
+	}
+
+	spec := &spec.Spec{}
+	if err := yaml.Unmarshal(specData, spec); err != nil {
+		return nil, err
+	}
+
+	return spec, nil
+}
+
 type LocalSpec struct {
 	Chart struct {
 		Path string `json:"path" yaml:"path"`
@@ -191,11 +207,37 @@ func DeployCmd() *cobra.Command {
 				os.Exit(1)
 			}
 
+			var spec *spec.Spec
+			switch {
+			case bundlePath != "":
+				spec, err = specFromBundle(bundlePath)
+				if err != nil {
+					fmt.Println("Error reading bundle spec:", err)
+					os.Exit(1)
+				}
+
+				chartPath, err = utils.PathFromDir(bundlePath+"/charts", utils.WandbChartPattern)
+				if err != nil {
+					fmt.Println("Error finding wandb chart:", err)
+					os.Exit(1)
+				}
+
+				operatorChartPath, err = utils.PathFromDir(bundlePath+"/charts", utils.OperatorChartPattern)
+				if err != nil {
+					fmt.Println("Error finding operator chart:", err)
+					os.Exit(1)
+				}
+			default:
+				spec, err = deployer.GetChannelSpec("")
+				if err != nil {
+					fmt.Println("Error getting channel spec:", err)
+					os.Exit(1)
+				}
+			}
+
 			chartsDir := path.Join(homedir, ".wandb", "charts")
 			os.MkdirAll(chartsDir, 0755)
 
-			spec := deploy.GetChannelSpec()
-			// Merge user values with spec values
 			vals := spec.Values
 			if localVals, err := values.FromYAMLFile(valuesPath); err == nil {
 				if finalVals, err := vals.Merge(localVals); err != nil {
@@ -222,7 +264,7 @@ func DeployCmd() *cobra.Command {
 				os.Exit(1)
 			}
 
-			wb := crd.NewWeightsAndBiases("charts/"+helm.WandbChart, vals)
+			wb := crd.NewWeightsAndBiases(chartPath, vals)
 
 			if err := crd.ApplyWeightsAndBiases(wb); err != nil {
 				fmt.Println("Error applying weightsandbiases:", err)

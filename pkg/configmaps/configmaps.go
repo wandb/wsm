@@ -8,7 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func UpsertConfigMap(data map[string]string) error {
+func UpsertConfigMap(data map[string]string, name string, namespace string) error {
 	ctx := context.Background()
 	_, cs, err := kubectl.GetClientset()
 	if err != nil {
@@ -17,21 +17,21 @@ func UpsertConfigMap(data map[string]string) error {
 
 	configMap := &v1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "wandb-charts",
+			Name: name,
 		},
 		Data: data,
 	}
 
-	_, err = cs.CoreV1().ConfigMaps("default").Get(ctx, "wandb-charts", metav1.GetOptions{})
+	_, err = cs.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		_, err = cs.CoreV1().ConfigMaps("default").Create(ctx, configMap, metav1.CreateOptions{})
+		_, err = cs.CoreV1().ConfigMaps(namespace).Create(ctx, configMap, metav1.CreateOptions{})
 		if err != nil {
 			return err
 		}
 		return nil
 	}
 
-	_, err = cs.CoreV1().ConfigMaps("default").Update(ctx, configMap, metav1.UpdateOptions{})
+	_, err = cs.CoreV1().ConfigMaps(namespace).Update(ctx, configMap, metav1.UpdateOptions{})
 	if err != nil {
 		return err
 	}

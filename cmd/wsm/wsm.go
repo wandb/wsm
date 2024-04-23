@@ -153,7 +153,7 @@ func deployOperator(chartsDir string, namespace string, releaseName string, airg
 
 		configmaps.UpsertConfigMap(map[string]string{
 			helm.WandbChart: wandbChartBinary,
-		})
+		}, "wandb-charts", namespace)
 	}
 
 	deploy.DeployChart(namespace, releaseName, operatorChart, operatorValues.AsMap())

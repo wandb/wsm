@@ -207,15 +207,20 @@ func DeployCmd() *cobra.Command {
 				os.Exit(1)
 			}
 
-			var spec *spec.Spec
-			switch {
-			case bundlePath != "":
-				spec, err = specFromBundle(bundlePath)
-				if err != nil {
-					fmt.Println("Error reading bundle spec:", err)
-					os.Exit(1)
+			getSpec := func() (*spec.Spec, error) {
+				if bundlePath != "" {
+					return specFromBundle(bundlePath)
 				}
+				return deployer.GetChannelSpec("")
+			}
 
+			spec, err := getSpec()
+			if err != nil {
+				fmt.Println("Error getting spec:", err)
+				os.Exit(1)
+			}
+
+			if bundlePath != "" {
 				chartPath, err = utils.PathFromDir(bundlePath+"/charts", utils.WandbChartPattern)
 				if err != nil {
 					fmt.Println("Error finding wandb chart:", err)
@@ -225,12 +230,6 @@ func DeployCmd() *cobra.Command {
 				operatorChartPath, err = utils.PathFromDir(bundlePath+"/charts", utils.OperatorChartPattern)
 				if err != nil {
 					fmt.Println("Error finding operator chart:", err)
-					os.Exit(1)
-				}
-			default:
-				spec, err = deployer.GetChannelSpec("")
-				if err != nil {
-					fmt.Println("Error getting channel spec:", err)
 					os.Exit(1)
 				}
 			}

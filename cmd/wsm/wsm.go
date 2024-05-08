@@ -221,13 +221,13 @@ func DeployCmd() *cobra.Command {
 			}
 
 			if bundlePath != "" {
-				chartPath, err = utils.PathFromDir(bundlePath+"/charts", utils.WandbChartPattern)
+				chartPath, err = utils.PathFromDir(bundlePath+"/charts", helm.WandbChart)
 				if err != nil {
 					fmt.Println("Error finding wandb chart:", err)
 					os.Exit(1)
 				}
 
-				operatorChartPath, err = utils.PathFromDir(bundlePath+"/charts", utils.OperatorChartPattern)
+				operatorChartPath, err = utils.PathFromDir(bundlePath+"/charts", helm.WandbOperatorChart)
 				if err != nil {
 					fmt.Println("Error finding operator chart:", err)
 					os.Exit(1)

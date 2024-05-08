@@ -6,12 +6,8 @@ import (
 	"regexp"
 )
 
-const (
-	OperatorChartPattern = `^operator-\d+\.\d+\.\d+\.[a-zA-Z0-9]+$`
-	WandbChartPattern    = `^operator-wandb-\d+\.\d+\.\d+\.[a-zA-Z0-9]+$`
-)
-
-func PathFromDir(dir string, pattern string) (string, error) {
+func PathFromDir(dir string, file string) (string, error) {
+	pattern := fmt.Sprintf(`^%s-\d+\.\d+\.\d+\.[a-zA-Z0-9]+$`, file)
 	regex := regexp.MustCompile(pattern)
 
 	files, err := os.ReadDir(dir)

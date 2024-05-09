@@ -3,7 +3,7 @@ package values
 import (
 	"os"
 
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 func FromYAMLFile(path string) (Values, error) {

@@ -3,20 +3,11 @@ package deploy
 import (
 	"time"
 
-	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/helm"
 	"github.com/wandb/wsm/pkg/term/task"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 )
-
-func GetChannelSpec() *deployer.Spec {
-	spec, err := deployer.GetChannelSpec("")
-	if err != nil {
-		panic(err)
-	}
-	return spec
-}
 
 func DownloadHelmChart(
 	url string,

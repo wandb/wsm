@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/wandb/wsm/pkg/helm/values"
+	"github.com/wandb/wsm/pkg/spec"
 )
 
 const DeployerAPI = "https://deploy.wandb.ai/api/v1/operator/channel"
@@ -18,16 +18,7 @@ func GetURL() string {
 	return DeployerAPI
 }
 
-type Spec struct {
-	Chart struct {
-		URL     string `json:"url"`
-		Version string `json:"version"`
-		Name    string `json:"name"`
-	} `json:"chart"`
-	Values values.Values `json:"values"`
-}
-
-func GetChannelSpec(license string) (*Spec, error) {
+func GetChannelSpec(license string) (*spec.Spec, error) {
 	url := GetURL()
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
@@ -51,7 +42,7 @@ func GetChannelSpec(license string) (*Spec, error) {
 		return nil, err
 	}
 
-	spec := new(Spec)
+	spec := new(spec.Spec)
 	err = json.Unmarshal(resBody, &spec)
 	if err != nil {
 		return nil, err

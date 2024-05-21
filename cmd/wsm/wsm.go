@@ -16,7 +16,9 @@ import (
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/helm"
 	"github.com/wandb/wsm/pkg/helm/values"
+	"github.com/wandb/wsm/pkg/images"
 	"github.com/wandb/wsm/pkg/spec"
+	"github.com/wandb/wsm/pkg/term/pkgm"
 	"github.com/wandb/wsm/pkg/utils"
 	"gopkg.in/yaml.v3"
 )
@@ -100,19 +102,19 @@ func DownloadCmd() *cobra.Command {
 				panic(err)
 			}
 
-			// cb := func(pkg string) {
-			// 	path := "bundle/images/" + pkg
-			// 	os.MkdirAll(path, 0755)
-			// 	err := images.Download(pkg, path+"/image.tgz")
-			// 	if err != nil {
-			// 		fmt.Println(err)
-			// 	}
-			// }
+			cb := func(pkg string) {
+				path := "bundle/images/" + pkg
+				os.MkdirAll(path, 0755)
+				err := images.Download(pkg, path+"/image.tgz")
+				if err != nil {
+					fmt.Println(err)
+				}
+			}
 
-			// if _, err := pkgm.New(imgs, cb).Run(); err != nil {
-			// 	fmt.Println("Error deploying:", err)
-			// 	os.Exit(1)
-			// }
+			if _, err := pkgm.New(imgs, cb).Run(); err != nil {
+				fmt.Println("Error deploying:", err)
+				os.Exit(1)
+			}
 		},
 	}
 

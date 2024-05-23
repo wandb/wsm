@@ -22,4 +22,6 @@ go.work
 
 dist/
 
-cmd/wsm/bundle
+cmd/wsm/bundle/
+
+bundle/

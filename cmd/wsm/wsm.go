@@ -190,6 +190,17 @@ type LocalSpec struct {
 	Values values.Values `json:"values" yaml:"values"`
 }
 
+func getChart(airgapped bool, chartPath string, specToApply *spec.Spec) spec.Chart {
+	if airgapped {
+		return spec.Chart{Path: chartPath}
+	}
+	return spec.Chart{
+		URL:     specToApply.Chart.URL,
+		Version: specToApply.Chart.Version,
+		Name:    specToApply.Chart.Name,
+	}
+}
+
 func DeployCmd() *cobra.Command {
 	var deployWithHelm bool
 	var bundlePath string
@@ -216,7 +227,7 @@ func DeployCmd() *cobra.Command {
 				return deployer.GetChannelSpec("")
 			}
 
-			spec, err := getSpec()
+			specToApply, err := getSpec()
 			if err != nil {
 				fmt.Println("Error getting spec:", err)
 				os.Exit(1)
@@ -239,7 +250,7 @@ func DeployCmd() *cobra.Command {
 			chartsDir := path.Join(homedir, ".wandb", "charts")
 			os.MkdirAll(chartsDir, 0755)
 
-			vals := spec.Values
+			vals := specToApply.Values
 			if localVals, err := values.FromYAMLFile(valuesPath); err == nil {
 				if finalVals, err := vals.Merge(localVals); err != nil {
 					vals = finalVals
@@ -248,9 +259,9 @@ func DeployCmd() *cobra.Command {
 
 			if deployWithHelm {
 				if chartPath == "" {
-					fmt.Println("Downloading W&B chart from", spec.Chart.URL)
+					fmt.Println("Downloading W&B chart from", specToApply.Chart.URL)
 					chartPath = deploy.DownloadHelmChart(
-						spec.Chart.URL, spec.Chart.Name, spec.Chart.Version, chartsDir)
+						specToApply.Chart.URL, specToApply.Chart.Name, specToApply.Chart.Version, chartsDir)
 				}
 				chart := deploy.LoadChart(chartPath)
 				if _, err := json.Marshal(vals.AsMap()); err != nil {
@@ -265,7 +276,8 @@ func DeployCmd() *cobra.Command {
 				os.Exit(1)
 			}
 
-			wb := crd.NewWeightsAndBiases(chartPath, vals)
+			chart := getChart(airgapped, chartPath, specToApply)
+			wb := crd.NewWeightsAndBiases(chart, vals)
 
 			if err := crd.ApplyWeightsAndBiases(wb); err != nil {
 				fmt.Println("Error applying weightsandbiases:", err)

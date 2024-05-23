@@ -7,6 +7,7 @@ import (
 
 	"github.com/wandb/wsm/pkg/helm/values"
 	"github.com/wandb/wsm/pkg/kubectl"
+	"github.com/wandb/wsm/pkg/spec"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -30,17 +31,10 @@ type WeightsAndBiases struct {
 		Namespace string            `json:"namespace"`
 		Labels    map[string]string `json:"labels"`
 	} `json:"metadata"`
-	Spec Spec `json:"spec"`
+	Spec spec.Spec `json:"spec"`
 }
 
-type Spec struct {
-	Chart struct {
-		Path string `json:"path"`
-	} `json:"chart"`
-	Values map[string]interface{} `json:"values"`
-}
-
-func NewWeightsAndBiases(chartPath string, vals values.Values) *WeightsAndBiases {
+func NewWeightsAndBiases(chart spec.Chart, vals values.Values) *WeightsAndBiases {
 	return &WeightsAndBiases{
 		APIVersion: fmt.Sprintf("%s/%s", Group, GroupVersion),
 		Kind:       Kind,
@@ -56,12 +50,8 @@ func NewWeightsAndBiases(chartPath string, vals values.Values) *WeightsAndBiases
 				"app.kubernetes.io/instance": Name,
 			},
 		},
-		Spec: Spec{
-			Chart: struct {
-				Path string `json:"path"`
-			}{
-				Path: chartPath,
-			},
+		Spec: spec.Spec{
+			Chart:  chart,
 			Values: vals,
 		},
 	}

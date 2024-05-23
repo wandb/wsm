@@ -190,14 +190,14 @@ type LocalSpec struct {
 	Values values.Values `json:"values" yaml:"values"`
 }
 
-func getChart(airgapped bool, chartPath string, _spec *spec.Spec) spec.Chart {
+func getChart(airgapped bool, chartPath string, specToApply *spec.Spec) spec.Chart {
 	if airgapped {
 		return spec.Chart{Path: chartPath}
 	}
 	return spec.Chart{
-		URL:     _spec.Chart.URL,
-		Version: _spec.Chart.Version,
-		Name:    _spec.Chart.Name,
+		URL:     specToApply.Chart.URL,
+		Version: specToApply.Chart.Version,
+		Name:    specToApply.Chart.Name,
 	}
 }
 

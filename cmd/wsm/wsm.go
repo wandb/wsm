@@ -227,7 +227,7 @@ func DeployCmd() *cobra.Command {
 				return deployer.GetChannelSpec("")
 			}
 
-			_spec, err := getSpec()
+			specToApply, err := getSpec()
 			if err != nil {
 				fmt.Println("Error getting spec:", err)
 				os.Exit(1)
@@ -250,7 +250,7 @@ func DeployCmd() *cobra.Command {
 			chartsDir := path.Join(homedir, ".wandb", "charts")
 			os.MkdirAll(chartsDir, 0755)
 
-			vals := _spec.Values
+			vals := specToApply.Values
 			if localVals, err := values.FromYAMLFile(valuesPath); err == nil {
 				if finalVals, err := vals.Merge(localVals); err != nil {
 					vals = finalVals
@@ -259,9 +259,9 @@ func DeployCmd() *cobra.Command {
 
 			if deployWithHelm {
 				if chartPath == "" {
-					fmt.Println("Downloading W&B chart from", _spec.Chart.URL)
+					fmt.Println("Downloading W&B chart from", specToApply.Chart.URL)
 					chartPath = deploy.DownloadHelmChart(
-						_spec.Chart.URL, _spec.Chart.Name, _spec.Chart.Version, chartsDir)
+						specToApply.Chart.URL, specToApply.Chart.Name, specToApply.Chart.Version, chartsDir)
 				}
 				chart := deploy.LoadChart(chartPath)
 				if _, err := json.Marshal(vals.AsMap()); err != nil {
@@ -276,7 +276,7 @@ func DeployCmd() *cobra.Command {
 				os.Exit(1)
 			}
 
-			chart := getChart(airgapped, chartPath, _spec)
+			chart := getChart(airgapped, chartPath, specToApply)
 			wb := crd.NewWeightsAndBiases(chart, vals)
 
 			if err := crd.ApplyWeightsAndBiases(wb); err != nil {

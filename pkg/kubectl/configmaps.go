@@ -1,16 +1,15 @@
-package configmaps
+package kubectl
 
 import (
 	"context"
 
-	"github.com/wandb/wsm/pkg/kubectl"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func UpsertConfigMap(data map[string]string, name string, namespace string) error {
 	ctx := context.Background()
-	_, cs, err := kubectl.GetClientset()
+	_, cs, err := GetClientset()
 	if err != nil {
 		panic(err)
 	}

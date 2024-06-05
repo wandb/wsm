@@ -1,127 +1,29 @@
-package main
+package cmd
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"path"
-	"runtime"
-	"time"
-
 	"github.com/spf13/cobra"
-	"github.com/wandb/wsm/cmd/wsm/deploy"
 	"github.com/wandb/wsm/pkg/crd"
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/helm"
 	"github.com/wandb/wsm/pkg/helm/values"
-	"github.com/wandb/wsm/pkg/images"
 	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/spec"
-	"github.com/wandb/wsm/pkg/term/pkgm"
+	"github.com/wandb/wsm/pkg/term/task"
 	"github.com/wandb/wsm/pkg/utils"
 	"gopkg.in/yaml.v3"
+	"helm.sh/helm/v3/pkg/chart"
+	"helm.sh/helm/v3/pkg/chart/loader"
+	"os"
+	"path"
+	"time"
 )
 
-func RootCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use: "wsm",
-	}
-
-	return cmd
-}
-
-func downloadChartImages(
-	url string,
-	name string,
-	version string,
-	vals map[string]interface{},
-) ([]string, error) {
-	chartsDir := "bundle/charts"
-	if err := os.MkdirAll(chartsDir, 0755); err != nil {
-		return nil, err
-	}
-
-	chart, err := helm.DownloadChart(
-		url,
-		name,
-		version,
-		chartsDir,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	runs, err := helm.GetRuntimeObjects(chart, vals)
-	if err != nil {
-		return nil, err
-	}
-	return helm.ExtractImages(runs), nil
-}
-
-func DownloadCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use: "download",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("Downloading operator helm chart")
-			operatorImgs, _ := downloadChartImages(
-				helm.WandbHelmRepoURL,
-				helm.WandbOperatorChart,
-				"", // empty version means latest
-				map[string]interface{}{
-					"image": map[string]interface{}{
-						"tag": "1.10.1",
-					},
-				},
-			)
-
-			spec, err := deployer.GetChannelSpec("")
-			if err != nil {
-				panic(err)
-			}
-
-			fmt.Println("Downloading wandb helm chart")
-			wandbImgs, _ := downloadChartImages(
-				spec.Chart.URL,
-				spec.Chart.Name,
-				spec.Chart.Version,
-				spec.Values,
-			)
-
-			imgs := utils.RemoveDuplicates(append(wandbImgs, operatorImgs...))
-			if len(imgs) == 0 {
-				fmt.Println("No images to download.")
-				os.Exit(1)
-			}
-
-			yamlData, err := yaml.Marshal(spec)
-			if err != nil {
-				panic(err)
-			}
-			if err = os.WriteFile("bundle/spec.yaml", yamlData, 0644); err != nil {
-				panic(err)
-			}
-
-			cb := func(pkg string) {
-				path := "bundle/images/" + pkg
-				os.MkdirAll(path, 0755)
-				err := images.Download(pkg, path+"/image.tgz")
-				if err != nil {
-					fmt.Println(err)
-				}
-			}
-
-			if _, err := pkgm.New(imgs, cb).Run(); err != nil {
-				fmt.Println("Error deploying:", err)
-				os.Exit(1)
-			}
-		},
-	}
-
-	return cmd
+func init() {
+	rootCmd.AddCommand(DeployCmd())
 }
 
 func base64EncodeFile(filePath string) (string, error) {
@@ -134,14 +36,56 @@ func base64EncodeFile(filePath string) (string, error) {
 	return base64.StdEncoding.EncodeToString(fileContents), nil
 }
 
+func downloadHelmChart(
+	url string,
+	name string,
+	version string,
+	dest string,
+) string {
+	chart, err := helm.DownloadChart(
+		url,
+		name,
+		version,
+		dest,
+	)
+	if err != nil {
+		panic(err)
+	}
+	return chart
+}
+
+func loadChart(chartPath string) *chart.Chart {
+	chart, err := loader.Load(chartPath)
+	if err != nil {
+		panic(err)
+	}
+	return chart
+}
+
+func deployChart(
+	namespace string,
+	releaseName string,
+	chart *chart.Chart,
+	vals map[string]interface{},
+) {
+	cb := func() error {
+		_, err := helm.Apply(namespace, releaseName, chart, vals)
+		time.Sleep(5 * time.Second)
+		return err
+	}
+	if _, err := task.New("Deploying wandb", cb).Run(); err != nil {
+		panic(err)
+	}
+}
+
 func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath string, namespace string, releaseName string, airgapped bool) error {
 	if operatorChartPath == "" {
-		operatorChartPath = deploy.DownloadHelmChart(
+		operatorChartPath = downloadHelmChart(
 			helm.WandbHelmRepoURL, helm.WandbOperatorChart, "", chartsDir,
 		)
 	}
 
-	operatorChart := deploy.LoadChart(operatorChartPath)
+	operatorChart := loadChart(operatorChartPath)
 	if operatorChart == nil {
 		return errors.New("could not find operator chart")
 	}
@@ -151,7 +95,7 @@ func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath s
 		operatorValues.SetValue("airgapped", true)
 
 		if wandbChartPath == "" {
-			wandbChartPath = deploy.DownloadHelmChart(
+			wandbChartPath = downloadHelmChart(
 				helm.WandbHelmRepoURL, helm.WandbChart, "", chartsDir,
 			)
 		}
@@ -166,7 +110,7 @@ func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath s
 		}, "wandb-charts", namespace)
 	}
 
-	deploy.DeployChart(namespace, releaseName, operatorChart, operatorValues.AsMap())
+	deployChart(namespace, releaseName, operatorChart, operatorValues.AsMap())
 
 	return nil
 }
@@ -263,14 +207,14 @@ func DeployCmd() *cobra.Command {
 			if deployWithHelm {
 				if chartPath == "" {
 					fmt.Println("Downloading W&B chart from", specToApply.Chart.URL)
-					chartPath = deploy.DownloadHelmChart(
+					chartPath = downloadHelmChart(
 						specToApply.Chart.URL, specToApply.Chart.Name, specToApply.Chart.Version, chartsDir)
 				}
-				chart := deploy.LoadChart(chartPath)
+				chart := loadChart(chartPath)
 				if _, err := json.Marshal(vals.AsMap()); err != nil {
 					panic(err)
 				}
-				deploy.DeployChart(namespace, releaseName, chart, vals.AsMap())
+				deployChart(namespace, releaseName, chart, vals.AsMap())
 				os.Exit(0)
 			}
 
@@ -302,55 +246,4 @@ func DeployCmd() *cobra.Command {
 	cmd.Flags().MarkHidden("helm")
 
 	return cmd
-}
-
-func openBrowser(url string) error {
-	var cmd string
-	var args []string
-
-	switch runtime.GOOS {
-	case "windows":
-		cmd = "cmd"
-		args = []string{"/c", "start"}
-	case "darwin":
-		cmd = "open"
-	default: // "linux", "freebsd", "openbsd", "netbsd"
-		cmd = "xdg-open"
-	}
-	args = append(args, url)
-	return exec.Command(cmd, args...).Start()
-}
-
-func ConsoleCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use: "console",
-		Run: func(cmd *cobra.Command, args []string) {
-			pwd, err := kubectl.GetSecret("wandb-password", "default")
-			if err != nil {
-				panic(err)
-			}
-
-			url := "http://localhost:8080/console/login?password=" + base64.StdEncoding.EncodeToString(pwd)
-
-			time.AfterFunc(500*time.Millisecond, func() {
-				openBrowser(url)
-			})
-			portForward := exec.Command("kubectl", "port-forward", "service/wandb-console", "8080:8082")
-			portForward.Stderr = os.Stderr
-			portForward.Stdout = os.Stdout
-			portForward.Stdin = os.Stdin
-			portForward.Run()
-		},
-	}
-
-	return cmd
-}
-
-func main() {
-	ctx := context.Background()
-	cmd := RootCmd()
-	cmd.AddCommand(DownloadCmd())
-	cmd.AddCommand(DeployCmd())
-	cmd.AddCommand(ConsoleCmd())
-	cmd.ExecuteContext(ctx)
 }

@@ -1,4 +1,4 @@
-package cmd
+package main
 
 import (
 	"context"
@@ -26,4 +26,8 @@ func Execute() {
 
 func init() {
 
+}
+
+func main() {
+	Execute()
 }

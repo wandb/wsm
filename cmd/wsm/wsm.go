@@ -7,16 +7,19 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
+	"runtime"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/cmd/wsm/deploy"
-	"github.com/wandb/wsm/pkg/configmaps"
 	"github.com/wandb/wsm/pkg/crd"
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/helm"
 	"github.com/wandb/wsm/pkg/helm/values"
 	"github.com/wandb/wsm/pkg/images"
+	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/spec"
 	"github.com/wandb/wsm/pkg/term/pkgm"
 	"github.com/wandb/wsm/pkg/utils"
@@ -158,7 +161,7 @@ func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath s
 			return err
 		}
 
-		configmaps.UpsertConfigMap(map[string]string{
+		kubectl.UpsertConfigMap(map[string]string{
 			helm.WandbChart: wandbChartBinary,
 		}, "wandb-charts", namespace)
 	}
@@ -301,10 +304,53 @@ func DeployCmd() *cobra.Command {
 	return cmd
 }
 
+func openBrowser(url string) error {
+	var cmd string
+	var args []string
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = "cmd"
+		args = []string{"/c", "start"}
+	case "darwin":
+		cmd = "open"
+	default: // "linux", "freebsd", "openbsd", "netbsd"
+		cmd = "xdg-open"
+	}
+	args = append(args, url)
+	return exec.Command(cmd, args...).Start()
+}
+
+func ConsoleCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use: "console",
+		Run: func(cmd *cobra.Command, args []string) {
+			pwd, err := kubectl.GetSecret("wandb-password", "default")
+			if err != nil {
+				panic(err)
+			}
+
+			url := "http://localhost:8080/console/login?password=" + base64.StdEncoding.EncodeToString(pwd)
+
+			time.AfterFunc(500*time.Millisecond, func() {
+				openBrowser(url)
+			})
+			portForward := exec.Command("kubectl", "port-forward", "service/wandb-console", "8080:8082")
+			portForward.Stderr = os.Stderr
+			portForward.Stdout = os.Stdout
+			portForward.Stdin = os.Stdin
+			portForward.Run()
+		},
+	}
+
+	return cmd
+}
+
 func main() {
 	ctx := context.Background()
 	cmd := RootCmd()
 	cmd.AddCommand(DownloadCmd())
 	cmd.AddCommand(DeployCmd())
+	cmd.AddCommand(ConsoleCmd())
 	cmd.ExecuteContext(ctx)
 }

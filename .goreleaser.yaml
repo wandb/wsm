@@ -22,7 +22,7 @@ builds:
       - linux
       - windows
       - darwin
-    main: ./cmd/wsm
+    main: .
 
 archives:
   - format: tar.gz

@@ -43,13 +43,13 @@ func ConsoleCmd() *cobra.Command {
 			url := "http://localhost:8080/console/login?password=" + base64.StdEncoding.EncodeToString(pwd)
 
 			time.AfterFunc(500*time.Millisecond, func() {
-				openBrowser(url)
+				_ = openBrowser(url)
 			})
 			portForward := exec.Command("kubectl", "port-forward", "service/wandb-console", "8080:8082")
 			portForward.Stderr = os.Stderr
 			portForward.Stdout = os.Stdout
 			portForward.Stdin = os.Stdin
-			portForward.Run()
+			_ = portForward.Run()
 		},
 	}
 

@@ -89,7 +89,7 @@ func DownloadCmd() *cobra.Command {
 
 			cb := func(pkg string) {
 				path := "bundle/images/" + pkg
-				os.MkdirAll(path, 0755)
+				_ = os.MkdirAll(path, 0755)
 				err := images.Download(pkg, path+"/image.tgz")
 				if err != nil {
 					fmt.Println(err)

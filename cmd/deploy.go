@@ -92,7 +92,7 @@ func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath s
 
 	operatorValues := values.Values{}
 	if airgapped {
-		operatorValues.SetValue("airgapped", true)
+		_ = operatorValues.SetValue("airgapped", true)
 
 		if wandbChartPath == "" {
 			wandbChartPath = downloadHelmChart(
@@ -105,7 +105,7 @@ func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath s
 			return err
 		}
 
-		kubectl.UpsertConfigMap(map[string]string{
+		_ = kubectl.UpsertConfigMap(map[string]string{
 			helm.WandbChart: wandbChartBinary,
 		}, "wandb-charts", namespace)
 	}
@@ -195,7 +195,7 @@ func DeployCmd() *cobra.Command {
 			}
 
 			chartsDir := path.Join(homedir, ".wandb", "charts")
-			os.MkdirAll(chartsDir, 0755)
+			_ = os.MkdirAll(chartsDir, 0755)
 
 			vals := specToApply.Values
 			if localVals, err := values.FromYAMLFile(valuesPath); err == nil {
@@ -243,7 +243,7 @@ func DeployCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&operatorChartPath, "operator-chart", "o", "", "Path to operator helm chart.")
 	cmd.Flags().BoolVarP(&airgapped, "airgapped", "a", false, "Deploy in airgapped mode.")
 
-	cmd.Flags().MarkHidden("helm")
+	_ = cmd.Flags().MarkHidden("helm")
 
 	return cmd
 }

@@ -42,7 +42,7 @@ func downloadHelmChart(
 	version string,
 	dest string,
 ) string {
-	chart, err := helm.DownloadChart(
+	helmChart, err := helm.DownloadChart(
 		url,
 		name,
 		version,
@@ -51,15 +51,15 @@ func downloadHelmChart(
 	if err != nil {
 		panic(err)
 	}
-	return chart
+	return helmChart
 }
 
 func loadChart(chartPath string) *chart.Chart {
-	chart, err := loader.Load(chartPath)
+	helmChart, err := loader.Load(chartPath)
 	if err != nil {
 		panic(err)
 	}
-	return chart
+	return helmChart
 }
 
 func deployChart(
@@ -122,12 +122,12 @@ func specFromBundle(bundlePath string) (*spec.Spec, error) {
 		return nil, err
 	}
 
-	spec := &spec.Spec{}
-	if err := yaml.Unmarshal(specData, spec); err != nil {
+	wandbSpec := &spec.Spec{}
+	if err := yaml.Unmarshal(specData, wandbSpec); err != nil {
 		return nil, err
 	}
 
-	return spec, nil
+	return wandbSpec, nil
 }
 
 type LocalSpec struct {
@@ -210,11 +210,11 @@ func DeployCmd() *cobra.Command {
 					chartPath = downloadHelmChart(
 						specToApply.Chart.URL, specToApply.Chart.Name, specToApply.Chart.Version, chartsDir)
 				}
-				chart := loadChart(chartPath)
+				helmChart := loadChart(chartPath)
 				if _, err := json.Marshal(vals.AsMap()); err != nil {
 					panic(err)
 				}
-				deployChart(namespace, releaseName, chart, vals.AsMap())
+				deployChart(namespace, releaseName, helmChart, vals.AsMap())
 				os.Exit(0)
 			}
 

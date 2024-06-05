@@ -223,8 +223,8 @@ func DeployCmd() *cobra.Command {
 				os.Exit(1)
 			}
 
-			chart := getChart(airgapped, chartPath, specToApply)
-			wb := crd.NewWeightsAndBiases(chart, vals)
+			helmChart := getChart(airgapped, chartPath, specToApply)
+			wb := crd.NewWeightsAndBiases(helmChart, vals)
 
 			if err := crd.ApplyWeightsAndBiases(wb); err != nil {
 				fmt.Println("Error applying weightsandbiases:", err)

@@ -14,8 +14,8 @@ var rootCmd = &cobra.Command{
 	Long:  `A utility for managing Weights & Biases Server deployments`,
 }
 
-// Execute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
+// Child commands add themselves via init() so all that should be done here is to set global
+// flags appropriately. This is called by main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	ctx := context.Background()
 	err := rootCmd.ExecuteContext(ctx)

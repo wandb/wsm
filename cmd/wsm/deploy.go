@@ -199,9 +199,12 @@ func DeployCmd() *cobra.Command {
 
 			vals := specToApply.Values
 			if localVals, err := values.FromYAMLFile(valuesPath); err == nil {
-				if finalVals, err := vals.Merge(localVals); err != nil {
-					vals = finalVals
+				finalVales, err := localVals.Merge(vals)
+				if err != nil {
+					fmt.Println("Error merging values:", err)
+					os.Exit(1)
 				}
+				vals = finalVales
 			}
 
 			if deployWithHelm {

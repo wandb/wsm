@@ -40,7 +40,7 @@ func DownloadUsingDocker(image string, filename string) error {
 func Pull(imageName string, dest string) error {
 	ctx := context.Background()
 	sysCtx := &types.SystemContext{
-		OSChoice: "linux",
+		OSChoice:           "linux",
 		ArchitectureChoice: "amd64",
 	}
 
@@ -62,10 +62,17 @@ func Pull(imageName string, dest string) error {
 	if err != nil {
 		return fmt.Errorf("getting default policy context: %w", err)
 	}
-	defer policyCtx.Destroy()
+
+	destroy := func() {
+		if err := policyCtx.Destroy(); err != nil {
+			fmt.Printf("error destroying policy context: %v\n", err)
+		}
+	}
+
+	defer destroy()
 
 	_, err = copy.Image(ctx, policyCtx, destRef, srcRef, &copy.Options{
-		SourceCtx: sysCtx,
+		SourceCtx:      sysCtx,
 		DestinationCtx: sysCtx,
 	})
 	if err != nil {

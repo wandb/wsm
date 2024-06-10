@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path"
+	"time"
+
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/crd"
 	"github.com/wandb/wsm/pkg/deployer"
@@ -17,9 +21,6 @@ import (
 	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
-	"os"
-	"path"
-	"time"
 )
 
 func init() {
@@ -78,7 +79,7 @@ func deployChart(
 	}
 }
 
-func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath string, namespace string, releaseName string, airgapped bool) error {
+func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath string, operatorValuesPath string, namespace string, releaseName string, airgapped bool) error {
 	if operatorChartPath == "" {
 		operatorChartPath = downloadHelmChart(
 			helm.WandbHelmRepoURL, helm.WandbOperatorChart, "", chartsDir,
@@ -108,6 +109,17 @@ func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath s
 		_ = kubectl.UpsertConfigMap(map[string]string{
 			helm.WandbChart: wandbChartBinary,
 		}, "wandb-charts", namespace)
+	}
+
+	if operatorValuesPath != "" {
+		localOperatorValues, err := values.FromYAMLFile(operatorValuesPath)
+		if err != nil {
+			return err
+		}
+		operatorValues, err = operatorValues.Merge(localOperatorValues)
+		if err != nil {
+			return err
+		}
 	}
 
 	deployChart(namespace, releaseName, operatorChart, operatorValues.AsMap())
@@ -156,6 +168,7 @@ func DeployCmd() *cobra.Command {
 	var valuesPath string
 	var chartPath string
 	var operatorChartPath string
+	var operatorValuesPath string
 	var airgapped bool
 
 	cmd := &cobra.Command{
@@ -221,7 +234,7 @@ func DeployCmd() *cobra.Command {
 				os.Exit(0)
 			}
 
-			if err := deployOperator(chartsDir, chartPath, operatorChartPath, namespace, "operator", airgapped); err != nil {
+			if err := deployOperator(chartsDir, chartPath, operatorChartPath, operatorValuesPath, namespace, "operator", airgapped); err != nil {
 				fmt.Println("Error deploying operator:", err)
 				os.Exit(1)
 			}
@@ -243,7 +256,7 @@ func DeployCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&valuesPath, "values", "v", "", "Values file to apply to the helm chart yaml.")
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "wandb", "Namespace to deploy into.")
 	cmd.Flags().StringVarP(&chartPath, "chart", "c", "", "Path to W&B helm chart.")
-	cmd.Flags().StringVarP(&operatorChartPath, "operator-chart", "o", "", "Path to operator helm chart.")
+	cmd.Flags().StringVarP(&operatorValuesPath, "operator-values", "o", "", "Values file to apply to the operator helm chart yaml.")
 	cmd.Flags().BoolVarP(&airgapped, "airgapped", "a", false, "Deploy in airgapped mode.")
 
 	_ = cmd.Flags().MarkHidden("helm")

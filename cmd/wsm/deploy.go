@@ -213,8 +213,6 @@ func DeployCmd() *cobra.Command {
 				}
 			}
 
-			fmt.Println("Deploying W&B with values:", vals.AsMap())
-
 			if deployWithHelm {
 				if chartPath == "" {
 					fmt.Println("Downloading W&B chart from", specToApply.Chart.URL)

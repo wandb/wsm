@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path"
+	"time"
+
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/crd"
 	"github.com/wandb/wsm/pkg/deployer"
@@ -17,9 +21,6 @@ import (
 	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
-	"os"
-	"path"
-	"time"
 )
 
 func init() {
@@ -78,7 +79,7 @@ func deployChart(
 	}
 }
 
-func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath string, namespace string, releaseName string, airgapped bool) error {
+func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath string, operatorValues values.Values, namespace string, releaseName string, airgapped bool) error {
 	if operatorChartPath == "" {
 		operatorChartPath = downloadHelmChart(
 			helm.WandbHelmRepoURL, helm.WandbOperatorChart, "", chartsDir,
@@ -90,7 +91,6 @@ func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath s
 		return errors.New("could not find operator chart")
 	}
 
-	operatorValues := values.Values{}
 	if airgapped {
 		_ = operatorValues.SetValue("airgapped", true)
 
@@ -198,13 +198,19 @@ func DeployCmd() *cobra.Command {
 			_ = os.MkdirAll(chartsDir, 0755)
 
 			vals := specToApply.Values
+			operatorVals := values.Values{}
 			if localVals, err := values.FromYAMLFile(valuesPath); err == nil {
-				finalVales, err := localVals.Merge(vals)
-				if err != nil {
-					fmt.Println("Error merging values:", err)
-					os.Exit(1)
+				if _, ok := localVals["wandb"]; ok {
+					vals, err = vals.Merge(localVals["wandb"].(map[string]interface{}))
+					if err != nil {
+						fmt.Println("Error merging values:", err)
+						os.Exit(1)
+					}
 				}
-				vals = finalVales
+
+				if operatorValsMap, ok := localVals["operator"]; ok {
+					operatorVals = operatorValsMap.(map[string]interface{})
+				}
 			}
 
 			if deployWithHelm {
@@ -221,7 +227,7 @@ func DeployCmd() *cobra.Command {
 				os.Exit(0)
 			}
 
-			if err := deployOperator(chartsDir, chartPath, operatorChartPath, namespace, "operator", airgapped); err != nil {
+			if err := deployOperator(chartsDir, chartPath, operatorChartPath, operatorVals, namespace, "operator", airgapped); err != nil {
 				fmt.Println("Error deploying operator:", err)
 				os.Exit(1)
 			}
@@ -243,7 +249,6 @@ func DeployCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&valuesPath, "values", "v", "", "Values file to apply to the helm chart yaml.")
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "wandb", "Namespace to deploy into.")
 	cmd.Flags().StringVarP(&chartPath, "chart", "c", "", "Path to W&B helm chart.")
-	cmd.Flags().StringVarP(&operatorChartPath, "operator-chart", "o", "", "Path to operator helm chart.")
 	cmd.Flags().BoolVarP(&airgapped, "airgapped", "a", false, "Deploy in airgapped mode.")
 
 	_ = cmd.Flags().MarkHidden("helm")

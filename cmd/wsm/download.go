@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/helm"
@@ -9,7 +11,6 @@ import (
 	"github.com/wandb/wsm/pkg/term/pkgm"
 	"github.com/wandb/wsm/pkg/utils"
 	"gopkg.in/yaml.v3"
-	"os"
 )
 
 func init() {
@@ -79,7 +80,9 @@ func DownloadCmd() *cobra.Command {
 				os.Exit(1)
 			}
 
-			yamlData, err := yaml.Marshal(spec)
+			data := make(map[string]interface{})
+			data["wandb"] = spec.Values
+			yamlData, err := yaml.Marshal(data)
 			if err != nil {
 				panic(err)
 			}

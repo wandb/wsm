@@ -163,6 +163,11 @@ func DeployCmd() *cobra.Command {
 			}
 
 			if bundlePath != "" {
+				if _, err := os.Stat(bundlePath); os.IsNotExist(err) {
+					fmt.Printf("Bundle path %s does not exist\n", bundlePath)
+					os.Exit(1)
+				}
+
 				chartPath, err = utils.PathFromDir(bundlePath+"/charts", helm.WandbChart)
 				if err != nil {
 					fmt.Println("Error finding wandb chart:", err)
@@ -181,6 +186,13 @@ func DeployCmd() *cobra.Command {
 
 			vals := specToApply.Values
 			operatorVals := values.Values{}
+			if valuesPath != "" {
+				if _, err := os.Stat(valuesPath); os.IsNotExist(err) {
+					fmt.Printf("Values file %s does not exist\n", valuesPath)
+					os.Exit(1)
+				}
+			}
+
 			if localVals, err := values.FromYAMLFile(valuesPath); err == nil {
 				if _, ok := localVals["wandb"]; ok {
 					vals, err = values.Values(localVals["wandb"].(map[string]interface{})).Merge(vals)

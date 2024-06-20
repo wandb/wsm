@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/crd"
@@ -16,7 +15,6 @@ import (
 	"github.com/wandb/wsm/pkg/helm/values"
 	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/spec"
-	"github.com/wandb/wsm/pkg/term/task"
 	"github.com/wandb/wsm/pkg/utils"
 	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v3/pkg/chart"
@@ -63,23 +61,8 @@ func loadChart(chartPath string) *chart.Chart {
 	return helmChart
 }
 
-func deployChart(
-	namespace string,
-	releaseName string,
-	chart *chart.Chart,
-	vals map[string]interface{},
-) {
-	cb := func() error {
-		_, err := helm.Apply(namespace, releaseName, chart, vals)
-		time.Sleep(5 * time.Second)
-		return err
-	}
-	if _, err := task.New("Deploying wandb", cb).Run(); err != nil {
-		panic(err)
-	}
-}
-
 func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath string, operatorValues values.Values, namespace string, releaseName string, airgapped bool) error {
+	fmt.Println("Deploying operator")
 	if operatorChartPath == "" {
 		operatorChartPath = downloadHelmChart(
 			helm.WandbHelmRepoURL, helm.WandbOperatorChart, "", chartsDir,
@@ -110,9 +93,8 @@ func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath s
 		}, "wandb-charts", namespace)
 	}
 
-	deployChart(namespace, releaseName, operatorChart, operatorValues.AsMap())
-
-	return nil
+	_, err := helm.Apply(namespace, releaseName, operatorChart, operatorValues.AsMap())
+	return err
 }
 
 func specFromBundle(bundlePath string) (*spec.Spec, error) {
@@ -201,7 +183,12 @@ func DeployCmd() *cobra.Command {
 			operatorVals := values.Values{}
 			if localVals, err := values.FromYAMLFile(valuesPath); err == nil {
 				if _, ok := localVals["wandb"]; ok {
-					vals, err = vals.Merge(localVals["wandb"].(map[string]interface{}))
+					vals, err = values.Values(localVals["wandb"].(map[string]interface{})).Merge(vals)
+					if err != nil {
+						fmt.Println("Error merging values:", err)
+						os.Exit(1)
+					}
+
 					if err != nil {
 						fmt.Println("Error merging values:", err)
 						os.Exit(1)
@@ -223,7 +210,13 @@ func DeployCmd() *cobra.Command {
 				if _, err := json.Marshal(vals.AsMap()); err != nil {
 					panic(err)
 				}
-				deployChart(namespace, releaseName, helmChart, vals.AsMap())
+				fmt.Println("Deploying helm chart")
+				if _, err := helm.Apply(namespace, releaseName, helmChart, vals.AsMap()); err != nil {
+					fmt.Println("Error deploying helm chart:", err)
+					os.Exit(1)
+				}
+
+				fmt.Println("Helm chart deployed, finish setting up your instance by running `wsm console`")
 				os.Exit(0)
 			}
 
@@ -235,11 +228,13 @@ func DeployCmd() *cobra.Command {
 			helmChart := getChart(airgapped, chartPath, specToApply)
 			wb := crd.NewWeightsAndBiases(helmChart, vals)
 
+			fmt.Println("Applying weights and biases crd")
 			if err := crd.ApplyWeightsAndBiases(wb); err != nil {
 				fmt.Println("Error applying weightsandbiases:", err)
 				os.Exit(1)
 			}
 
+			fmt.Println("Weights and Biases crd applied, finish setting up your instance by running `wsm console`")
 			os.Exit(0)
 		},
 	}

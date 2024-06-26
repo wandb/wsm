@@ -22,6 +22,12 @@ builds:
       - linux
       - windows
       - darwin
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: linux
+        goarch: "386"
     main: ./cmd/wsm
 
 archives:

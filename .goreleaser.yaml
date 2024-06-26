@@ -6,7 +6,7 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 # vim: set ts=2 sw=2 tw=0 fo=cnqoj
 
-version: 2
+version: 1
 
 before:
   hooks:
@@ -22,12 +22,6 @@ builds:
       - linux
       - windows
       - darwin
-    goarch:
-      - amd64
-      - arm64
-    ignore:
-      - goos: linux
-        goarch: "386"
     main: ./cmd/wsm
 
 archives:

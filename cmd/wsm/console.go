@@ -2,12 +2,13 @@ package main
 
 import (
 	"encoding/base64"
-	"github.com/spf13/cobra"
-	"github.com/wandb/wsm/pkg/kubectl"
 	"os"
 	"os/exec"
 	"runtime"
 	"time"
+
+	"github.com/spf13/cobra"
+	"github.com/wandb/wsm/pkg/kubectl"
 )
 
 func init() {
@@ -40,12 +41,12 @@ func ConsoleCmd() *cobra.Command {
 				panic(err)
 			}
 
-			url := "http://localhost:8080/console/login?password=" + base64.StdEncoding.EncodeToString(pwd)
+			url := "http://localhost:8082/console/login?password=" + base64.StdEncoding.EncodeToString(pwd)
 
 			time.AfterFunc(500*time.Millisecond, func() {
 				_ = openBrowser(url)
 			})
-			portForward := exec.Command("kubectl", "port-forward", "service/wandb-console", "8080:8082")
+			portForward := exec.Command("kubectl", "port-forward", "service/wandb-console", "8082:8082")
 			portForward.Stderr = os.Stderr
 			portForward.Stdout = os.Stdout
 			portForward.Stdin = os.Stdin

@@ -9,7 +9,6 @@ permissions:
 
 on:
   push:
-    # run only against tags
     tags:
       - "*"
 
@@ -20,24 +19,37 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Set up Go
         uses: actions/setup-go@v5
-      - name: Install gpgme dependencies and 32-bit libraries
+
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libgpgme-dev gcc-multilib
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: Set environment variables for CGO
         run: |
           echo "CGO_ENABLED=1" >> $GITHUB_ENV
           echo "CGO_CFLAGS=-I/usr/include" >> $GITHUB_ENV
           echo "CGO_LDFLAGS=-L/usr/lib" >> $GITHUB_ENV
+          if [[ "${{ matrix.goarch }}" == "arm64" ]]; then
+            echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "CXX=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+          fi
+
       - name: Install Go dependencies
         run: go mod tidy
+
+      - name: Build the project
+        run: go build ./...
+
       - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@v5
         with:
           distribution: goreleaser
-          version: "~> v2" 
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}

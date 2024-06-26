@@ -22,6 +22,8 @@ builds:
       - linux
       - windows
       - darwin
+    # if we want to sign containers, we need to revert this and implement different solution
+    # https://github.com/containers/image/issues/1634
     tags:
     - containers_image_openpgp
     main: ./cmd/wsm

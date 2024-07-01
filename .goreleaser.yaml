@@ -22,12 +22,10 @@ builds:
       - linux
       - windows
       - darwin
-    goarch:
-      - amd64
-      - arm64
-    ignore:
-      - goos: linux
-        goarch: "386"
+    # if we want to sign containers, we need to revert this and implement different solution
+    # https://github.com/containers/image/issues/1634
+    tags:
+    - containers_image_openpgp
     main: ./cmd/wsm
 
 archives:

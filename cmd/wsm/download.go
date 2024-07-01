@@ -46,6 +46,8 @@ func downloadChartImages(
 }
 
 func DownloadCmd() *cobra.Command {
+	var platform string
+
 	cmd := &cobra.Command{
 		Use: "download",
 		Run: func(cmd *cobra.Command, args []string) {
@@ -93,7 +95,7 @@ func DownloadCmd() *cobra.Command {
 			cb := func(pkg string) {
 				path := "bundle/images/" + pkg
 				_ = os.MkdirAll(path, 0755)
-				err := images.Download(pkg, path+"/image.tgz")
+				err := images.Download(pkg, path+"/image.tgz", platform)
 				if err != nil {
 					fmt.Println(err)
 				}
@@ -105,6 +107,8 @@ func DownloadCmd() *cobra.Command {
 			}
 		},
 	}
+
+	cmd.Flags().StringVarP(&platform, "platform", "p", "linux/amd64", "Platform to download images for")
 
 	return cmd
 }

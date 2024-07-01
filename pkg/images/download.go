@@ -12,16 +12,16 @@ import (
 	"github.com/containers/image/v5/types"
 )
 
-func Download(image string, filename string) error {
+func Download(image string, filename string, platform string) error {
 	if _, err := exec.LookPath("docker"); err == nil {
-		return DownloadUsingDocker(image, filename)
+		return DownloadUsingDocker(image, filename, platform)
 	}
 
 	return fmt.Errorf("no supported container runtime found")
 }
 
-func DownloadUsingDocker(image string, filename string) error {
-	cmdPull := exec.Command("docker", "pull", image)
+func DownloadUsingDocker(image string, filename string, platform string) error {
+	cmdPull := exec.Command("docker", "pull", "--platform", platform, image)
 	err := cmdPull.Run()
 	if err != nil {
 		return fmt.Errorf("failed to pull image using docker %s: %v", image, err)

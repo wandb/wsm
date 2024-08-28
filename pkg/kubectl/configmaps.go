@@ -48,34 +48,3 @@ func UpsertConfigMap(data map[string]string, name string, namespace string) erro
 
 	return nil
 }
-
-// func UpsertConfigMap(data map[string]string, name string, namespace string) error {
-// 	ctx := context.Background()
-// 	_, cs, err := GetClientset()
-// 	if err != nil {
-// 		panic(err)
-// 	}
-
-// 	configMap := &v1.ConfigMap{
-// 		ObjectMeta: metav1.ObjectMeta{
-// 			Name: name,
-// 		},
-// 		Data: data,
-// 	}
-
-// 	_, err = cs.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
-// 	if err != nil {
-// 		_, err = cs.CoreV1().ConfigMaps(namespace).Create(ctx, configMap, metav1.CreateOptions{})
-// 		if err != nil {
-// 			return err
-// 		}
-// 		return nil
-// 	}
-
-// 	_, err = cs.CoreV1().ConfigMaps(namespace).Update(ctx, configMap, metav1.UpdateOptions{})
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	return nil
-// }

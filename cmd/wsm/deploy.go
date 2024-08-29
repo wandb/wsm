@@ -88,9 +88,12 @@ func deployOperator(chartsDir string, wandbChartPath string, operatorChartPath s
 			return err
 		}
 
-		_ = kubectl.UpsertConfigMap(map[string]string{
+		err = kubectl.UpsertConfigMap(map[string]string{
 			helm.WandbChart: wandbChartBinary,
 		}, "wandb-charts", namespace)
+		if err != nil {
+			panic(fmt.Sprintf("Error upserting config map: %v", err))
+		}
 	}
 
 	_, err := helm.Apply(namespace, releaseName, operatorChart, operatorValues.AsMap())

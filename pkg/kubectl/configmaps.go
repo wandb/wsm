@@ -3,8 +3,8 @@ package kubectl
 import (
 	"context"
 	"fmt"
+	"strings"
 
-	"github.com/pingcap/errors"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -20,7 +20,7 @@ func UpsertConfigMap(data map[string]string, name string, namespace string) erro
 	existingConfigMap, err := cs.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		// If the ConfigMap doesn't exist, create it
-		if errors.IsNotFound(err) {
+		if strings.Contains(err.Error(), "not found") {
 			configMap := &v1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      name,

@@ -190,10 +190,28 @@ func DeployCmd() *cobra.Command {
 			vals := specToApply.Values
 			operatorVals := values.Values{}
 			if valuesPath != "" {
-				if _, err := os.Stat(valuesPath); os.IsNotExist(err) {
+				fileInfo, err := os.Stat(valuesPath)
+				if os.IsNotExist(err) {
 					fmt.Printf("Values file %s does not exist\n", valuesPath)
 					os.Exit(1)
 				}
+				// Check if the file is empty (size is 0)
+				if fileInfo.Size() == 0 {
+					fmt.Printf("Values file %s is empty\n", valuesPath)
+					os.Exit(1)
+				}
+				// YAML syntax validation
+				content, err := os.ReadFile(valuesPath)
+				if err != nil {
+					fmt.Printf("Error reading values file %s: %v\n", valuesPath, err)
+					os.Exit(1)
+				}
+
+				var yamlCheck map[string]interface{}
+				if err := yaml.Unmarshal(content, &yamlCheck); err != nil {
+					fmt.Printf("Invalid YAML syntax in values file %s: %v\n", valuesPath, err)
+					os.Exit(1)
+				}	
 			}
 
 			if localVals, err := values.FromYAMLFile(valuesPath); err == nil {

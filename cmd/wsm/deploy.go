@@ -151,8 +151,8 @@ func DeployCmd() *cobra.Command {
 		},
 	}
 
-	cmd.PersistentFlags().StringVarP(&bundlePath, "bundle", "b", "", "Path to the bundle to deploy with. Cannot be combined with chart.")
-	cmd.PersistentFlags().StringVarP(&chartPath, "chart", "c", "", "Path to W&B helm chart. Cannot be combined with bundle.")
+	cmd.PersistentFlags().StringVarP(&bundlePath, "bundle", "b", "", "Path to the bundle to deploy with.")
+	cmd.PersistentFlags().StringVarP(&chartPath, "chart", "c", "", "Path to W&B helm chart. If provided along with bundle, this will take precedence.")
 	cmd.PersistentFlags().StringVarP(&valuesPath, "values", "v", "", "Values file to apply to the helm chart yaml.")
 	cmd.PersistentFlags().StringVarP(&namespace, "namespace", "n", "wandb", "Namespace to deploy into.")
 	cmd.PersistentFlags().BoolVarP(&airgapped, "airgapped", "a", false, "Deploy in airgapped mode.")

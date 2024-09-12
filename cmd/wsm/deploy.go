@@ -41,10 +41,7 @@ var operatorCmd = &cobra.Command{
 
 		operatorValues := values.Values{}
 		if valuesPath != "" {
-			if _, err := os.Stat(valuesPath); os.IsNotExist(err) {
-				fmt.Printf("Values file %s does not exist\n", valuesPath)
-				os.Exit(1)
-			}
+			checkValues(valuesPath)
 		}
 
 		if localVals, err := values.FromYAMLFile(valuesPath); err == nil {
@@ -112,10 +109,7 @@ var wandbCRCmd = &cobra.Command{
 
 		vals := specToApply.Values
 		if valuesPath != "" {
-			if _, err := os.Stat(valuesPath); os.IsNotExist(err) {
-				fmt.Printf("Values file %s does not exist\n", valuesPath)
-				os.Exit(1)
-			}
+			checkValues(valuesPath)
 		}
 
 		if localVals, err := values.FromYAMLFile(valuesPath); err == nil {
@@ -168,6 +162,31 @@ func DeployCmd() *cobra.Command {
 	cmd.AddCommand(wandbCRCmd)
 
 	return cmd
+}
+
+func checkValues(valuesPath string) {
+	fileInfo, err := os.Stat(valuesPath)
+	if os.IsNotExist(err) {
+		fmt.Printf("Values file %s does not exist\n", valuesPath)
+		os.Exit(1)
+	}
+	// Check if the file is empty (size is 0)
+	if fileInfo.Size() == 0 {
+		fmt.Printf("Values file %s is empty\n", valuesPath)
+		os.Exit(1)
+	}
+	// YAML syntax validation
+	content, err := os.ReadFile(valuesPath)
+	if err != nil {
+		fmt.Printf("Error reading values file %s: %v\n", valuesPath, err)
+		os.Exit(1)
+	}
+
+	var yamlCheck map[string]interface{}
+	if err := yaml.Unmarshal(content, &yamlCheck); err != nil {
+		fmt.Printf("Invalid YAML syntax in values file %s: %v\n", valuesPath, err)
+		os.Exit(1)
+	}
 }
 
 func getChartPath(searchPaths []string, chart string) (chartPath string, err error) {

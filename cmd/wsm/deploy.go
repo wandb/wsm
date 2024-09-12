@@ -37,7 +37,7 @@ var operatorCmd = &cobra.Command{
 		fmt.Println("Deploying operator")
 		releaseName := "operator"
 
-		operatorChartPath, err := getChartPath([]string{chartPath, bundlePath}, helm.WandbOperatorChart)
+		operatorChartPath, err := getChartPath([]string{chartPath, bundlePath + "/charts"}, helm.WandbOperatorChart)
 
 		operatorValues := values.Values{}
 		if valuesPath != "" {
@@ -73,7 +73,7 @@ var chartsCmd = &cobra.Command{
 		var wandbChartPath string
 		var err error
 
-		wandbChartPath, err = getChartPath([]string{chartPath, bundlePath}, helm.WandbChart)
+		wandbChartPath, err = getChartPath([]string{chartPath, bundlePath + "/charts"}, helm.WandbChart)
 
 		wandbChartBinary, err := base64EncodeFile(wandbChartPath)
 		if err != nil {
@@ -194,7 +194,7 @@ func getChartPath(searchPaths []string, chart string) (chartPath string, err err
 
 	if len(searchPaths) > 0 {
 		for _, searchPath := range searchPaths {
-			chartPath, err = utils.PathFromDir(searchPath+"/charts", chart)
+			chartPath, err = utils.PathFromDir(searchPath, chart)
 			if chartPath != "" && err == nil {
 				return
 			}

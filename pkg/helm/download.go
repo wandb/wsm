@@ -18,12 +18,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 )
 
-func DownloadChart(
-	url string,
-	name string,
-	version string,
-	dest string,
-) (string, error) {
+func DownloadChart(url string, name string, version string, dest string) (string, error) {
 	entry := new(repo.Entry)
 	entry.URL = url
 	entry.Name = name

@@ -1,7 +1,8 @@
 package main
 
 import (
-	"encoding/base64"
+	b64 "encoding/base64"
+	urlutil "net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -41,7 +42,9 @@ func ConsoleCmd() *cobra.Command {
 				panic(err)
 			}
 
-			url := "http://localhost:8082/console/login?password=" + base64.StdEncoding.EncodeToString(pwd)
+			url := "http://localhost:8082/console/login?password=" + urlutil.QueryEscape(
+				b64.StdEncoding.EncodeToString([]byte(pwd)),
+			)
 
 			time.AfterFunc(500*time.Millisecond, func() {
 				_ = openBrowser(url)

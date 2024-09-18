@@ -51,6 +51,7 @@ func DownloadCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "download",
 		Run: func(cmd *cobra.Command, args []string) {
+			_ = os.RemoveAll("bundle")
 			fmt.Println("Downloading operator helm chart")
 			operatorImgs, _ := downloadChartImages(
 				helm.WandbHelmRepoURL,

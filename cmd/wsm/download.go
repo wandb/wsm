@@ -52,6 +52,12 @@ func DownloadCmd() *cobra.Command {
 		Use: "download",
 		Run: func(cmd *cobra.Command, args []string) {
 			_ = os.RemoveAll("bundle")
+			// Fetch the latest tag for the controller
+			latestTag, err := getLatestWandbTag()
+			if err != nil {
+				fmt.Printf("Error fetching the latest operator-wandb controller tag: %v\n", err)
+				os.Exit(1)
+			}
 			fmt.Println("Downloading operator helm chart")
 			operatorImgs, _ := downloadChartImages(
 				helm.WandbHelmRepoURL,
@@ -59,7 +65,7 @@ func DownloadCmd() *cobra.Command {
 				"", // empty version means latest
 				map[string]interface{}{
 					"image": map[string]interface{}{
-						"tag": "1.10.1",
+						"tag": latestTag,
 					},
 				},
 			)

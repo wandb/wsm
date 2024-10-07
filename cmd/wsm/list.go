@@ -1,7 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"net/http"
+	"sort"
+
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -43,6 +48,50 @@ func (m model) View() string {
 	return m.spinner.View()
 }
 
+// Function to fetch the latest tag from Docker Hub API
+func getLatestWandbTag() (string, error) {
+	url := "https://registry.hub.docker.com/v2/repositories/wandb/controller/tags/"
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("error fetching tags: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("error reading response body: %v", err)
+	}
+
+	// Parse the JSON response
+	var result map[string]interface{}
+	err = json.Unmarshal(body, &result)
+	if err != nil {
+		return "", fmt.Errorf("error unmarshalling JSON: %v", err)
+	}
+
+	// Extract tags and filter out "latest"
+	var tags []string
+	if results, ok := result["results"].([]interface{}); ok {
+		for _, r := range results {
+			if tag, ok := r.(map[string]interface{})["name"].(string); ok && tag != "latest" {
+				tags = append(tags, tag)
+			}
+		}
+	}
+
+	// Sort tags in natural (version) order
+	sort.Strings(tags)
+
+	// If there are not enough tags, return "latest"
+	if len(tags) < 2 {
+		fmt.Println("Not enough tags found, returning 'latest'")
+		return "latest", nil
+	}
+
+	// Return the tag just before the last one
+	return tags[len(tags)-1], nil
+}
+
 func ListCmd() *cobra.Command {
 	var platform string
 
@@ -68,6 +117,14 @@ func ListCmd() *cobra.Command {
 				}
 			}()
 
+			// Fetch the latest image tag dynamically from Docker Hub
+			latestTag, err := getLatestWandbTag()
+			if err != nil {
+				fmt.Printf("Error fetching latest tag: %v\n", err)
+				p.Quit()
+				return
+			}
+
 			// Download and list images
 			operatorImgs, _ := downloadChartImages(
 				helm.WandbHelmRepoURL,
@@ -75,7 +132,7 @@ func ListCmd() *cobra.Command {
 				"", // empty version means latest
 				map[string]interface{}{
 					"image": map[string]interface{}{
-						"tag": "1.10.1",
+						"tag": latestTag, // Use the dynamically fetched tag
 					},
 				},
 			)

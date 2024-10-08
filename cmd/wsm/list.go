@@ -82,10 +82,9 @@ func getLatestWandbTag() (string, error) {
 	// Sort tags in natural (version) order
 	sort.Strings(tags)
 
-	// If there are not enough tags, return "latest"
+	// If there are not enough tags, return an error
 	if len(tags) < 2 {
-		fmt.Println("Not enough tags found, returning 'latest'")
-		return "latest", nil
+		return "", fmt.Errorf("not enough tags found")
 	}
 
 	// Return the tag just before the last one

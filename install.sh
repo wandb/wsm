@@ -76,36 +76,34 @@ if [[ $INSTALL_MICROK8S == "y" || $INSTALL_MICROK8S == "Y" ]]; then
     echo "Starting MicroK8s installation..."
     sudo snap install microk8s --classic
 
-    # Step 2: Configure Permissions
-    echo "Configuring permissions for MicroK8s..."
-    sudo usermod -a -G microk8s $(whoami)
-    mkdir -p ~/.kube
-    sudo chown -R $(whoami) ~/.kube
-
-    newgrp microk8s << EOF
-    
-    # Wait for MicroK8s to be ready
-    echo "Waiting for MicroK8s to be ready..."
-    sleep 5s
-    microk8s status --wait-ready
-
-    # Step 3: Enable Required Add-ons
-    echo "Enabling MicroK8s add-ons..."
-    microk8s enable dns
-    microk8s enable hostpath-storage
-    microk8s enable ingress
-
     # Step 4: Set up Aliases
     echo "Setting up aliases..."
-    echo "alias kubectl='microk8s kubectl'" >> ~/.bashrc
-    echo "alias helm='microk8s helm'" >> ~/.bashrc
-    source ~/.bashrc
+    sudo snap alias microk8s.kubectl kubectl
+    sudo snap alias microk8s.helm helm
+
+    # Step 2: Configure Permissions
+    echo "Configuring permissions for MicroK8s..."
+    sudo usermod -a -G microk8s $USER
+    sudo mkdir -p $HOME/.kube
+    sudo touch $HOME/.kube/config
+    sudo chown -R $USER:$USER $HOME/.kube
+    
+    # Step 3: Start Microk8s
+    echo "Starting MicroK8s..."
+    sudo microk8s.start
+    
+    # Step 3: Enable Required Add-ons
+    echo "Enabling MicroK8s add-ons..."
+    sudo microk8s.enable dns ingress hostpath-storage dashboard
+
+    # Wait for MicroK8s to be ready
+    echo "Waiting for MicroK8s to be ready..."
+    sudo microk8s.status --wait-ready
 
     # Step 5: Configure Kubeconfig
     echo "Configuring kubectl to use MicroK8s..."
-    microk8s config > ~/.kube/config
-    echo "MicroK8s installation and configuration completed. Please logout and login"
-EOF
+    sudo microk8s.kubectl config view --raw > $HOME/.kube/config
+    echo "MicroK8s installation and configuration completed. Please logout and login again or run 'newgrp microk8s'"
 
 else
     echo "Skipping MicroK8s installation."

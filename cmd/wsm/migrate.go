@@ -26,7 +26,7 @@ func MigrateCmd() *cobra.Command {
 			}
 
 			// Get channel spec for new deployment
-			spec, err := deployer.GetChannelSpec("")
+			_, err = deployer.GetChannelSpec("")
 			if err != nil {
 				fmt.Printf("Error getting channel spec: %v\n", err)
 				os.Exit(1)

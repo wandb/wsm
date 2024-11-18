@@ -44,18 +44,10 @@ func MigrateCmd() *cobra.Command {
 				os.Exit(1)
 			}
 
-			// 2. Install CRDs
-			fmt.Println("Installing W&B operator CRDs...")
-			crdCmd := exec.Command("kubectl", "apply", "-f", "https://raw.githubusercontent.com/wandb/operator-wandb/main/config/crd/bases/wandb.com_wandbs.yaml")
-			if err := crdCmd.Run(); err != nil {
-				fmt.Printf("Error installing CRDs: %v\n", err)
-				os.Exit(1)
-			}
-
 			// 3. Install operator
 			fmt.Println("Installing W&B operator...")
-			operatorCmd := exec.Command("helm", "upgrade", "--install", "wandb-operator",
-				"oci://public.ecr.aws/wandb/helm/operator-wandb",
+			operatorCmd := exec.Command("helm", "upgrade", "--install", "operator",
+				"wandb/operator",
 				"--version", latestTag,
 				"-n", namespace,
 				"--create-namespace")

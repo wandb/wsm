@@ -9,6 +9,10 @@ import (
 	"github.com/wandb/wsm/pkg/deployer"
 )
 
+func init() {
+	rootCmd.AddCommand(MigrateCmd())
+}
+
 func MigrateCmd() *cobra.Command {
 	var namespace string
 

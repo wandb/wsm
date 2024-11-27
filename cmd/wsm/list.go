@@ -141,6 +141,11 @@ func ListCmd() *cobra.Command {
 				panic(err)
 			}
 
+			// Enable weave-trace in the chart values
+			spec.Values["weave-trace"] = map[string]interface{}{
+				"install": true,
+			}
+
 			wandbImgs, _ := downloadChartImages(
 				spec.Chart.URL,
 				spec.Chart.Name,

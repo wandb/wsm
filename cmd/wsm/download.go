@@ -75,17 +75,19 @@ func DownloadCmd() *cobra.Command {
 				panic(err)
 			}
 
+			// Create temporary spec to download images
+			dlSpec := spec
 			// Enable weave-trace in the chart values
-			spec.Values["weave-trace"] = map[string]interface{}{
+			dlSpec.Values["weave-trace"] = map[string]interface{}{
 				"install": true,
 			}
-			
+
 			fmt.Println("Downloading wandb helm chart")
 			wandbImgs, _ := downloadChartImages(
 				spec.Chart.URL,
 				spec.Chart.Name,
 				spec.Chart.Version,
-				spec.Values,
+				dlSpec.Values,
 			)
 
 			imgs := utils.RemoveDuplicates(append(wandbImgs, operatorImgs...))

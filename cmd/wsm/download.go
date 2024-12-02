@@ -76,7 +76,7 @@ func DownloadCmd() *cobra.Command {
 			}
 
 			// Create temporary spec to download images
-			dlSpec := spec
+			dlSpec := *spec
 			// Enable weave-trace in the chart values
 			dlSpec.Values["weave-trace"] = map[string]interface{}{
 				"install": true,

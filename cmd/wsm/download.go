@@ -74,7 +74,7 @@ func DownloadCmd() *cobra.Command {
 			if err != nil {
 				panic(err)
 			}
-
+			// Create a copy of the spec to download additional images without writing changes to the filesystem
 			dlSpec, err := deployer.GetChannelSpec("")
 			if err != nil {
 				panic(err)

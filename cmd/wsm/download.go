@@ -53,9 +53,15 @@ func DownloadCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			_ = os.RemoveAll("bundle")
 			// Fetch the latest tag for the controller
-			latestTag, err := getLatestWandbTag()
+			operatorTag, err := getMostRecentTag("wandb/controller")
 			if err != nil {
 				fmt.Printf("Error fetching the latest operator-wandb controller tag: %v\n", err)
+				os.Exit(1)
+			}
+			// Fetch the latest tag for weave-trace
+			weaveTraceTag, err := getMostRecentTag("wandb/weave-trace")
+			if err != nil {
+				fmt.Printf("Error fetching the latest weave-trace tag: %v\n", err)
 				os.Exit(1)
 			}
 			fmt.Println("Downloading operator helm chart")
@@ -65,7 +71,7 @@ func DownloadCmd() *cobra.Command {
 				"", // empty version means latest
 				map[string]interface{}{
 					"image": map[string]interface{}{
-						"tag": latestTag,
+						"tag": operatorTag,
 					},
 				},
 			)
@@ -74,13 +80,26 @@ func DownloadCmd() *cobra.Command {
 			if err != nil {
 				panic(err)
 			}
+			// Create a copy of the spec to download additional images without writing changes to the filesystem
+			dlSpec, err := deployer.GetChannelSpec("")
+			if err != nil {
+				panic(err)
+			}
+
+			// Enable weave-trace in the chart values
+			dlSpec.Values["weave-trace"] = map[string]interface{}{
+				"install": true,
+				"image": map[string]interface{}{
+					"tag": weaveTraceTag,
+				},
+			}
 
 			fmt.Println("Downloading wandb helm chart")
 			wandbImgs, _ := downloadChartImages(
 				spec.Chart.URL,
 				spec.Chart.Name,
 				spec.Chart.Version,
-				spec.Values,
+				dlSpec.Values,
 			)
 
 			imgs := utils.RemoveDuplicates(append(wandbImgs, operatorImgs...))

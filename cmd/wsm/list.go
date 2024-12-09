@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -49,8 +50,8 @@ func (m model) View() string {
 }
 
 // Function to fetch the latest tag from Docker Hub API
-func getLatestWandbTag() (string, error) {
-	url := "https://registry.hub.docker.com/v2/repositories/wandb/controller/tags/"
+func getMostRecentTag(repository string) (string, error) {
+	url := fmt.Sprintf("https://registry.hub.docker.com/v2/repositories/%s/tags/", repository)
 	resp, err := http.Get(url)
 	if err != nil {
 		return "", fmt.Errorf("error fetching tags: %v", err)
@@ -70,25 +71,26 @@ func getLatestWandbTag() (string, error) {
 	}
 
 	// Extract tags and filter out "latest"
-	var tags []string
+	var tags []*semver.Version
 	if results, ok := result["results"].([]interface{}); ok {
 		for _, r := range results {
 			if tag, ok := r.(map[string]interface{})["name"].(string); ok && tag != "latest" {
-				tags = append(tags, tag)
+				version, err := semver.NewVersion(tag)
+				if err == nil {
+					tags = append(tags, version)
+				}
 			}
 		}
 	}
 
-	// Sort tags in natural (version) order
-	sort.Strings(tags)
+	// Sort the tags in descending order
+	sort.Sort(sort.Reverse(semver.Collection(tags)))
 
-	// If there are not enough tags, return an error
-	if len(tags) < 2 {
-		return "", fmt.Errorf("not enough tags found")
+	// Return the most recent tag
+	if len(tags) == 0 {
+		return "", fmt.Errorf("no valid tags found")
 	}
-
-	// Return the tag just before the last one
-	return tags[len(tags)-1], nil
+	return tags[0].String(), nil
 }
 
 func ListCmd() *cobra.Command {
@@ -116,22 +118,25 @@ func ListCmd() *cobra.Command {
 				}
 			}()
 
-			// Fetch the latest image tag dynamically from Docker Hub
-			latestTag, err := getLatestWandbTag()
+			operatorTag, err := getMostRecentTag("wandb/controller")
 			if err != nil {
-				fmt.Printf("Error fetching latest tag: %v\n", err)
+				fmt.Printf("Error fetching the latest operator-wandb controller tag: %v\n", err)
 				p.Quit()
 				return
 			}
-
-			// Download and list images
+			weaveTraceTag, err := getMostRecentTag("wandb/weave-trace")
+			if err != nil {
+				fmt.Printf("Error fetching the latest weave-trace tag: %v\n", err)
+				p.Quit()
+				return
+			}
 			operatorImgs, _ := downloadChartImages(
 				helm.WandbHelmRepoURL,
 				helm.WandbOperatorChart,
 				"", // empty version means latest
 				map[string]interface{}{
 					"image": map[string]interface{}{
-						"tag": latestTag, // Use the dynamically fetched tag
+						"tag": operatorTag,
 					},
 				},
 			)
@@ -139,6 +144,14 @@ func ListCmd() *cobra.Command {
 			spec, err := deployer.GetChannelSpec("")
 			if err != nil {
 				panic(err)
+			}
+
+			// Enable weave-trace in the chart values
+			spec.Values["weave-trace"] = map[string]interface{}{
+				"install": true,
+				"image": map[string]interface{}{
+					"tag": weaveTraceTag,
+				},
 			}
 
 			wandbImgs, _ := downloadChartImages(

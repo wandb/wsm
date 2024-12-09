@@ -80,9 +80,14 @@ func DownloadCmd() *cobra.Command {
 			if err != nil {
 				panic(err)
 			}
+			// Create a copy of the spec to download additional images without writing changes to the filesystem
+			dlSpec, err := deployer.GetChannelSpec("")
+			if err != nil {
+				panic(err)
+			}
 
 			// Enable weave-trace in the chart values
-			spec.Values["weave-trace"] = map[string]interface{}{
+			dlSpec.Values["weave-trace"] = map[string]interface{}{
 				"install": true,
 				"image": map[string]interface{}{
 					"tag": weaveTraceTag,
@@ -94,7 +99,7 @@ func DownloadCmd() *cobra.Command {
 				spec.Chart.URL,
 				spec.Chart.Name,
 				spec.Chart.Version,
-				spec.Values,
+				dlSpec.Values,
 			)
 
 			imgs := utils.RemoveDuplicates(append(wandbImgs, operatorImgs...))

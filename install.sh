@@ -49,5 +49,62 @@ tar -xzf "${FILENAME}" || { echo "Failed to extract ${FILENAME}. Exiting."; exit
 
 echo "Installation completed."
 
-https://github.com/wandb/wsm/releases/download/v0.1.0/wsm_Linux_arm64.tar.gz
-https://github.com/wandb/wsm/releases/download/v0.1.0/wsm_Linux_amd64.tar.gz
+#https://github.com/wandb/wsm/releases/download/v0.1.0/wsm_Linux_arm64.tar.gz
+#https://github.com/wandb/wsm/releases/download/v0.1.0/wsm_Linux_amd64.tar.gz
+
+# ------------------- MicroK8s Installation -------------------
+
+read -p "Do you want to install MicroK8s? (y/n): " INSTALL_MICROK8S
+
+if [[ $INSTALL_MICROK8S == "y" || $INSTALL_MICROK8S == "Y" ]]; then
+    if [[ "$OS" != "Linux" ]]; then
+        echo "Error: For macOS or Windows installation, please visit: https://microk8s.io/#install-microk8s."
+        exit 1
+    fi
+    
+    echo "Checking for Snap..."
+    if ! command -v snap &> /dev/null; then
+        echo "Snap not found. Installing Snap..."
+        sudo apt update
+        sudo apt install snapd -y
+    else
+        echo "Snap is already installed."
+    fi
+
+    # Step 1: Install MicroK8s
+
+    echo "Starting MicroK8s installation..."
+    sudo snap install microk8s --classic
+
+    # Step 4: Set up Aliases
+    echo "Setting up aliases..."
+    sudo snap alias microk8s.kubectl kubectl
+    sudo snap alias microk8s.helm helm
+
+    # Step 2: Configure Permissions
+    echo "Configuring permissions for MicroK8s..."
+    sudo usermod -a -G microk8s $USER
+    sudo mkdir -p $HOME/.kube
+    sudo touch $HOME/.kube/config
+    sudo chown -R $USER:$USER $HOME/.kube
+    
+    # Step 3: Start Microk8s
+    echo "Starting MicroK8s..."
+    sudo microk8s.start
+    
+    # Step 3: Enable Required Add-ons
+    echo "Enabling MicroK8s add-ons..."
+    sudo microk8s.enable dns ingress hostpath-storage dashboard
+
+    # Wait for MicroK8s to be ready
+    echo "Waiting for MicroK8s to be ready..."
+    sudo microk8s.status --wait-ready
+
+    # Step 5: Configure Kubeconfig
+    echo "Configuring kubectl to use MicroK8s..."
+    sudo microk8s.kubectl config view --raw > $HOME/.kube/config
+    echo "MicroK8s installation and configuration completed. Please logout and login again or run 'newgrp microk8s'"
+
+else
+    echo "Skipping MicroK8s installation."
+fi

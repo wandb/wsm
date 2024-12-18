@@ -9,7 +9,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/deployer"
@@ -124,12 +124,6 @@ func ListCmd() *cobra.Command {
 				p.Quit()
 				return
 			}
-			weaveTraceTag, err := getMostRecentTag("wandb/weave-trace")
-			if err != nil {
-				fmt.Printf("Error fetching the latest weave-trace tag: %v\n", err)
-				p.Quit()
-				return
-			}
 			operatorImgs, _ := downloadChartImages(
 				helm.WandbHelmRepoURL,
 				helm.WandbOperatorChart,
@@ -147,11 +141,8 @@ func ListCmd() *cobra.Command {
 			}
 
 			// Enable weave-trace in the chart values
-			spec.Values["weave-trace"] = map[string]interface{}{
-				"install": true,
-				"image": map[string]interface{}{
-					"tag": weaveTraceTag,
-				},
+			if weaveTrace, ok := spec.Values["weave-trace"].(map[string]interface{}); ok {
+				weaveTrace["install"] = true
 			}
 
 			wandbImgs, _ := downloadChartImages(

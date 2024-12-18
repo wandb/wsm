@@ -58,12 +58,7 @@ func DownloadCmd() *cobra.Command {
 				fmt.Printf("Error fetching the latest operator-wandb controller tag: %v\n", err)
 				os.Exit(1)
 			}
-			// Fetch the latest tag for weave-trace
-			weaveTraceTag, err := getMostRecentTag("wandb/weave-trace")
-			if err != nil {
-				fmt.Printf("Error fetching the latest weave-trace tag: %v\n", err)
-				os.Exit(1)
-			}
+
 			fmt.Println("Downloading operator helm chart")
 			operatorImgs, _ := downloadChartImages(
 				helm.WandbHelmRepoURL,
@@ -87,11 +82,8 @@ func DownloadCmd() *cobra.Command {
 			}
 
 			// Enable weave-trace in the chart values
-			dlSpec.Values["weave-trace"] = map[string]interface{}{
-				"install": true,
-				"image": map[string]interface{}{
-					"tag": weaveTraceTag,
-				},
+			if weaveTrace, ok := dlSpec.Values["weave-trace"].(map[string]interface{}); ok {
+				weaveTrace["install"] = true
 			}
 
 			fmt.Println("Downloading wandb helm chart")

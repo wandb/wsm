@@ -3,12 +3,13 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
+	"path"
+
 	"github.com/pkg/errors"
 	"github.com/wandb/wsm/pkg/crd"
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/utils"
-	"os"
-	"path"
 
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/helm"
@@ -31,6 +32,9 @@ var valuesPath string
 var airgapped bool
 var temporaryDirectory string
 
+const operatorClusterRoleName = "wandb-manager-role"
+const operatorClusterRoleBindingName = "wandb-manager-rolebinding"
+
 var operatorCmd = &cobra.Command{
 	Use: "operator",
 	Run: func(cmd *cobra.Command, args []string) {
@@ -38,6 +42,10 @@ var operatorCmd = &cobra.Command{
 		releaseName := "operator"
 
 		operatorChartPath, err := getChartPath([]string{chartPath, bundlePath + "/charts"}, helm.WandbOperatorChart)
+		if err != nil {
+			fmt.Println("Error getting operator chart path:", err)
+			os.Exit(1)
+		}
 
 		operatorValues := values.Values{}
 		if valuesPath != "" {
@@ -57,6 +65,40 @@ var operatorCmd = &cobra.Command{
 			_ = operatorValues.SetValue("airgapped", true)
 		}
 
+		/*
+			  If operator clusterrole and clusterrolebinding already exist in a different namespace
+				than the one being deployed into, we need to delete them.
+		*/
+		clusterRole, err := kubectl.GetClusterRole(operatorClusterRoleName)
+		if err != nil {
+			fmt.Println("Error getting cluster role:", err)
+			os.Exit(1)
+		}
+
+		if clusterRole != nil && clusterRole.Namespace != namespace {
+			fmt.Printf("Deleting cluster role %s in different namespace\n", operatorClusterRoleName)
+			err = kubectl.DeleteClusterRole(operatorClusterRoleName)
+			if err != nil {
+				fmt.Println("Error deleting cluster role:", err)
+				os.Exit(1)
+			}
+		}
+
+		clusterRoleBinding, err := kubectl.GetClusterRoleBinding(operatorClusterRoleBindingName)
+		if err != nil {
+			fmt.Println("Error getting cluster role binding:", err)
+			os.Exit(1)
+		}
+
+		if clusterRoleBinding != nil && clusterRoleBinding.Namespace != namespace {
+			fmt.Printf("Deleting cluster role binding %s in different namespace\n", operatorClusterRoleBindingName)
+			err = kubectl.DeleteClusterRoleBinding(operatorClusterRoleBindingName)
+			if err != nil {
+				fmt.Println("Error deleting cluster role binding:", err)
+				os.Exit(1)
+			}
+		}
+
 		operatorChart := loadChart(operatorChartPath)
 		_, err = helm.Apply(namespace, releaseName, operatorChart, operatorValues.AsMap())
 		if err != nil {
@@ -74,6 +116,10 @@ var chartsCmd = &cobra.Command{
 		var err error
 
 		wandbChartPath, err = getChartPath([]string{chartPath, bundlePath + "/charts"}, helm.WandbChart)
+		if err != nil {
+			fmt.Println("Error getting wandb chart path:", err)
+			os.Exit(1)
+		}
 
 		wandbChartBinary, err := base64EncodeFile(wandbChartPath)
 		if err != nil {

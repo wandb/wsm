@@ -42,7 +42,7 @@ curl -L -o "${TMP_DIR}/${FILENAME}" "${DOWNLOAD_URL}" || { echo "Download failed
 
 # Extract the tarzip file
 echo "Extracting ${FILENAME}..."
-tar -xzf "${FILENAME}" -C "${TMP_DIR}" || { echo "Failed to extract ${FILENAME}. Exiting."; rm -rf "$TMP_DIR"; exit 1; }
+tar -xzf "${TMP_DIR}/${FILENAME}" -C "${TMP_DIR}" || { echo "Failed to extract ${FILENAME}. Exiting."; rm -rf "$TMP_DIR"; exit 1; }
 
 # Create directory if it doesn't exist
 mkdir -p "$INSTALL_DIR"

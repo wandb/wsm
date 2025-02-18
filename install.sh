@@ -51,9 +51,6 @@ fi
 echo "Extracting ${FILENAME}..."
 tar -xzf "${FILENAME}" -C "${TMP_DIR}" || { echo "Failed to extract ${FILENAME}. Exiting."; rm -rf "$TMP_DIR"; exit 1; }
 
-# Get install directory from first argument, default to /usr/local/bin if not provided
-INSTALL_DIR="${1:-/usr/local/bin}"
-
 # Create directory if it doesn't exist
 mkdir -p "$INSTALL_DIR"
 

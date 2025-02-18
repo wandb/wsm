@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Define GitHub repo
 GITHUB_REPO="wandb/wsm"
@@ -30,24 +30,43 @@ FILENAME="wsm_${OS}_${ARCH}.tar.gz"
 DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${RELEASE_TAG}/${FILENAME}"
 echo "Download URL: ${DOWNLOAD_URL}"
 
+# Get install directory from first argument, default to /usr/local/bin if not provided
+INSTALL_DIR="${1:-/usr/local/bin}"
+
+# Create and use temporary directory
+TMP_DIR=$(mktemp -d)
+
 # Download tarzip file
 echo "Downloading ${FILENAME}..."
-curl -L -o "${FILENAME}" "${DOWNLOAD_URL}"
+curl -L -o "${TMP_DIR}/${FILENAME}" "${DOWNLOAD_URL}" || { echo "Download failed."; rm -rf "$TMP_DIR"; exit 1; }
 
 # Verify download success
 if [ $? -ne 0 ]; then
     echo "Download failed."
+    rm -rf "$TMP_DIR"
     exit 1
 fi
 
 # Extract the tarzip file
 echo "Extracting ${FILENAME}..."
-tar -xzf "${FILENAME}" || { echo "Failed to extract ${FILENAME}. Exiting."; exit 1; }
+tar -xzf "${FILENAME}" -C "${TMP_DIR}" || { echo "Failed to extract ${FILENAME}. Exiting."; rm -rf "$TMP_DIR"; exit 1; }
 
-# Optionally, move to specific location
-# sudo mv yourbinary /usr/local/bin
+# Get install directory from first argument, default to /usr/local/bin if not provided
+INSTALL_DIR="${1:-/usr/local/bin}"
 
-echo "Installation completed."
+# Create directory if it doesn't exist
+mkdir -p "$INSTALL_DIR"
 
-https://github.com/wandb/wsm/releases/download/v0.1.0/wsm_Linux_arm64.tar.gz
-https://github.com/wandb/wsm/releases/download/v0.1.0/wsm_Linux_amd64.tar.gz
+# Install the binary
+echo "Moving wsm to $INSTALL_DIR/wsm"
+chmod +x "${TMP_DIR}/wsm"
+if [ -w "$INSTALL_DIR" ]; then
+    mv "${TMP_DIR}/wsm" "$INSTALL_DIR/wsm"
+else
+    sudo mv "${TMP_DIR}/wsm" "$INSTALL_DIR/wsm"
+fi
+
+# Clean up
+rm -rf "$TMP_DIR"
+
+echo "WSM installed successfully to $INSTALL_DIR/wsm"

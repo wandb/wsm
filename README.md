@@ -28,6 +28,7 @@ wsm --help
 - Linux or macOS operating system
 - Bash shell
 - curl
+- tar
 
 ## Support
 

@@ -40,13 +40,6 @@ TMP_DIR=$(mktemp -d)
 echo "Downloading ${FILENAME}..."
 curl -L -o "${TMP_DIR}/${FILENAME}" "${DOWNLOAD_URL}" || { echo "Download failed."; rm -rf "$TMP_DIR"; exit 1; }
 
-# Verify download success
-if [ $? -ne 0 ]; then
-    echo "Download failed."
-    rm -rf "$TMP_DIR"
-    exit 1
-fi
-
 # Extract the tarzip file
 echo "Extracting ${FILENAME}..."
 tar -xzf "${FILENAME}" -C "${TMP_DIR}" || { echo "Failed to extract ${FILENAME}. Exiting."; rm -rf "$TMP_DIR"; exit 1; }

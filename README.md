@@ -25,7 +25,7 @@ wsm --help
 
 ## Requirements
 
-- Linux or macOS operating system
+- Linux, macOS or Windows
 - Bash shell
 - curl
 - tar

@@ -8,10 +8,9 @@ maintaining W&B server instances for airgapped environments.
 
 Download and install WSM:
 
-````bash
 ```bash
 curl -sSL https://raw.githubusercontent.com/wandb/wsm/main/install.sh | bash /usr/local/bin
-````
+```
 
 ## Usage
 

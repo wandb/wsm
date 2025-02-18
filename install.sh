@@ -14,7 +14,14 @@ fi
 
 # Detect OS and architecture
 OS=$(uname | tr '[:upper:]' '[:lower:]')
-OS="${OS^}" # Capitalize the first letter of OS
+# Normalize OS names to match release assets
+case $OS in
+    darwin) OS="Darwin";;
+    linux) OS="Linux";;
+    msys*|mingw*|cygwin*) OS="Windows";;
+    *) echo "Unsupported operating system: $OS"; exit 1;;
+esac
+
 ARCH=$(uname -m)
 case $ARCH in
     x86_64) ARCH="x86_64";;
@@ -60,4 +67,4 @@ fi
 # Clean up
 rm -rf "$TMP_DIR"
 
-echo "WSM installed successfully to $INSTALL_DIR/wsm"
+echo "wsm installed successfully to $INSTALL_DIR/wsm"

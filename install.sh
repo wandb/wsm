@@ -35,6 +35,7 @@ INSTALL_DIR="${1:-/usr/local/bin}"
 
 # Create and use temporary directory
 TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"; exit' INT TERM EXIT
 
 # Download tarzip file
 echo "Downloading ${FILENAME}..."

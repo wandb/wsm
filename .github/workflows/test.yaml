@@ -37,28 +37,11 @@ jobs:
           cache-dependency-path: go.sum
       - name: Install gpgme dependencies
         run: sudo apt-get update && sudo apt-get install -y libgpgme-dev
-      - name: Debug Go environment
-        run: |
-          go version
-          go env
-          echo "GOPATH: $(go env GOPATH)"
-          echo "GOROOT: $(go env GOROOT)"
-      - name: Debug golangci-lint version
-        run: |
-          golangci-lint --version || echo "golangci-lint not installed yet"
-      - name: Debug golangci-lint config
-        run: |
-          echo "Contents of .golangci.yml:"
-          cat .golangci.yml
-      - name: Lint
-        run: make lint-ci
-        timeout-minutes: 2
-      - name: Lint with debug (if previous step fails)
-        if: failure()
-        run: |
-          echo "Running linting in debug mode..."
-          GOGC=10 golangci-lint run --timeout=30s --concurrency=1 -v ./cmd/... ./pkg/...
-        timeout-minutes: 1
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.5
+          args: --timeout=5m
 
   fmt:
     name: Format

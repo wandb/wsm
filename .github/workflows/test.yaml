@@ -23,8 +23,11 @@ jobs:
       - name: Install dependencies
         run: go mod download
 
+      - name: Build
+        run: make build
+
       - name: Run tests
-        run: go test -v ./...
+        run: make test
 
       - name: Run linter
         run: |

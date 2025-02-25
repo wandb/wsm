@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -152,11 +153,7 @@ func (s *SafeConsoleSpinner) Stop() {
 
 // spaces returns a string of n spaces
 func spaces(n int) string {
-	s := ""
-	for i := 0; i < n; i++ {
-		s += " "
-	}
-	return s
+	return strings.Repeat(" ", n)
 }
 
 func ListCmd() *cobra.Command {

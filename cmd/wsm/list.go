@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strings"
 
 	semverlib "github.com/Masterminds/semver/v3"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -70,11 +71,21 @@ func getMostRecentTag(repository string) (string, error) {
 		return "", fmt.Errorf("error unmarshalling JSON: %v", err)
 	}
 
-	// Extract tags and filter out "latest"
+	// Extract tags and filter out "latest" and daily tags for wandb repos
 	var tags []*semverlib.Version
 	if results, ok := result["results"].([]interface{}); ok {
 		for _, r := range results {
-			if tag, ok := r.(map[string]interface{})["name"].(string); ok && tag != "latest" {
+			if tag, ok := r.(map[string]interface{})["name"].(string); ok {
+				// Skip "latest" tag
+				if tag == "latest" {
+					continue
+				}
+				
+				// Skip daily tags only for wandb repositories
+				if strings.HasPrefix(repository, "wandb/") && strings.Contains(tag, "daily") {
+					continue
+				}
+				
 				version, err := semverlib.NewVersion(tag)
 				if err == nil {
 					tags = append(tags, version)

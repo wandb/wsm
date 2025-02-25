@@ -71,6 +71,17 @@ func TestEnsureWandbSemverCompatibleImages(t *testing.T) {
 				"wandb/server:0.9.1",
 			},
 		},
+		{
+			name: "handles pre-release and build metadata",
+			images: []string{
+				"localhost:5000/console:2.15.2",
+				"localhost:5000/console:2.15.2+build.123",
+			},
+			expected: []string{
+				"localhost:5000/console:2.15.2",
+				"localhost:5000/console:2.15.2+build.123",
+			},
+		},
 	}
 
 	for _, tt := range tests {

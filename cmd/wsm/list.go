@@ -5,15 +5,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"os/signal"
 	"sort"
-	"strings"
-	"sync"
-	"syscall"
-	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/charmbracelet/bubbles/spinner"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/deployer"
@@ -34,6 +30,114 @@ var (
 			Foreground(lipgloss.Color("14")).
 			Bold(true)
 )
+
+type model struct {
+	spinner     spinner.Model
+	operatorImgs []string
+	wandbImgs    []string
+	err         error
+	quitting    bool
+}
+
+type fetchCompleteMsg struct {
+	operatorImgs []string
+	wandbImgs    []string
+	err          error
+}
+
+func (m model) Init() tea.Cmd {
+	return tea.Batch(
+		m.spinner.Tick,
+		fetchImagesCmd(),
+	)
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if msg.Type == tea.KeyCtrlC {
+			return m, tea.Quit
+		}
+		
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+		
+	case fetchCompleteMsg:
+		m.operatorImgs = msg.operatorImgs
+		m.wandbImgs = msg.wandbImgs
+		m.err = msg.err
+		m.quitting = true
+		return m, tea.Quit
+	}
+	
+	return m, nil
+}
+
+func (m model) View() string {
+	if m.quitting {
+		return ""
+	}
+	return m.spinner.View() + " Loading images..."
+}
+
+func fetchImagesCmd() tea.Cmd {
+	return func() tea.Msg {
+		operatorTag, err := getMostRecentTag("wandb/controller")
+		if err != nil {
+			return fetchCompleteMsg{
+				err: fmt.Errorf("error fetching the latest operator-wandb controller tag: %v", err),
+			}
+		}
+		
+		operatorImgs, err := downloadChartImages(
+			helm.WandbHelmRepoURL,
+			helm.WandbOperatorChart,
+			"", // empty version means latest
+			map[string]interface{}{
+				"image": map[string]interface{}{
+					"tag": operatorTag,
+				},
+			},
+		)
+		if err != nil {
+			return fetchCompleteMsg{
+				err: fmt.Errorf("error downloading operator chart images: %v", err),
+			}
+		}
+
+		spec, err := deployer.GetChannelSpec("")
+		if err != nil {
+			return fetchCompleteMsg{
+				err: fmt.Errorf("error getting channel spec: %v", err),
+			}
+		}
+
+		// Enable weave-trace in the chart values
+		if weaveTrace, ok := spec.Values["weave-trace"]; ok {
+			weaveTrace.(map[string]interface{})["install"] = true
+		}
+
+		wandbImgs, err := downloadChartImages(
+			spec.Chart.URL,
+			spec.Chart.Name,
+			spec.Chart.Version,
+			spec.Values,
+		)
+		if err != nil {
+			return fetchCompleteMsg{
+				err: fmt.Errorf("error downloading W&B chart images: %v", err),
+			}
+		}
+		
+		return fetchCompleteMsg{
+			operatorImgs: utils.RemoveDuplicates(operatorImgs),
+			wandbImgs:    utils.RemoveDuplicates(wandbImgs),
+			err:          nil,
+		}
+	}
+}
 
 // Function to fetch the latest tag from Docker Hub API
 func getMostRecentTag(repository string) (string, error) {
@@ -79,83 +183,6 @@ func getMostRecentTag(repository string) (string, error) {
 	return tags[0].String(), nil
 }
 
-// SafeConsoleSpinner is a very simple spinner that doesn't mess with terminal state
-type SafeConsoleSpinner struct {
-	message      string
-	stopChan     chan struct{}
-	stopped      bool
-	spinnerChars []string
-	mu           sync.Mutex
-}
-
-// NewSpinner creates a new safe console spinner
-func NewSpinner(message string) *SafeConsoleSpinner {
-	return &SafeConsoleSpinner{
-		message:      message,
-		stopChan:     make(chan struct{}),
-		spinnerChars: []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"},
-	}
-}
-
-// Start starts the spinner
-func (s *SafeConsoleSpinner) Start() {
-	s.mu.Lock()
-	if s.stopped {
-		s.mu.Unlock()
-		return
-	}
-	s.mu.Unlock()
-
-	// Set up signal handling to ensure terminal cleanup on interrupt
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		defer signal.Stop(sigChan)
-
-		i := 0
-		for {
-			select {
-			case <-s.stopChan:
-				// The spinner.Stop() function handles cleanup now
-				return
-			case <-sigChan:
-				// Clear the spinner line on interrupt
-				fmt.Printf("\r%s\r", spaces(80))
-				os.Exit(1)
-			default:
-				s.mu.Lock()
-				if s.stopped {
-					s.mu.Unlock()
-					return
-				}
-				fmt.Printf("\r%s %s ", s.spinnerChars[i], s.message)
-				s.mu.Unlock()
-
-				i = (i + 1) % len(s.spinnerChars)
-				time.Sleep(100 * time.Millisecond)
-			}
-		}
-	}()
-}
-
-// Stop stops the spinner
-func (s *SafeConsoleSpinner) Stop() {
-	s.mu.Lock()
-	if !s.stopped {
-		s.stopped = true
-		close(s.stopChan)
-		// Clear the spinner line completely and add a newline
-		fmt.Printf("\r%s\r\n", spaces(80))
-	}
-	s.mu.Unlock()
-}
-
-// spaces returns a string of n spaces
-func spaces(n int) string {
-	return strings.Repeat(" ", n)
-}
-
 func ListCmd() *cobra.Command {
 	var platform string
 
@@ -167,81 +194,39 @@ func ListCmd() *cobra.Command {
 				Bold(true).
 				Foreground(lipgloss.Color("14")).Render("📦 Starting the process to list all images required for deployment..."))
 
-			// Create a spinner that won't mess with terminal state
-			spinner := NewSpinner("Loading images...")
-			spinner.Start()
-
-			// Variables to store results
-			var operatorImgs, wandbImgs []string
-
-			// Handle cleanup if the command is interrupted
-			c := make(chan os.Signal, 1)
-			signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-			go func() {
-				<-c
-				spinner.Stop()
-				os.Exit(1)
-			}()
-
-			// Fetch operator images
-			operatorTag, err := getMostRecentTag("wandb/controller")
+			// Initialize the spinner
+			s := spinner.New()
+			s.Spinner = spinner.Dot
+			s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
+			
+			// Create initial model
+			m := model{
+				spinner: s,
+			}
+			
+			// Run the program with proper terminal handling
+			p := tea.NewProgram(m)
+			finalModel, err := p.Run()
 			if err != nil {
-				spinner.Stop()
-				fmt.Printf("Error fetching the latest operator-wandb controller tag: %v\n", err)
+				fmt.Println("Error running program:", err)
 				return
 			}
-
-			operatorImgs, err = downloadChartImages(
-				helm.WandbHelmRepoURL,
-				helm.WandbOperatorChart,
-				"", // empty version means latest
-				map[string]interface{}{
-					"image": map[string]interface{}{
-						"tag": operatorTag,
-					},
-				},
-			)
-			if err != nil {
-				spinner.Stop()
-				fmt.Printf("Error downloading operator chart images: %v\n", err)
+			
+			// Extract results from the final model
+			finalState := finalModel.(model)
+			if finalState.err != nil {
+				fmt.Printf("%v\n", finalState.err)
 				return
 			}
-
-			spec, err := deployer.GetChannelSpec("")
-			if err != nil {
-				spinner.Stop()
-				fmt.Printf("Error getting channel spec: %v\n", err)
-				return
-			}
-
-			// Enable weave-trace in the chart values
-			if weaveTrace, ok := spec.Values["weave-trace"]; ok {
-				weaveTrace.(map[string]interface{})["install"] = true
-			}
-
-			wandbImgs, err = downloadChartImages(
-				spec.Chart.URL,
-				spec.Chart.Name,
-				spec.Chart.Version,
-				spec.Values,
-			)
-			if err != nil {
-				spinner.Stop()
-				fmt.Printf("Error downloading W&B chart images: %v\n", err)
-				return
-			}
-
-			// Stop the spinner
-			spinner.Stop()
-
-			// Print images (no additional newline needed - spinner.Stop adds one)
+			
+			// Print images with proper formatting
 			fmt.Println(listStyle.Render("Operator Images:"))
-			for _, img := range utils.RemoveDuplicates(operatorImgs) {
+			for _, img := range finalState.operatorImgs {
 				fmt.Println(itemStyle.Render(img))
 			}
 
 			fmt.Println(listStyle.Render("W&B Images:"))
-			for _, img := range utils.RemoveDuplicates(wandbImgs) {
+			for _, img := range finalState.wandbImgs {
 				fmt.Println(itemStyle.Render(img))
 			}
 

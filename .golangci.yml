@@ -1,0 +1,18 @@
+# Minimal golangci-lint configuration for CI
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+linters-settings:
+  govet:
+    check-shadowing: false
+
+issues:
+  max-issues-per-linter: 10
+  max-same-issues: 10

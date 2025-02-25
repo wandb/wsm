@@ -16,7 +16,7 @@ import (
 	"github.com/wandb/wsm/pkg/helm/values"
 	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/spec"
-	yaml "gopkg.in/yaml.v3"
+	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 )
@@ -40,7 +40,7 @@ var operatorCmd = &cobra.Command{
 
 		operatorChartPath, err := getChartPath([]string{chartPath, bundlePath + "/charts"}, helm.WandbOperatorChart)
 		if err != nil {
-			fmt.Printf("Error getting chart path: %v\n", err)
+			fmt.Printf("Error finding operator chart: %v\n", err)
 			return
 		}
 
@@ -80,20 +80,20 @@ var chartsCmd = &cobra.Command{
 
 		wandbChartPath, err = getChartPath([]string{chartPath, bundlePath + "/charts"}, helm.WandbChart)
 		if err != nil {
-			panic(fmt.Sprintf("Error getting chart path: %v", err))
+			fmt.Printf("Error finding wandb chart: %v\n", err)
+			return
 		}
 
 		wandbChartBinary, err := base64EncodeFile(wandbChartPath)
 		if err != nil {
-			panic(fmt.Sprintf("Error encoding chart %s: %v", wandbChartPath, err))
+			panic(err)
 		}
 
-		fmt.Printf("Uploading chart binary of size %d bytes\n", len(wandbChartBinary))
 		err = kubectl.UpsertConfigMap(map[string]string{
 			helm.WandbChart: wandbChartBinary,
 		}, "wandb-charts", namespace)
 		if err != nil {
-			panic(fmt.Sprintf("Error upserting config map with chart binary of size %d: %v", len(wandbChartBinary), err))
+			panic(fmt.Sprintf("Error upserting config map: %v", err))
 		}
 	},
 }

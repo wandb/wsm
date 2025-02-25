@@ -4,14 +4,13 @@ import (
 	"fmt"
 	"os"
 
-	yaml "gopkg.in/yaml.v3"
-
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/helm"
 	"github.com/wandb/wsm/pkg/images"
 	"github.com/wandb/wsm/pkg/term/pkgm"
 	"github.com/wandb/wsm/pkg/utils"
+	"gopkg.in/yaml.v3"
 )
 
 func init() {
@@ -93,9 +92,6 @@ func DownloadCmd() *cobra.Command {
 				spec.Chart.Version,
 				dlSpec.Values,
 			)
-
-			// Apply semver compatibility filter to wandb images
-			wandbImgs = utils.EnsureWandbSemverCompatibleImages(wandbImgs)
 
 			imgs := utils.RemoveDuplicates(append(wandbImgs, operatorImgs...))
 			if len(imgs) == 0 {

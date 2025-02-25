@@ -6,9 +6,8 @@ import (
 	"io"
 	"net/http"
 	"sort"
-	"strings"
 
-	semverlib "github.com/Masterminds/semver/v3"
+	"github.com/Masterminds/semver/v3"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -71,22 +70,12 @@ func getMostRecentTag(repository string) (string, error) {
 		return "", fmt.Errorf("error unmarshalling JSON: %v", err)
 	}
 
-	// Extract tags and filter out "latest" and daily tags for wandb repos
-	var tags []*semverlib.Version
+	// Extract tags and filter out "latest"
+	var tags []*semver.Version
 	if results, ok := result["results"].([]interface{}); ok {
 		for _, r := range results {
-			if tag, ok := r.(map[string]interface{})["name"].(string); ok {
-				// Skip "latest" tag
-				if tag == "latest" {
-					continue
-				}
-				
-				// Skip daily tags only for wandb repositories
-				if strings.HasPrefix(repository, "wandb/") && strings.Contains(tag, "daily") {
-					continue
-				}
-				
-				version, err := semverlib.NewVersion(tag)
+			if tag, ok := r.(map[string]interface{})["name"].(string); ok && tag != "latest" {
+				version, err := semver.NewVersion(tag)
 				if err == nil {
 					tags = append(tags, version)
 				}
@@ -95,7 +84,7 @@ func getMostRecentTag(repository string) (string, error) {
 	}
 
 	// Sort the tags in descending order
-	sort.Sort(sort.Reverse(semverlib.Collection(tags)))
+	sort.Sort(sort.Reverse(semver.Collection(tags)))
 
 	// Return the most recent tag
 	if len(tags) == 0 {
@@ -113,7 +102,7 @@ func ListCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Println(lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("14")).Render("📦 Listing all images required for deployment..."))
+				Foreground(lipgloss.Color("14")).Render("📦 Starting the process to list all images required for deployment..."))
 
 			// Initialize spinner
 			sp := spinner.New()
@@ -124,8 +113,7 @@ func ListCmd() *cobra.Command {
 
 			// Run spinner in a separate goroutine
 			go func() {
-				_, err := p.Run()
-				if err != nil {
+				if _, err := p.Run(); err != nil {
 					fmt.Println("Error running spinner:", err)
 				}
 			}()
@@ -174,9 +162,8 @@ func ListCmd() *cobra.Command {
 			}
 
 			fmt.Println(listStyle.Render("W&B Images:"))
-			// Apply semver compatibility filter to wandb images
-			for _, img := range utils.EnsureWandbSemverCompatibleImages(utils.RemoveDuplicates(wandbImgs)) {
-				fmt.Println("  " + img)
+			for _, img := range utils.RemoveDuplicates(wandbImgs) {
+				fmt.Println(itemStyle.Render(img))
 			}
 
 			fmt.Println(footerStyle.Render("Here are the images required to deploy W&B. Please ensure these images are available in your internal container registry and update the values.yaml accordingly.\n"))

@@ -42,10 +42,8 @@ func EnsureWandbSemverCompatibleImages(images []string) []string {
 		repo, tag := parts[0], parts[1]
 
 		baseVersion := tag
-		if strings.Contains(tag, "-") {
-			baseVersion = strings.Split(tag, "-")[0]
-		} else if strings.Contains(tag, "+") {
-			baseVersion = strings.Split(tag, "+")[0]
+		if idx := strings.IndexAny(tag, "-+"); idx > 0 {
+			baseVersion = tag[:idx]
 		}
 
 		v, err := semver.NewVersion(baseVersion)

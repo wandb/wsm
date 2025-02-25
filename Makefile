@@ -36,11 +36,19 @@ clean-lint:
 lint: install-lint
 	@echo "Linting Go files..."
 	@go vet ./...
+	@echo "Running golangci-lint..."
 	@GOGC=off golangci-lint run --timeout=5m --concurrency=4 --max-same-issues=20
+
+# CI-specific lint target with stricter limits
+lint-ci: install-lint
+	@echo "Linting Go files in CI environment..."
+	@go vet ./...
+	@echo "Running golangci-lint with CI settings..."
+	@GOGC=20 GOLANGCI_LINT_CACHE=false golangci-lint run --timeout=1m --concurrency=2 --max-same-issues=10 -v
 
 lint-fix: install-lint
 	@echo "Fixing lint errors..."
-	@GOGC=off golangci-lint run --fix --timeout=5m --concurrency=4 --max-same-issues=20 ./...
+	@GOGC=off golangci-lint run --fix --timeout=5m --concurrency=4 --max-same-issues=20 -v ./...
 
 fmt:
 	go fmt ./...

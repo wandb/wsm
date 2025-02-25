@@ -38,7 +38,8 @@ jobs:
       - name: Install gpgme dependencies
         run: sudo apt-get update && sudo apt-get install -y libgpgme-dev
       - name: Lint
-        run: make lint
+        run: make lint-ci
+        timeout-minutes: 1
 
   fmt:
     name: Format

@@ -9,7 +9,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/deployer"
@@ -102,7 +102,7 @@ func ListCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Println(lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("14")).Render("📦 Starting the process to list all images required for deployment..."))
+				Foreground(lipgloss.Color("14")).Render("📦 Listing all images required for deployment..."))
 
 			// Initialize spinner
 			sp := spinner.New()
@@ -162,8 +162,9 @@ func ListCmd() *cobra.Command {
 			}
 
 			fmt.Println(listStyle.Render("W&B Images:"))
-			for _, img := range utils.RemoveDuplicates(wandbImgs) {
-				fmt.Println(itemStyle.Render(img))
+			// Apply semver compatibility filter to wandb images
+			for _, img := range utils.EnsureWandbSemverCompatibleImages(utils.RemoveDuplicates(wandbImgs)) {
+				fmt.Println("  " + img)
 			}
 
 			fmt.Println(footerStyle.Render("Here are the images required to deploy W&B. Please ensure these images are available in your internal container registry and update the values.yaml accordingly.\n"))

@@ -3,12 +3,14 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
+	"path"
+	"strings"
+
 	"github.com/pkg/errors"
 	"github.com/wandb/wsm/pkg/crd"
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/utils"
-	"os"
-	"path"
 
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/helm"
@@ -118,6 +120,19 @@ var wandbCRCmd = &cobra.Command{
 				if err != nil {
 					fmt.Println("Error merging values:", err)
 					os.Exit(1)
+				}
+			}
+		}
+
+		// Ensure semver compatibility for weave-trace image
+		if weaveTrace, ok := vals["weave-trace"]; ok {
+			weaveTraceMap := weaveTrace.(map[string]interface{})
+			if image, ok := weaveTraceMap["image"]; ok {
+				imageMap := image.(map[string]interface{})
+				if tag, ok := imageMap["tag"].(string); ok && strings.Contains(tag, "-daily") {
+					// Extract the base semver part (e.g., "0.302.0" from "0.302.0-daily.0")
+					semverPart := strings.Split(tag, "-")[0]
+					imageMap["tag"] = semverPart
 				}
 			}
 		}

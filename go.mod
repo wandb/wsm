@@ -1,10 +1,11 @@
 module github.com/wandb/wsm
 
-go 1.21
+go 1.24
 
-toolchain go1.21.3
+toolchain go1.24.0
 
 require (
+	github.com/Masterminds/semver/v3 v3.3.1
 	github.com/charmbracelet/bubbles v0.18.0
 	github.com/charmbracelet/bubbletea v0.25.0
 	github.com/charmbracelet/lipgloss v0.9.1
@@ -25,7 +26,6 @@ require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
 	github.com/MakeNowJust/heredoc v1.0.0 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
-	github.com/Masterminds/semver/v3 v3.2.1 // indirect
 	github.com/Masterminds/sprig/v3 v3.2.3 // indirect
 	github.com/Masterminds/squirrel v1.5.4 // indirect
 	github.com/Microsoft/hcsshim v0.12.0-rc.1 // indirect

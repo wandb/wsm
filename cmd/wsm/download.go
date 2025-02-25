@@ -93,6 +93,9 @@ func DownloadCmd() *cobra.Command {
 				dlSpec.Values,
 			)
 
+			// Apply semver compatibility filter to wandb images
+			wandbImgs = utils.EnsureWandbSemverCompatibleImages(wandbImgs)
+
 			imgs := utils.RemoveDuplicates(append(wandbImgs, operatorImgs...))
 			if len(imgs) == 0 {
 				fmt.Println("No images to download.")

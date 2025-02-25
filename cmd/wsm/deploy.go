@@ -3,12 +3,13 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
+	"path"
+
 	"github.com/pkg/errors"
 	"github.com/wandb/wsm/pkg/crd"
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/utils"
-	"os"
-	"path"
 
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/helm"
@@ -38,6 +39,10 @@ var operatorCmd = &cobra.Command{
 		releaseName := "operator"
 
 		operatorChartPath, err := getChartPath([]string{chartPath, bundlePath + "/charts"}, helm.WandbOperatorChart)
+		if err != nil {
+			fmt.Printf("Error finding operator chart: %v\n", err)
+			return
+		}
 
 		operatorValues := values.Values{}
 		if valuesPath != "" {
@@ -74,6 +79,10 @@ var chartsCmd = &cobra.Command{
 		var err error
 
 		wandbChartPath, err = getChartPath([]string{chartPath, bundlePath + "/charts"}, helm.WandbChart)
+		if err != nil {
+			fmt.Printf("Error finding wandb chart: %v\n", err)
+			return
+		}
 
 		wandbChartBinary, err := base64EncodeFile(wandbChartPath)
 		if err != nil {

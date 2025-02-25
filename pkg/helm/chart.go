@@ -10,7 +10,6 @@ import (
 	"helm.sh/helm/v3/pkg/releaseutil"
 )
 
-
 func isInstalled(config *action.Configuration, releaseName string) bool {
 	h, err := config.Releases.History(releaseName)
 	if err != nil || len(h) < 1 {

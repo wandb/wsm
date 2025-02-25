@@ -72,7 +72,7 @@ func TestEnsureWandbSemverCompatibleImages(t *testing.T) {
 			},
 		},
 		{
-			name: "handles pre-release and build metadata",
+			name: "handles registries with ports and semver tags",
 			images: []string{
 				"localhost:5000/console:2.15.2",
 				"localhost:5000/console:2.15.2+build.123",

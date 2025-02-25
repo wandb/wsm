@@ -32,11 +32,11 @@ var (
 )
 
 type model struct {
-	spinner     spinner.Model
+	spinner      spinner.Model
 	operatorImgs []string
 	wandbImgs    []string
-	err         error
-	quitting    bool
+	err          error
+	quitting     bool
 }
 
 type fetchCompleteMsg struct {
@@ -58,12 +58,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Type == tea.KeyCtrlC {
 			return m, tea.Quit
 		}
-		
+
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
-		
+
 	case fetchCompleteMsg:
 		m.operatorImgs = msg.operatorImgs
 		m.wandbImgs = msg.wandbImgs
@@ -71,7 +71,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	}
-	
+
 	return m, nil
 }
 
@@ -90,7 +90,7 @@ func fetchImagesCmd() tea.Cmd {
 				err: fmt.Errorf("error fetching the latest operator-wandb controller tag: %v", err),
 			}
 		}
-		
+
 		operatorImgs, err := downloadChartImages(
 			helm.WandbHelmRepoURL,
 			helm.WandbOperatorChart,
@@ -130,7 +130,7 @@ func fetchImagesCmd() tea.Cmd {
 				err: fmt.Errorf("error downloading W&B chart images: %v", err),
 			}
 		}
-		
+
 		return fetchCompleteMsg{
 			operatorImgs: utils.RemoveDuplicates(operatorImgs),
 			wandbImgs:    utils.RemoveDuplicates(wandbImgs),
@@ -198,12 +198,12 @@ func ListCmd() *cobra.Command {
 			s := spinner.New()
 			s.Spinner = spinner.Dot
 			s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
-			
+
 			// Create initial model
 			m := model{
 				spinner: s,
 			}
-			
+
 			// Run the program with proper terminal handling
 			p := tea.NewProgram(m)
 			finalModel, err := p.Run()
@@ -211,14 +211,14 @@ func ListCmd() *cobra.Command {
 				fmt.Println("Error running program:", err)
 				return
 			}
-			
+
 			// Extract results from the final model
 			finalState := finalModel.(model)
 			if finalState.err != nil {
 				fmt.Printf("%v\n", finalState.err)
 				return
 			}
-			
+
 			// Print images with proper formatting
 			fmt.Println(listStyle.Render("Operator Images:"))
 			for _, img := range finalState.operatorImgs {

@@ -1,4 +1,4 @@
-name: "Run Tests"
+name: "Run Checks"
 on:
   push:
     branches:
@@ -56,7 +56,9 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
       - name: Format
-        run: make fmt
+        run: |
+          make fmt
+          git diff --exit-code
 
   dependency-check:
     name: Dependency Check

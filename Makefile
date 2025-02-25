@@ -1,81 +1,52 @@
-GO_VERSION = 1.24.0
+GO_VERSION = 1.23.0
 
-# Use a specific version of golangci-lint that is built with Go 1.24
-GOLANGCI_LINT_VERSION = 1.57.0
+GOLANGCI_LINT_VERSION = v1.64.5
 
-# Install system dependencies required for building
-install-deps:
-	@echo "Installing system dependencies..."
-ifeq ($(shell uname -s),Darwin)
-	@echo "Installing dependencies for macOS..."
-	@brew install gpgme
-else ifeq ($(shell uname -s),Linux)
-	@echo "Installing dependencies for Linux..."
-	@sudo apt-get update && sudo apt-get install -y libgpgme-dev libassuan-dev
-else
-	@echo "Please install GPGME development libraries manually for your system"
+# Set environment variables to suppress linker warnings on macOS
+ifeq ($(shell uname),Darwin)
+	export CGO_LDFLAGS=-Wl,-w
+	export LDFLAGS=-w
 endif
 
+build:
+	go build -o wsm ./cmd/wsm
+
+# Modern linter installation
 install-lint:
-	@echo "Installing golangci-lint version $(GOLANGCI_LINT_VERSION)..."
-	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@v$(GOLANGCI_LINT_VERSION)
+	@if ! [ -x "$$(command -v golangci-lint)" ]; then \
+		echo "Installing golangci-lint $(GOLANGCI_LINT_VERSION)..."; \
+		GO111MODULE=on GOFLAGS="-buildvcs=false" go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
+	else \
+		CURRENT_VERSION=$$(golangci-lint --version | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1); \
+		if [ "$$CURRENT_VERSION" != "$(GOLANGCI_LINT_VERSION)" ]; then \
+			echo "Updating golangci-lint from $$CURRENT_VERSION to $(GOLANGCI_LINT_VERSION)..."; \
+			GO111MODULE=on GOFLAGS="-buildvcs=false" go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
+		fi \
+	fi	
 
-# Use a simpler approach for format that doesn't rely on golangci-lint
-format:
-	@echo "Formatting Go files..."
-	@go fmt ./...
+clean-lint:
+	@echo "Removing golangci-lint..."
+	@rm -f $(shell which golangci-lint 2>/dev/null) || true
+	@echo "golangci-lint removed"
 
-# Add a simple lint target using Go's built-in tools
-lint:
+lint: install-lint
 	@echo "Linting Go files..."
 	@go vet ./...
+	@GOGC=off golangci-lint run
 
-# Add a build target that skips linting
-build: install-deps
-	@echo "Building wsm..."
-ifeq ($(shell uname -s),Darwin)
-	@GPGME_DIR=$$(brew --prefix gpgme) && \
-	CGO_CFLAGS="-I$$GPGME_DIR/include" \
-	CGO_LDFLAGS="-L$$GPGME_DIR/lib -lgpgme" \
-	go build -o wsm cmd/wsm/*.go
-else
-	@go build -o wsm cmd/wsm/*.go
-endif
+lint-fix: install-lint
+	@echo "Fixing lint errors..."
+	@GOGC=off golangci-lint run --fix ./...
 
-# Test targets
-.PHONY: test test-semver test-coverage
+fmt:
+	go fmt ./...
 
-# Run all Go tests
-test: install-deps
-	@echo "Running Go tests..."
-ifeq ($(shell uname -s),Darwin)
-	@GPGME_DIR=$$(brew --prefix gpgme) && \
-	CGO_CFLAGS="-I$$GPGME_DIR/include" \
-	CGO_LDFLAGS="-L$$GPGME_DIR/lib -lgpgme" \
-	go test ./... -v
-else
-	@go test ./... -v
-endif
+test:
+	go test -v ./...
 
-# Test the semver compatibility feature
-test-semver: build
-	@echo "Testing semver compatibility..."
-	@./wsm list | grep "wandb/weave-trace" | grep -v "daily"
+# Latest minor of patch version of all dependencies
+safe-update-deps:
+	go get -u ./...
+	go mod tidy
 
-# Generate test coverage report
-test-coverage: install-deps
-	@echo "Generating test coverage report..."
-ifeq ($(shell uname -s),Darwin)
-	@GPGME_DIR=$$(brew --prefix gpgme) && \
-	CGO_CFLAGS="-I$$GPGME_DIR/include" \
-	CGO_LDFLAGS="-L$$GPGME_DIR/lib -lgpgme" \
-	go test ./... -v -coverprofile=coverage.out
-else
-	@go test ./... -v -coverprofile=coverage.out
-endif
-	@go tool cover -html=coverage.out -o coverage.html
-
-# Add an all target that runs lint, build, and test
-all: format lint build test
-
-.PHONY: install-deps install-lint format lint build all test test-semver test-coverage
+.PHONY: install-lint lint lint-fix fmt test build clean-lint safe-update-deps

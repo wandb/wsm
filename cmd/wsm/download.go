@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"os"
 
+	yaml "gopkg.in/yaml.v3"
+
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/helm"
 	"github.com/wandb/wsm/pkg/images"
 	"github.com/wandb/wsm/pkg/term/pkgm"
 	"github.com/wandb/wsm/pkg/utils"
-	"gopkg.in/yaml.v3"
 )
 
 func init() {

@@ -3,11 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"sort"
 
-	"github.com/Masterminds/semver/v3"
+	semverlib "github.com/Masterminds/semver/v3"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -58,7 +58,7 @@ func getMostRecentTag(repository string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("error reading response body: %v", err)
 	}
@@ -71,11 +71,11 @@ func getMostRecentTag(repository string) (string, error) {
 	}
 
 	// Extract tags and filter out "latest"
-	var tags []*semver.Version
+	var tags []*semverlib.Version
 	if results, ok := result["results"].([]interface{}); ok {
 		for _, r := range results {
 			if tag, ok := r.(map[string]interface{})["name"].(string); ok && tag != "latest" {
-				version, err := semver.NewVersion(tag)
+				version, err := semverlib.NewVersion(tag)
 				if err == nil {
 					tags = append(tags, version)
 				}
@@ -84,7 +84,7 @@ func getMostRecentTag(repository string) (string, error) {
 	}
 
 	// Sort the tags in descending order
-	sort.Sort(sort.Reverse(semver.Collection(tags)))
+	sort.Sort(sort.Reverse(semverlib.Collection(tags)))
 
 	// Return the most recent tag
 	if len(tags) == 0 {
@@ -113,7 +113,8 @@ func ListCmd() *cobra.Command {
 
 			// Run spinner in a separate goroutine
 			go func() {
-				if err := p.Start(); err != nil {
+				_, err := p.Run()
+				if err != nil {
 					fmt.Println("Error running spinner:", err)
 				}
 			}()

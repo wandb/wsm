@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Masterminds/semver/v3"
+	semverlib "github.com/Masterminds/semver/v3"
 )
 
 // EnsureWandbSemverCompatibleImages processes a list of container image references and ensures
@@ -46,7 +46,7 @@ func EnsureWandbSemverCompatibleImages(images []string) []string {
 			baseVersion = tag[:idx]
 		}
 
-		v, err := semver.NewVersion(baseVersion)
+		v, err := semverlib.NewVersion(baseVersion)
 		if err == nil {
 			result[i] = fmt.Sprintf("%s:%d.%d.%d", repo, v.Major(), v.Minor(), v.Patch())
 		} else {

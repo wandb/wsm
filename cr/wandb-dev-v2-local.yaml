@@ -1,0 +1,34 @@
+apiVersion: apps.wandb.com/v2
+kind: WeightsAndBiases
+metadata:
+  name: wandb-dev-v2
+spec:
+  enableOIDCDiscovery: true
+  wandb:
+    hostname: http://localhost:8080
+    license: eyJhbGciOiJSUzI1NiIsImtpZCI6InUzaHgyQjQyQWhEUXM1M0xQY09yNnZhaTdoSlduYnF1bTRZTlZWd1VwSWM9In0.eyJjb25jdXJyZW50QWdlbnRzIjoxMCwidHJpYWwiOnRydWUsIm1heFN0b3JhZ2VHYiI6MTAwMDAwMCwibWF4VGVhbXMiOjUwLCJtYXhVc2VycyI6MTAwLCJtYXhWaWV3T25seVVzZXJzIjowLCJtYXhSZWdpc3RlcmVkTW9kZWxzIjo1LCJleHBpcmVzQXQiOiIyMDI2LTAyLTA4VDAwOjE2OjM5LjAwOFoiLCJkZXBsb3ltZW50SWQiOiI1ZTE4MDJlNC05Njg2LTRiMzktYTAzMS00NGMwNzg1Mjc3OTAiLCJmbGFncyI6WyJOT1RJRklDQVRJT05TIiwic2xhY2siLCJub3RpZmljYXRpb25zIiwiU0NBTEFCTEUiLCJteXNxbCIsInMzIiwicmVkaXMiLCJNQU5BR0VNRU5UIiwib3JnX2Rhc2giLCJhdXRoMCIsImNvbGxlY3RfYXVkaXRfbG9ncyIsInJiYWMiXSwiY29udHJhY3RTdGFydERhdGUiOiIyMDI2LTAxLTA5VDAwOjE2OjM5LjAwOVoiLCJhY2Nlc3NLZXkiOiJhOWZiYTgyNi0xNmM1LTRiMzktOGEzMC01OWFjMDFkZjU2YjIiLCJzZWF0cyI6MTAwLCJ2aWV3T25seVNlYXRzIjowLCJ0ZWFtcyI6NTAsInJlZ2lzdGVyZWRNb2RlbHMiOjUsInN0b3JhZ2VHaWdzIjoxMDAwMDAwLCJleHAiOjE3NzA1MDk3OTksIndlYXZlTGltaXRzIjp7IndlYXZlTGltaXRCeXRlcyI6bnVsbCwid2VhdmVPdmVyYWdlQ29zdENlbnRzIjowLCJ3ZWF2ZU92ZXJhZ2VVbml0IjoiTUIifX0.ZP7WAPieKkryOn_W33dTPjYwkV8keyKPt0h8rqzaotQ5zjRCkCe6IsZeW0zOubT9WuzoL5iTB02aNWnYTrgd1K-ZxnrRy4NQ8EMm3vy0TlmVQ9kiZosiNhrQ2kNpX0yVFUDpryJ6rNXFQfAg42yVJNtHP6E5xikHvzTnGkafKSobxetOOO0zqKVbS1VhyxQ8mNbEADmVey4OH2NSvc-AfPST5jQb7tKWdMZUUerdQzYeXdnISW2nC3iAM_g-sxYjRr6vjuHPr5f93AsIK7LpfsCr26OEzS93DV425LycmVpA0oqiaScB5CalyfCQRdzbei-ZAJm_KOOQ7HKmmHM-sg
+    features:
+      proxy: true
+  size: dev
+  retentionPolicy:
+    onDelete: purge
+  mysql:
+    enabled: true
+    telemetry:
+      enabled: true
+  redis:
+    enabled: true
+    telemetry:
+      enabled: true
+  kafka:
+    enabled: true
+    telemetry:
+      enabled: true
+  minio:
+    enabled: true
+    telemetry:
+      enabled: true
+  clickhouse:
+    enabled: true
+    telemetry:
+      enabled: true

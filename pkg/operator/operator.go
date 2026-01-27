@@ -141,7 +141,7 @@ func DeployOperatorCRDs(ctx context.Context, operatorManifestPath string) error 
 }
 
 // DeployOperator deploys the W&B operator from a manifest file (excluding CRDs)
-func DeployOperator(ctx context.Context, manifestPath string, devMode bool) error {
+func DeployOperator(ctx context.Context, manifestPath string) error {
 	// Skip CRDs in the manifest file as they're applied separately
 	// We need to filter out CRDs to avoid annotation size issues
 	cmd := exec.CommandContext(ctx, "bash", "-c",
@@ -152,29 +152,6 @@ func DeployOperator(ctx context.Context, manifestPath string, devMode bool) erro
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to deploy operator: %w", err)
-	}
-
-	// HACK for demo: Patch the deployment for local Kind clusters (same as Tilt does)
-	// TODO: Remove this when we have proper production deployment
-	if devMode {
-		fmt.Println("  → Patching operator deployment for local Kind (dev mode)...")
-
-		// Set imagePullPolicy to Never, runAsNonRoot to false, allow privilege escalation
-		patchCmd := exec.CommandContext(ctx, "kubectl", "patch", "deployment",
-			"operator-controller-manager", "-n", "operator-system",
-			"--type", "json",
-			"-p", `[
-				{"op": "replace", "path": "/spec/template/spec/containers/0/imagePullPolicy", "value": "Never"},
-				{"op": "replace", "path": "/spec/template/spec/securityContext/runAsNonRoot", "value": false},
-				{"op": "replace", "path": "/spec/template/spec/containers/0/securityContext/allowPrivilegeEscalation", "value": true},
-				{"op": "replace", "path": "/spec/template/spec/containers/0/securityContext/capabilities/drop", "value": []}
-			]`)
-		patchCmd.Stdout = os.Stdout
-		patchCmd.Stderr = os.Stderr
-
-		if err := patchCmd.Run(); err != nil {
-			return fmt.Errorf("failed to patch operator deployment: %w", err)
-		}
 	}
 
 	return nil
@@ -358,77 +335,3 @@ func GetCRName(crPath string) (string, error) {
 	return stdout.String(), nil
 }
 
-// BuildOperatorImage builds the operator Docker image if it doesn't exist
-func BuildOperatorImage(ctx context.Context) error {
-	// Check if image already exists
-	cmd := exec.CommandContext(ctx, "docker", "images", "-q", "controller:latest")
-	output, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("failed to check for existing image: %w", err)
-	}
-
-	if len(output) > 0 {
-		fmt.Println("  → Using existing controller:latest image")
-		return nil
-	}
-
-	// Image doesn't exist, build it
-	operatorDir := "/Users/awarrier/Documents/operator"
-
-	// Step 1: Build the manager binary
-	fmt.Println("  → Building manager binary...")
-	cmd = exec.CommandContext(ctx, "bash", "-c",
-		"CGO_ENABLED=0 GOOS=linux GO111MODULE=on go build -o tilt_bin/manager cmd/main.go")
-	cmd.Dir = operatorDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to build manager binary: %w", err)
-	}
-
-	// Step 2: Build the Docker image
-	fmt.Println("  → Building Docker image...")
-	dockerfile := `FROM registry.access.redhat.com/ubi9/ubi
-
-ADD tilt_bin/manager /manager
-ADD hack/testing-manifests/server-manifest/0.76.1.yaml /0.76.1.yaml
-
-RUN mkdir -p /helm/.cache/helm /helm/.config/helm /helm/.local/share/helm
-
-ENV HELM_CACHE_HOME=/helm/.cache/helm
-ENV HELM_CONFIG_HOME=/helm/.config/helm
-ENV HELM_DATA_HOME=/helm/.local/share/helm
-`
-
-	// Write dockerfile to temp file
-	tempDockerfile := filepath.Join(operatorDir, "Dockerfile.wsm")
-	if err := os.WriteFile(tempDockerfile, []byte(dockerfile), 0644); err != nil {
-		return fmt.Errorf("failed to write Dockerfile: %w", err)
-	}
-	defer os.Remove(tempDockerfile)
-
-	cmd = exec.CommandContext(ctx, "docker", "build", "-f", "Dockerfile.wsm", "-t", "controller:latest", ".")
-	cmd.Dir = operatorDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to build Docker image: %w", err)
-	}
-
-	return nil
-}
-
-// LoadOperatorImageIntoKind loads the operator image into a Kind cluster
-func LoadOperatorImageIntoKind(ctx context.Context, clusterName string) error {
-	cmd := exec.CommandContext(ctx, "kind", "load", "docker-image", "controller:latest", "--name", clusterName)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to load image into Kind: %w", err)
-	}
-
-	return nil
-}

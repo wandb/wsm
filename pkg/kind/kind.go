@@ -208,6 +208,21 @@ func DeleteDeploymentMarker(ctx context.Context, namespace string) error {
 	return nil
 }
 
+// LoadImageToCluster loads a Docker image into a Kind cluster
+func LoadImageToCluster(ctx context.Context, imageName, clusterName string) error {
+	fmt.Printf("  → Loading image '%s' into kind cluster '%s'...\n", imageName, clusterName)
+
+	cmd := exec.CommandContext(ctx, "kind", "load", "docker-image", imageName, "--name", clusterName)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to load image into kind cluster: %w", err)
+	}
+
+	return nil
+}
+
 // generateClusterConfig creates a Kind cluster configuration with specified worker nodes
 func generateClusterConfig(workers int) string {
 	config := `kind: Cluster

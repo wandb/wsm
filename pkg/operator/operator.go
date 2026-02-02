@@ -415,30 +415,8 @@ func BuildOperatorImage(ctx context.Context, manifestPath string) error {
 	// Image doesn't exist, build it
 	operatorDir := "/Users/awarrier/Documents/operator"
 
-	// Get absolute path to manifest
-	absManifestPath, err := filepath.Abs(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to get absolute manifest path: %w", err)
-	}
-
-	// Copy manifest to the expected location in operator directory
-	manifestDestPath := filepath.Join(operatorDir, "hack/testing-manifests/server-manifest/0.76.1.yaml")
-	manifestDestDir := filepath.Dir(manifestDestPath)
-
-	// Create directory if it doesn't exist
-	if err := os.MkdirAll(manifestDestDir, 0755); err != nil {
-		return fmt.Errorf("failed to create manifest directory: %w", err)
-	}
-
-	// Read and copy manifest
-	manifestContent, err := os.ReadFile(absManifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to read manifest file %s: %w", absManifestPath, err)
-	}
-
-	if err := os.WriteFile(manifestDestPath, manifestContent, 0644); err != nil {
-		return fmt.Errorf("failed to copy manifest to operator directory: %w", err)
-	}
+	// NOTE: We don't copy the manifest anymore - use whatever is already in the operator directory
+	// This allows developers to make changes directly in the operator repo without them being overwritten
 
 	// Step 1: Build the manager binary
 	fmt.Println("  → Building manager binary...")
@@ -601,4 +579,90 @@ func FixMySQLDirtyFlag(ctx context.Context, namespace string) error {
 
 	fmt.Println("✓ MySQL migration dirty flag fixed")
 	return nil
+}
+
+// WaitForCRReady waits for a WeightsAndBiases CR to reach ready state and all pods to be Running
+func WaitForCRReady(ctx context.Context, namespace, crName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	crReady := false
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if time.Now().After(deadline) {
+				return fmt.Errorf("timeout waiting for CR %s/%s to be ready after %v", namespace, crName, timeout)
+			}
+
+			// First check if CR is ready
+			if !crReady {
+				cmd := exec.CommandContext(ctx, "kubectl", "get", "wandb", crName,
+					"-n", namespace,
+					"-o", "jsonpath={.status.ready}")
+
+				var stdout, stderr bytes.Buffer
+				cmd.Stdout = &stdout
+				cmd.Stderr = &stderr
+
+				if err := cmd.Run(); err != nil {
+					// CR might not exist yet or error getting status, continue waiting
+					continue
+				}
+
+				ready := strings.TrimSpace(stdout.String())
+				if ready == "true" {
+					crReady = true
+				} else {
+					// CR not ready yet, continue waiting
+					continue
+				}
+			}
+
+			// CR is ready, now check if all pods are Running
+			// Get all pods in the namespace that are NOT in Running state or are not Ready
+			cmd := exec.CommandContext(ctx, "kubectl", "get", "pods",
+				"-n", namespace,
+				"-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\t\"}{.status.phase}{\"\\t\"}{range .status.conditions[?(@.type==\"Ready\")]}{.status}{end}{\"\\n\"}{end}")
+
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+
+			if err := cmd.Run(); err != nil {
+				// Error getting pods, continue waiting
+				continue
+			}
+
+			allRunning := true
+			lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+			for _, line := range lines {
+				if line == "" {
+					continue
+				}
+				parts := strings.Fields(line)
+				if len(parts) < 2 {
+					continue
+				}
+				phase := parts[1]
+				ready := "False"
+				if len(parts) >= 3 {
+					ready = parts[2]
+				}
+
+				// Pod must be Running and Ready
+				if phase != "Running" || ready != "True" {
+					allRunning = false
+					break
+				}
+			}
+
+			if allRunning && len(lines) > 0 {
+				return nil
+			}
+		}
+	}
 }

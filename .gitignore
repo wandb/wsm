@@ -26,6 +26,6 @@ cmd/wsm/bundle/
 
 bundle/
 
-wsm
+/wsm
 
 test-wsm/

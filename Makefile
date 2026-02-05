@@ -9,7 +9,7 @@ ifeq ($(shell uname),Darwin)
 endif
 
 build:
-	go build -o wsm ./cmd/wsm
+	CGO_ENABLED=0 go build -tags containers_image_openpgp -o wsm ./cmd/wsm
 
 # Modern linter installation
 install-lint:

@@ -4,11 +4,19 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/docker/go-connections/tlsconfig"
+	"helm.sh/helm/v4/pkg/action"
+	"helm.sh/helm/v4/pkg/chart/loader"
+	"helm.sh/helm/v4/pkg/cli"
+	"helm.sh/helm/v4/pkg/registry"
+	v1 "helm.sh/helm/v4/pkg/release/v1"
 )
 
 // CreateNamespace creates a namespace if it doesn't exist
@@ -72,110 +80,190 @@ func WaitForCertManager(ctx context.Context, timeout time.Duration) error {
 	return nil
 }
 
-// InstallHelmOperator installs a Helm chart operator (idempotent)
-// helmValues are optional key=value pairs passed via --set
-func InstallHelmOperator(ctx context.Context, repo, repoURL, release, chart, namespace string, helmValues ...string) error {
-	// Add Helm repo (suppress output)
-	cmd := exec.CommandContext(ctx, "helm", "repo", "add", repo, repoURL)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+// DeployOperator deploys the W&B operator chart version specified.  The chart is called operator and is available in oci://us-docker.pkg.dev/wandb-production/public/wandb/charts
+func DeployOperator(ctx context.Context, namespace string, version string) error {
+	const repositoryURL = "oci://us-docker.pkg.dev/wandb-production/public/wandb/charts"
+	const chartName = "operator"
+	const chartRef = repositoryURL + "/" + chartName
+	const releaseName = "wandb-operator"
 
-	if err := cmd.Run(); err != nil {
-		// Ignore "already exists" errors
-		if !bytes.Contains(stderr.Bytes(), []byte("already exists")) {
-			return fmt.Errorf("failed to add helm repo %s: %w\nstderr: %s", repo, err, stderr.String())
+	// Initialize Helm settings
+	settings := cli.New()
+	settings.SetNamespace(namespace)
+
+	// Initialize action configuration
+	actionConfig, err := initActionConfig(settings)
+	if err != nil {
+		return fmt.Errorf("failed to initialize action config: %w", err)
+	}
+
+	// Create registry client
+	registryClient, err := newRegistryClient(settings, "", "", "", false, false)
+	if err != nil {
+		return fmt.Errorf("failed to create registry client: %w", err)
+	}
+	actionConfig.RegistryClient = registryClient
+
+	// Check if release already exists
+	releaseExists, err := checkReleaseExists(actionConfig, releaseName)
+	if err != nil {
+		return fmt.Errorf("failed to check if release exists: %w", err)
+	}
+
+	releaseValues := map[string]interface{}{
+		"wandb": map[string]interface{}{
+			"install": false,
+		},
+	}
+
+	if releaseExists {
+		// Create upgrade action
+		upgradeClient := action.NewUpgrade(actionConfig)
+		upgradeClient.Namespace = namespace
+		upgradeClient.Version = version
+		upgradeClient.WaitStrategy = "hookOnly"
+
+		// Get the chart
+		cp, err := upgradeClient.ChartPathOptions.LocateChart(chartRef, settings)
+		if err != nil {
+			return fmt.Errorf("failed to locate chart: %w", err)
+		}
+
+		// Load the chart
+		chartRequested, err := loader.Load(cp)
+		if err != nil {
+			return fmt.Errorf("failed to load chart: %w", err)
+		}
+
+		// Run the upgrade
+		_, err = upgradeClient.RunWithContext(ctx, releaseName, chartRequested, releaseValues)
+		if err != nil {
+			return fmt.Errorf("failed to upgrade operator chart: %w", err)
+		}
+	} else {
+		// Create install action
+		installClient := action.NewInstall(actionConfig)
+		installClient.Namespace = namespace
+		installClient.ReleaseName = releaseName
+		installClient.Version = version
+		installClient.WaitStrategy = "hookOnly"
+
+		// Get the chart
+		cp, err := installClient.ChartPathOptions.LocateChart(chartRef, settings)
+		if err != nil {
+			return fmt.Errorf("failed to locate chart: %w", err)
+		}
+
+		// Load the chart
+		chartRequested, err := loader.Load(cp)
+		if err != nil {
+			return fmt.Errorf("failed to load chart: %w", err)
+		}
+
+		// Run the install
+		_, err = installClient.RunWithContext(ctx, chartRequested, releaseValues)
+		if err != nil {
+			return fmt.Errorf("failed to install operator chart: %w", err)
 		}
 	}
 
-	// Update Helm repos (suppress output)
-	cmd = exec.CommandContext(ctx, "helm", "repo", "update")
-	stdout.Reset()
-	stderr.Reset()
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to update helm repos: %w\nstderr: %s", err, stderr.String())
-	}
-
-	// Build helm upgrade command with optional values
-	args := []string{"upgrade", "--install", release, chart,
-		"--namespace", namespace, "--create-namespace", "--wait", "--timeout=5m"}
-
-	// Add --set flags for each helm value
-	for _, value := range helmValues {
-		args = append(args, "--set", value)
-	}
-
-	// Use upgrade --install to make it idempotent (suppress output)
-	cmd = exec.CommandContext(ctx, "helm", args...)
-	stdout.Reset()
-	stderr.Reset()
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		// Show output on error
-		return fmt.Errorf("failed to install/upgrade %s: %w\nstdout: %s\nstderr: %s", release, err, stdout.String(), stderr.String())
-	}
-
 	return nil
 }
 
-// DeployOperatorCRDs deploys just the CRDs using server-side apply from operator manifest directory
-func DeployOperatorCRDs(ctx context.Context, operatorManifestDir string) error {
-	// Apply CRDs from the operator manifest directory
-	// CRDs should be named: apps.wandb.com_*.yaml
-	var stdout, stderr bytes.Buffer
+// checkReleaseExists checks if a Helm release exists
+func checkReleaseExists(actionConfig *action.Configuration, releaseName string) (bool, error) {
+	listClient := action.NewList(actionConfig)
+	listClient.SetStateMask()
 
-	// Apply applications CRD
-	appCRD := filepath.Join(operatorManifestDir, "apps.wandb.com_applications.yaml")
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "--server-side", "-f", appCRD)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to deploy applications CRD from %s: %w\nstdout: %s\nstderr: %s", appCRD, err, stdout.String(), stderr.String())
+	releases, err := listClient.Run()
+	if err != nil {
+		return false, err
 	}
-
-	// Apply weightsandbiases CRD
-	stdout.Reset()
-	stderr.Reset()
-	wabCRD := filepath.Join(operatorManifestDir, "apps.wandb.com_weightsandbiases.yaml")
-	cmd = exec.CommandContext(ctx, "kubectl", "apply", "--server-side", "-f", wabCRD)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to deploy weightsandbiases CRD from %s: %w\nstdout: %s\nstderr: %s", wabCRD, err, stdout.String(), stderr.String())
+	for _, r := range releases {
+		release := r.(*v1.Release)
+		if release.Name == releaseName {
+			return true, nil
+		}
 	}
-
-	return nil
+	return false, nil
 }
 
-// DeployOperator deploys the W&B operator from a manifest directory (excluding CRDs)
-func DeployOperator(ctx context.Context, operatorManifestDir string) error {
-	// Apply operator.yaml from the manifest directory
-	// CRDs are applied separately to avoid annotation size issues
-	operatorManifest := filepath.Join(operatorManifestDir, "operator.yaml")
+// TODO refactor these into the helm pkg
 
-	cmd := exec.CommandContext(ctx, "bash", "-c",
-		fmt.Sprintf("kubectl apply -f %s --server-side=true --field-manager=kubectl-client-side-apply --force-conflicts", operatorManifest))
+var helmDriver string = os.Getenv("HELM_DRIVER")
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+func initActionConfig(settings *cli.EnvSettings) (*action.Configuration, error) {
+	return initActionConfigList(settings, false)
+}
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to deploy operator from %s: %w\nstdout: %s\nstderr: %s", operatorManifest, err, stdout.String(), stderr.String())
+func initActionConfigList(settings *cli.EnvSettings, allNamespaces bool) (*action.Configuration, error) {
+
+	actionConfig := new(action.Configuration)
+
+	namespace := func() string {
+		// For list action, you can pass an empty string instead of settings.Namespace() to list
+		// all namespaces
+		if allNamespaces {
+			return ""
+		}
+		return settings.Namespace()
+	}()
+
+	if err := actionConfig.Init(
+		settings.RESTClientGetter(),
+		namespace,
+		helmDriver); err != nil {
+		return nil, err
 	}
 
-	return nil
+	return actionConfig, nil
+}
+
+func newRegistryClient(settings *cli.EnvSettings, certFile, keyFile, caFile string, insecureSkipTLSVerify, plainHTTP bool) (*registry.Client, error) {
+
+	opts := []registry.ClientOption{
+		registry.ClientOptDebug(settings.Debug),
+		registry.ClientOptEnableCache(true),
+		registry.ClientOptWriter(os.Stderr),
+		registry.ClientOptCredentialsFile(settings.RegistryConfig),
+	}
+
+	if plainHTTP {
+		opts = append(opts, registry.ClientOptPlainHTTP())
+	}
+
+	if certFile != "" && keyFile != "" || caFile != "" || insecureSkipTLSVerify {
+		tlsConf, err := tlsconfig.Client(tlsconfig.Options{
+			InsecureSkipVerify: insecureSkipTLSVerify,
+			CAFile:             caFile,
+			KeyFile:            keyFile,
+			CertFile:           certFile,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to load client TLS certs: %w", err)
+		}
+
+		opts = append(opts, registry.ClientOptHTTPClient(&http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: tlsConf,
+				Proxy:           http.ProxyFromEnvironment,
+			},
+		}))
+	}
+
+	// Create a new registry client
+	registryClient, err := registry.NewClient(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize registry client: %w", err)
+	}
+
+	return registryClient, nil
 }
 
 // WaitForOperator waits for operator to be ready by checking webhook CA bundle injection and deployment
 func WaitForOperator(ctx context.Context, namespace string, timeout time.Duration) error {
 	// Wait for webhook CA bundle to be injected (like Tilt does)
-	script := `until kubectl get mutatingwebhookconfiguration operator-mutating-webhook-configuration -o jsonpath='{.webhooks[0].clientConfig.caBundle}' 2>/dev/null | grep -q .; do
+	script := `until kubectl get mutatingwebhookconfiguration wandb-operator-mutating-webhook-configuration -o jsonpath='{.webhooks[0].clientConfig.caBundle}' 2>/dev/null | grep -q .; do
 		sleep 2;
 	done`
 
@@ -193,7 +281,7 @@ func WaitForOperator(ctx context.Context, namespace string, timeout time.Duratio
 		"--for=condition=available",
 		"--timeout="+timeout.String(),
 		"-n", namespace,
-		"deployment/operator-controller-manager")
+		"deployment/wandb-operator")
 	stdout.Reset()
 	stderr.Reset()
 	waitCmd.Stdout = &stdout
@@ -210,7 +298,7 @@ func WaitForOperator(ctx context.Context, namespace string, timeout time.Duratio
 		// Check if pods are ready
 		checkCmd := exec.CommandContext(ctx, "kubectl", "get", "pods",
 			"-n", namespace,
-			"-l", "control-plane=controller-manager",
+			"-l", "app.kubernetes.io/name=wandb-operator",
 			"-o", "jsonpath={.items[*].status.conditions[?(@.type==\"Ready\")].status}")
 
 		output, err := checkCmd.Output()

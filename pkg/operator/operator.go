@@ -1,59 +1,132 @@
 package operator
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/docker/go-connections/tlsconfig"
+	v2 "github.com/wandb/operator/api/v2"
+	"github.com/wandb/wsm/pkg/kubectl"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/loader"
 	"helm.sh/helm/v4/pkg/cli"
 	"helm.sh/helm/v4/pkg/registry"
 	v1 "helm.sh/helm/v4/pkg/release/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/dynamic"
 )
 
 // CreateNamespace creates a namespace if it doesn't exist
 func CreateNamespace(ctx context.Context, namespace string) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "create", "namespace", namespace, "--dry-run=client", "-o", "yaml")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to generate namespace yaml: %w\nstderr: %s", err, stderr.String())
+	_, cs, err := kubectl.GetClientset()
+	if err != nil {
+		return err
 	}
 
-	applyCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
-	applyCmd.Stdin = &stdout
-	var applyStdout, applyStderr bytes.Buffer
-	applyCmd.Stdout = &applyStdout
-	applyCmd.Stderr = &applyStderr
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: namespace,
+		},
+	}
 
-	if err := applyCmd.Run(); err != nil {
-		return fmt.Errorf("failed to create namespace: %w\nstdout: %s\nstderr: %s", err, applyStdout.String(), applyStderr.String())
+	_, err = cs.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	if err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			return nil
+		}
+		return fmt.Errorf("failed to create namespace: %w", err)
 	}
 
 	return nil
 }
 
-// InstallCertManager installs cert-manager using kubectl
+// InstallCertManager installs cert-manager using kubernetes client
 func InstallCertManager(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f",
-		"https://github.com/cert-manager/cert-manager/releases/download/v1.13.3/cert-manager.yaml")
+	const certManagerURL = "https://github.com/cert-manager/cert-manager/releases/download/v1.13.3/cert-manager.yaml"
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	resp, err := http.Get(certManagerURL)
+	if err != nil {
+		return fmt.Errorf("failed to download cert-manager manifest: %w", err)
+	}
+	defer resp.Body.Close()
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to install cert-manager: %w\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to download cert-manager manifest: status code %d", resp.StatusCode)
+	}
+
+	_, dyn, err := kubectl.GetDynamicClientset()
+	if err != nil {
+		return err
+	}
+
+	mapper, err := kubectl.GetRESTMapper()
+	if err != nil {
+		return err
+	}
+
+	decoder := yaml.NewYAMLOrJSONDecoder(resp.Body, 4096)
+	for {
+		var rawObj runtime.RawExtension
+		if err := decoder.Decode(&rawObj); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("failed to decode manifest: %w", err)
+		}
+
+		obj := &unstructured.Unstructured{}
+		if err := obj.UnmarshalJSON(rawObj.Raw); err != nil {
+			return fmt.Errorf("failed to unmarshal manifest object: %w", err)
+		}
+
+		if obj.Object == nil {
+			continue
+		}
+
+		gvk := obj.GroupVersionKind()
+		mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+		if err != nil {
+			// If mapping fails, try refreshing the mapper as CRDs might have been just installed
+			if refreshedMapper, refreshErr := kubectl.RefreshRESTMapper(); refreshErr == nil {
+				mapping, err = refreshedMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+			}
+
+			if err != nil {
+				return fmt.Errorf("failed to get mapping for %s: %w", gvk, err)
+			}
+		}
+
+		var dr dynamic.ResourceInterface
+		if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
+			dr = dyn.Resource(mapping.Resource).Namespace(obj.GetNamespace())
+		} else {
+			dr = dyn.Resource(mapping.Resource)
+		}
+
+		data, err := obj.MarshalJSON()
+		if err != nil {
+			return err
+		}
+
+		_, err = dr.Patch(ctx, obj.GetName(), types.ApplyPatchType, data, metav1.PatchOptions{
+			FieldManager: "wsm",
+		})
+		if err != nil {
+			return fmt.Errorf("failed to apply object %s %s/%s: %w", gvk, obj.GetNamespace(), obj.GetName(), err)
+		}
 	}
 
 	return nil
@@ -61,23 +134,33 @@ func InstallCertManager(ctx context.Context) error {
 
 // WaitForCertManager waits for cert-manager to be ready
 func WaitForCertManager(ctx context.Context, timeout time.Duration) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "wait",
-		"--for=condition=available",
-		"--timeout="+timeout.String(),
-		"-n", "cert-manager",
-		"deployment/cert-manager",
-		"deployment/cert-manager-webhook",
-		"deployment/cert-manager-cainjector")
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("cert-manager not ready: %w\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	_, cs, err := kubectl.GetClientset()
+	if err != nil {
+		return err
 	}
 
-	return nil
+	deployments := []string{"cert-manager", "cert-manager-webhook", "cert-manager-cainjector"}
+
+	return wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		for _, name := range deployments {
+			deploy, err := cs.AppsV1().Deployments("cert-manager").Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				return false, nil
+			}
+
+			isAvailable := false
+			for _, cond := range deploy.Status.Conditions {
+				if cond.Type == "Available" && cond.Status == corev1.ConditionTrue {
+					isAvailable = true
+					break
+				}
+			}
+			if !isAvailable {
+				return false, nil
+			}
+		}
+		return true, nil
+	})
 }
 
 // DeployOperator deploys the W&B operator chart version specified.  The chart is called operator and is available in oci://us-docker.pkg.dev/wandb-production/public/wandb/charts
@@ -262,67 +345,70 @@ func newRegistryClient(settings *cli.EnvSettings, certFile, keyFile, caFile stri
 
 // WaitForOperator waits for operator to be ready by checking webhook CA bundle injection and deployment
 func WaitForOperator(ctx context.Context, namespace string, timeout time.Duration) error {
-	// Wait for webhook CA bundle to be injected (like Tilt does)
-	script := `until kubectl get mutatingwebhookconfiguration wandb-operator-mutating-webhook-configuration -o jsonpath='{.webhooks[0].clientConfig.caBundle}' 2>/dev/null | grep -q .; do
-		sleep 2;
-	done`
+	_, cs, err := kubectl.GetClientset()
+	if err != nil {
+		return err
+	}
 
-	cmd := exec.CommandContext(ctx, "bash", "-c", script)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
+	// Wait for webhook CA bundle to be injected
+	err = wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		webhook, err := cs.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(ctx, "wandb-operator-mutating-webhook-configuration", metav1.GetOptions{})
+		if err != nil {
+			return false, nil
+		}
+		if len(webhook.Webhooks) > 0 && len(webhook.Webhooks[0].ClientConfig.CABundle) > 0 {
+			return true, nil
+		}
+		return false, nil
+	})
+	if err != nil {
 		return fmt.Errorf("operator webhook CA bundle not ready: %w", err)
 	}
 
 	// Also wait for the deployment to be available
-	waitCmd := exec.CommandContext(ctx, "kubectl", "wait",
-		"--for=condition=available",
-		"--timeout="+timeout.String(),
-		"-n", namespace,
-		"deployment/wandb-operator")
-	stdout.Reset()
-	stderr.Reset()
-	waitCmd.Stdout = &stdout
-	waitCmd.Stderr = &stderr
-
-	if err := waitCmd.Run(); err != nil {
-		return fmt.Errorf("operator deployment not ready: %w\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	err = wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		deploy, err := cs.AppsV1().Deployments(namespace).Get(ctx, "wandb-operator", metav1.GetOptions{})
+		if err != nil {
+			return false, nil
+		}
+		for _, cond := range deploy.Status.Conditions {
+			if cond.Type == "Available" && cond.Status == corev1.ConditionTrue {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		return fmt.Errorf("operator deployment not ready: %w", err)
 	}
 
-	// Wait for webhook pods to be ready (not just deployment available)
-	// Use a simple polling approach instead of kubectl wait to avoid hanging issues
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		// Check if pods are ready
-		checkCmd := exec.CommandContext(ctx, "kubectl", "get", "pods",
-			"-n", namespace,
-			"-l", "app.kubernetes.io/name=wandb-operator",
-			"-o", "jsonpath={.items[*].status.conditions[?(@.type==\"Ready\")].status}")
-
-		output, err := checkCmd.Output()
-		if err == nil {
-			statuses := strings.Fields(string(output))
-			allReady := true
-			for _, status := range statuses {
-				if status != "True" {
-					allReady = false
+	// Wait for webhook pods to be ready
+	err = wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		pods, err := cs.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: "app.kubernetes.io/name=wandb-operator",
+		})
+		if err != nil {
+			return false, nil
+		}
+		if len(pods.Items) == 0 {
+			return false, nil
+		}
+		for _, pod := range pods.Items {
+			podReady := false
+			for _, cond := range pod.Status.Conditions {
+				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+					podReady = true
 					break
 				}
 			}
-
-			if allReady && len(statuses) > 0 {
-				break
+			if !podReady {
+				return false, nil
 			}
 		}
-
-		// Check if we've exceeded the timeout
-		if time.Now().Add(5 * time.Second).After(deadline) {
-			return fmt.Errorf("operator pods not ready after %s timeout", timeout)
-		}
-
-		time.Sleep(2 * time.Second)
+		return true, nil
+	})
+	if err != nil {
+		return fmt.Errorf("operator pods not ready: %w", err)
 	}
 
 	// Give webhook service a few more seconds to be fully ready
@@ -331,64 +417,52 @@ func WaitForOperator(ctx context.Context, namespace string, timeout time.Duratio
 	return nil
 }
 
-// DeployManifest deploys the server manifest as a ConfigMap
-func DeployManifest(ctx context.Context, manifestPath, namespace string) error {
-	// Read manifest file
-	manifestData, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to read manifest file: %w", err)
-	}
-
-	// Create ConfigMap with manifest content
-	configMapName := "wandb-server-manifest"
-	manifestFileName := filepath.Base(manifestPath)
-
-	// Use kubectl create configmap with --from-file
-	cmd := exec.CommandContext(ctx, "kubectl", "create", "configmap",
-		configMapName,
-		fmt.Sprintf("--from-file=%s=%s", manifestFileName, manifestPath),
-		"-n", namespace,
-		"--dry-run=client",
-		"-o", "yaml")
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create configmap yaml: %w\nstderr: %s", err, stderr.String())
-	}
-
-	// Apply the ConfigMap
-	applyCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-", "-n", namespace)
-	applyCmd.Stdin = bytes.NewReader(stdout.Bytes())
-
-	var applyStdout, applyStderr bytes.Buffer
-	applyCmd.Stdout = &applyStdout
-	applyCmd.Stderr = &applyStderr
-
-	if err := applyCmd.Run(); err != nil {
-		return fmt.Errorf("failed to apply configmap: %w\nstdout: %s\nstderr: %s", err, applyStdout.String(), applyStderr.String())
-	}
-
-	// Also store the raw manifest content
-	_ = manifestData // Keep for future use
-
-	return nil
-}
-
 // ApplyCR applies a WeightsAndBiases CR to the cluster (idempotent)
-func ApplyCR(ctx context.Context, crPath, namespace string) error {
-	// Use kubectl apply with --server-side to make it more robust for idempotency
-	// This handles conflicts better than client-side apply
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "--server-side", "-f", crPath, "-n", namespace)
+func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases) error {
+	_, dyn, err := kubectl.GetDynamicClientset()
+	if err != nil {
+		return err
+	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	mapper, err := kubectl.GetRESTMapper()
+	if err != nil {
+		return err
+	}
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to apply CR: %w\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	gvk := wandbCR.GroupVersionKind()
+	mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		// If mapping fails, try refreshing the mapper as CRDs might have been just installed
+		if refreshedMapper, refreshErr := kubectl.RefreshRESTMapper(); refreshErr == nil {
+			mapping, err = refreshedMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+		}
+
+		if err != nil {
+			return fmt.Errorf("failed to get mapping for %s: %w", gvk, err)
+		}
+	}
+
+	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(wandbCR)
+	if err != nil {
+		return fmt.Errorf("failed to convert to unstructured: %w", err)
+	}
+	obj := &unstructured.Unstructured{Object: data}
+
+	// Ensure GVK is set on the unstructured object
+	obj.SetGroupVersionKind(gvk)
+
+	raw, err := obj.MarshalJSON()
+	if err != nil {
+		return fmt.Errorf("failed to marshal CR: %w", err)
+	}
+
+	dr := dyn.Resource(mapping.Resource).Namespace(wandbCR.Namespace)
+
+	_, err = dr.Patch(ctx, wandbCR.Name, types.ApplyPatchType, raw, metav1.PatchOptions{
+		FieldManager: "wsm",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to apply CR: %w", err)
 	}
 
 	return nil
@@ -396,75 +470,32 @@ func ApplyCR(ctx context.Context, crPath, namespace string) error {
 
 // WaitForCR waits for WeightsAndBiases CR to be ready
 func WaitForCR(ctx context.Context, name, namespace string, timeout time.Duration) error {
-	// Wait for WeightsAndBiases resource to have status.ready=true
-	// Note: This requires the CRD to have a ready condition
-	cmd := exec.CommandContext(ctx, "kubectl", "wait",
-		"--for=condition=ready",
-		"--timeout="+timeout.String(),
-		"-n", namespace,
-		fmt.Sprintf("weightsandbiases/%s", name))
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		// If the condition doesn't exist, that's okay - just return success
-		// We can improve this later with more sophisticated readiness checks
-		return fmt.Errorf("CR not ready: %w\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	_, dyn, err := kubectl.GetDynamicClientset()
+	if err != nil {
+		return err
 	}
 
-	return nil
-}
-
-// GetCRName extracts the CR name from a YAML file
-func GetCRName(crPath string) (string, error) {
-	cmd := exec.Command("kubectl", "get", "-f", crPath, "-o", "jsonpath={.metadata.name}")
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("failed to get CR name: %w\nstderr: %s", err, stderr.String())
+	gvr := schema.GroupVersionResource{
+		Group:    "apps.wandb.com",
+		Version:  "v2",
+		Resource: "weightsandbiases",
 	}
 
-	return stdout.String(), nil
+	return wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		cr, err := dyn.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, nil
+		}
+
+		ready, found, err := unstructured.NestedString(cr.Object, "status", "ready")
+		if err == nil && found && ready == "true" {
+			return true, nil
+		}
+		return false, nil
+	})
 }
 
 // WaitForCRReady waits for a WeightsAndBiases CR to reach ready state
 func WaitForCRReady(ctx context.Context, namespace, crName string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if time.Now().After(deadline) {
-				return fmt.Errorf("timeout waiting for CR %s/%s to be ready after %v", namespace, crName, timeout)
-			}
-
-			// Check if CR is ready
-			cmd := exec.CommandContext(ctx, "kubectl", "get", "wandb", crName,
-				"-n", namespace,
-				"-o", "jsonpath={.status.ready}")
-
-			var stdout, stderr bytes.Buffer
-			cmd.Stdout = &stdout
-			cmd.Stderr = &stderr
-
-			if err := cmd.Run(); err != nil {
-				// CR might not exist yet or error getting status, continue waiting
-				continue
-			}
-
-			ready := strings.TrimSpace(stdout.String())
-			if ready == "true" {
-				return nil
-			}
-		}
-	}
+	return WaitForCR(ctx, crName, namespace, timeout)
 }

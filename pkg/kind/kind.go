@@ -1,16 +1,24 @@
 package kind
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
-	"strings"
+
+	"github.com/wandb/wsm/pkg/kubectl"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+	config "sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
+	"sigs.k8s.io/kind/pkg/cluster"
 )
 
 // CreateCluster creates a Kind cluster with specified name and number of worker nodes
 func CreateCluster(ctx context.Context, name string, workers int) error {
+	provider := cluster.NewProvider()
+
 	// Check if cluster already exists
 	exists, err := ClusterExists(ctx, name)
 	if err != nil {
@@ -21,17 +29,15 @@ func CreateCluster(ctx context.Context, name string, workers int) error {
 	}
 
 	// Generate Kind cluster config
-	config := generateClusterConfig(workers)
-
-	// Create cluster using kind CLI
-	cmd := exec.CommandContext(ctx, "kind", "create", "cluster", "--name", name, "--config=-")
-	cmd.Stdin = strings.NewReader(config)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create kind cluster: %w\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	kindConfig := generateClusterConfig(workers)
+	// Create cluster using kind library
+	if err := provider.Create(
+		name,
+		cluster.CreateWithV1Alpha4Config(&kindConfig),
+		cluster.CreateWithDisplayUsage(true),
+		cluster.CreateWithDisplaySalutation(true),
+	); err != nil {
+		return fmt.Errorf("failed to create kind cluster: %w", err)
 	}
 
 	return nil
@@ -39,6 +45,8 @@ func CreateCluster(ctx context.Context, name string, workers int) error {
 
 // DeleteCluster deletes a Kind cluster by name
 func DeleteCluster(ctx context.Context, name string) error {
+	provider := cluster.NewProvider()
+
 	// Check if cluster exists
 	exists, err := ClusterExists(ctx, name)
 	if err != nil {
@@ -48,14 +56,9 @@ func DeleteCluster(ctx context.Context, name string) error {
 		return fmt.Errorf("cluster '%s' does not exist", name)
 	}
 
-	// Delete cluster using kind CLI
-	cmd := exec.CommandContext(ctx, "kind", "delete", "cluster", "--name", name)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to delete kind cluster: %w\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	// Delete cluster using kind library
+	if err := provider.Delete(name, ""); err != nil {
+		return fmt.Errorf("failed to delete kind cluster: %w", err)
 	}
 
 	return nil
@@ -63,15 +66,14 @@ func DeleteCluster(ctx context.Context, name string) error {
 
 // ClusterExists checks if a Kind cluster with the given name exists
 func ClusterExists(ctx context.Context, name string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "kind", "get", "clusters")
-	output, err := cmd.Output()
+	provider := cluster.NewProvider()
+	clusters, err := provider.List()
 	if err != nil {
-		return false, fmt.Errorf("failed to get kind clusters: %w", err)
+		return false, fmt.Errorf("failed to list kind clusters: %w", err)
 	}
 
-	clusters := strings.Split(strings.TrimSpace(string(output)), "\n")
-	for _, cluster := range clusters {
-		if strings.TrimSpace(cluster) == name {
+	for _, clusterName := range clusters {
+		if clusterName == name {
 			return true, nil
 		}
 	}
@@ -82,45 +84,39 @@ func ClusterExists(ctx context.Context, name string) (bool, error) {
 // InstallMetricsServer installs and patches the Kubernetes metrics-server for Kind
 func InstallMetricsServer(ctx context.Context) error {
 	// Install metrics-server
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f",
-		"https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	const metricsServerURL = "https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml"
+	resp, err := http.Get(metricsServerURL)
+	if err != nil {
+		return fmt.Errorf("failed to download metrics-server manifest: %w", err)
+	}
+	defer resp.Body.Close()
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to install metrics-server: %w\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to download metrics-server manifest: status code %d", resp.StatusCode)
+	}
+
+	manifest, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read metrics-server manifest: %w", err)
+	}
+
+	if err := kubectl.ApplyYAML(ctx, manifest); err != nil {
+		return fmt.Errorf("failed to install metrics-server: %w", err)
 	}
 
 	// Patch metrics-server for Kind (insecure TLS)
 	patchJSON := `[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]`
-	cmd = exec.CommandContext(ctx, "kubectl", "patch", "-n", "kube-system",
-		"deployment", "metrics-server", "--type=json", "-p", patchJSON)
-	stdout.Reset()
-	stderr.Reset()
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to patch metrics-server: %w\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	if err := kubectl.PatchDeployment(ctx, "metrics-server", "kube-system", types.JSONPatchType, []byte(patchJSON)); err != nil {
+		return fmt.Errorf("failed to patch metrics-server: %w", err)
 	}
 
 	return nil
 }
 
 // SetKubectlContext sets the kubectl context to the specified Kind cluster
-func SetKubectlContext(ctx context.Context, name string) error {
+func SetKubectlContext(ctx context.Context, name string) {
 	contextName := fmt.Sprintf("kind-%s", name)
-	cmd := exec.CommandContext(ctx, "kubectl", "config", "use-context", contextName)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to set kubectl context: %w\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
-	}
-
-	return nil
+	kubectl.SetContext(contextName)
 }
 
 // CleanupDistDirectory removes the dist/ directory if it exists
@@ -135,7 +131,7 @@ func CleanupDistDirectory() error {
 
 // CheckDependencies verifies that required CLI tools are installed
 func CheckDependencies() error {
-	requiredTools := []string{"kind", "kubectl", "jq"}
+	requiredTools := []string{"kind"}
 
 	for _, tool := range requiredTools {
 		if _, err := exec.LookPath(tool); err != nil {
@@ -149,27 +145,14 @@ func CheckDependencies() error {
 // CreateDeploymentMarker creates a ConfigMap marker to track wsm-managed deployments
 // Note: Assumes the namespace already exists (created by operator manifest)
 func CreateDeploymentMarker(ctx context.Context, clusterName, namespace string) error {
-	markerYAML := fmt.Sprintf(`apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: wsm-deployment-marker
-  namespace: %s
-  labels:
-    app.kubernetes.io/managed-by: wsm
-data:
-  cluster-name: "%s"
-  created-by: "wsm"
-  components: "kind-cluster,cert-manager,operator,third-party-operators,wandb-cr"
-`, namespace, clusterName)
+	data := map[string]string{
+		"cluster-name": clusterName,
+		"created-by":   "wsm",
+		"components":   "kind-cluster,cert-manager,operator,third-party-operators,wandb-cr",
+	}
 
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
-	cmd.Stdin = strings.NewReader(markerYAML)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create deployment marker: %w\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	if err := kubectl.UpsertConfigMap(data, "wsm-deployment-marker", namespace); err != nil {
+		return fmt.Errorf("failed to create deployment marker: %w", err)
 	}
 
 	return nil
@@ -177,18 +160,12 @@ data:
 
 // HasDeploymentMarker checks if a deployment marker exists
 func HasDeploymentMarker(ctx context.Context, namespace string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "kubectl", "get", "configmap", "wsm-deployment-marker", "-n", namespace)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	_, err := kubectl.GetConfigMap(ctx, "wsm-deployment-marker", namespace)
 	if err != nil {
-		// If not found, return false without error
-		if strings.Contains(stderr.String(), "not found") {
+		if errors.IsNotFound(err) {
 			return false, nil
 		}
-		return false, fmt.Errorf("failed to check for deployment marker: %w\nstderr: %s", err, stderr.String())
+		return false, fmt.Errorf("failed to check for deployment marker: %w", err)
 	}
 
 	return true, nil
@@ -196,13 +173,8 @@ func HasDeploymentMarker(ctx context.Context, namespace string) (bool, error) {
 
 // DeleteDeploymentMarker removes the deployment marker ConfigMap
 func DeleteDeploymentMarker(ctx context.Context, namespace string) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "delete", "configmap", "wsm-deployment-marker", "-n", namespace, "--ignore-not-found=true")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to delete deployment marker: %w\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	if err := kubectl.DeleteConfigMap(ctx, "wsm-deployment-marker", namespace); err != nil {
+		return fmt.Errorf("failed to delete deployment marker: %w", err)
 	}
 
 	return nil
@@ -212,6 +184,10 @@ func DeleteDeploymentMarker(ctx context.Context, namespace string) error {
 func LoadImageToCluster(ctx context.Context, imageName, clusterName string) error {
 	fmt.Printf("  → Loading image '%s' into kind cluster '%s'...\n", imageName, clusterName)
 
+	// Since the kind library doesn't have a simple one-liner for "docker save | kind load",
+	// and it involves complex logic to handle different container runtimes and image formats,
+	// we continue to use the kind CLI for this specific operation as it is the most reliable way
+	// to ensure the image is correctly exported from the local docker daemon and loaded into kind nodes.
 	cmd := exec.CommandContext(ctx, "kind", "load", "docker-image", imageName, "--name", clusterName)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -224,15 +200,15 @@ func LoadImageToCluster(ctx context.Context, imageName, clusterName string) erro
 }
 
 // generateClusterConfig creates a Kind cluster configuration with specified worker nodes
-func generateClusterConfig(workers int) string {
-	config := `kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-- role: control-plane
-  image: kindest/node:v1.35.1@sha256:05d7bcdefbda08b4e038f644c4df690cdac3fba8b06f8289f30e10026720a1ab
-`
-	for i := 0; i < workers; i++ {
-		config += "- role: worker\n  image: kindest/node:v1.35.1@sha256:05d7bcdefbda08b4e038f644c4df690cdac3fba8b06f8289f30e10026720a1ab\n"
+func generateClusterConfig(workers int) config.Cluster {
+	kindConfig := config.Cluster{}
+	if workers > 0 {
+		kindConfig.Nodes = make([]config.Node, workers+1)
+		kindConfig.Nodes[0] = config.Node{Role: config.ControlPlaneRole, Image: "kindest/node:v1.35.1@sha256:05d7bcdefbda08b4e038f644c4df690cdac3fba8b06f8289f30e10026720a1ab"}
+		for i := 0; i < workers; i++ {
+			kindConfig.Nodes[i+1] = config.Node{Role: config.WorkerRole, Image: "kindest/node:v1.35.1@sha256:05d7bcdefbda08b4e038f644c4df690cdac3fba8b06f8289f30e10026720a1ab"}
+		}
 	}
-	return config
+
+	return kindConfig
 }

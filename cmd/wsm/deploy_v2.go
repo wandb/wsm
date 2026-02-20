@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,6 +11,10 @@ import (
 	"github.com/wandb/wsm/pkg/kind"
 	"github.com/wandb/wsm/pkg/operator"
 	"gopkg.in/yaml.v3"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"knative.dev/pkg/ptr"
+
+	"github.com/wandb/operator/api/v2"
 )
 
 func init() {
@@ -21,49 +23,52 @@ func init() {
 }
 
 var (
-	defaultCR = `apiVersion: apps.wandb.com/v2
-kind: WeightsAndBiases
-metadata:
-  name: wandb-dev-v2
-spec:
-  wandb:
-    hostname: http://localhost:8080
-    version: 0.78.0-pre-manifest-testing.11
-    internalServiceAuth: 
-      enabled: true
-    features:
-      proxy: true
-  size: dev
-  retentionPolicy:
-    onDelete: purge
-  mysql:
-    enabled: true
-    telemetry:
-      enabled: true
-  redis:
-    enabled: true
-    telemetry:
-      enabled: true
-  kafka:
-    enabled: true
-    telemetry:
-      enabled: true
-  minio:
-    enabled: true
-    telemetry:
-      enabled: true
-  clickhouse:
-    enabled: true
-    telemetry:
-      enabled: true
-`
+	wandbCR = &v2.WeightsAndBiases{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps.wandb.com/v2",
+			Kind:       "WeightsAndBiases",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "wandb-dev-v2",
+		},
+		Spec: v2.WeightsAndBiasesSpec{
+			Wandb: v2.WandbAppSpec{
+				Hostname: "http://localhost:8080",
+				Version:  "0.78.0-pre-manifest-testing.11",
+				Features: map[string]bool{"proxy": true},
+				InternalServiceAuth: v2.InternalServiceAuth{
+					Enabled: ptr.Bool(true),
+				},
+			},
+			MySQL: v2.WBMySQLSpec{
+				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
+				Telemetry:   v2.Telemetry{Enabled: true},
+			},
+			Redis: v2.WBRedisSpec{
+				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
+				Telemetry:   v2.Telemetry{Enabled: true},
+			},
+			Kafka: v2.WBKafkaSpec{
+				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
+				Telemetry:   v2.Telemetry{Enabled: true},
+			},
+			Minio: v2.WBMinioSpec{
+				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
+				Telemetry:   v2.Telemetry{Enabled: true},
+			},
+			ClickHouse: v2.WBClickHouseSpec{
+				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
+				Telemetry:   v2.Telemetry{Enabled: true},
+			},
+		},
+	}
 )
 
-func performDeploy(setupCluster bool, wait bool, clusterName string, workers int, operatorChartVersion string, wandbVersion string, crFile string, namespace string, operatorNamespace string) error {
+func performDeploy(setupCluster bool, wait bool, clusterName string, workers int, operatorChartVersion string, wandbVersion string, operatorNamespace string) error {
 	ctx := context.Background()
 
 	// Calculate total steps based on flags
-	totalSteps := 4 // Always: cert-manager, deploy operator, create CR
+	totalSteps := 3 // Always: cert-manager, deploy operator, create CR
 	if setupCluster {
 		totalSteps++
 	}
@@ -89,27 +94,9 @@ func performDeploy(setupCluster bool, wait bool, clusterName string, workers int
 			return err
 		}
 
-		exists, err := kind.ClusterExists(ctx, clusterName)
+		err := performCreateCluster(ctx, clusterName, workers)
 		if err != nil {
-			fmt.Println(" ✗")
-			return fmt.Errorf("failed to check if cluster exists: %w", err)
-		}
-
-		if !exists {
-			if err := kind.CreateCluster(ctx, clusterName, workers); err != nil {
-				fmt.Println(" ✗")
-				return err
-			}
-
-			if err := kind.SetKubectlContext(ctx, clusterName); err != nil {
-				fmt.Println(" ✗")
-				return err
-			}
-
-			if err := kind.InstallMetricsServer(ctx); err != nil {
-				fmt.Println(" ✗")
-				return err
-			}
+			return err
 		}
 
 		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
@@ -133,7 +120,7 @@ func performDeploy(setupCluster bool, wait bool, clusterName string, workers int
 	fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
 	currentStep++
 
-	// Step 3: Create infra-operators namespace
+	// Step 3: Create infra-operators wandbNamespace
 	if err := operator.CreateNamespace(ctx, operatorNamespace); err != nil {
 		return err
 	}
@@ -166,12 +153,12 @@ func performDeploy(setupCluster bool, wait bool, clusterName string, workers int
 	fmt.Printf("[%d/%d] Creating W&B instance...", currentStep, totalSteps)
 	start = time.Now()
 
-	// Step 3: Create infra-operators namespace
-	if err := operator.CreateNamespace(ctx, namespace); err != nil {
+	// Step 3: Create infra-operators wandbNamespace
+	if err := operator.CreateNamespace(ctx, wandbCR.Namespace); err != nil {
 		return err
 	}
 
-	if err := operator.ApplyCR(ctx, crFile, namespace); err != nil {
+	if err := operator.ApplyCR(ctx, wandbCR); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -184,14 +171,7 @@ func performDeploy(setupCluster bool, wait bool, clusterName string, workers int
 		fmt.Printf("[%d/%d] Waiting for W&B instance to be ready...", currentStep, totalSteps)
 		start = time.Now()
 
-		// Extract CR name from the CR file
-		crName, err := extractCRName(crFile)
-		if err != nil {
-			fmt.Println(" ✗")
-			return fmt.Errorf("failed to extract CR name: %w", err)
-		}
-
-		if err := operator.WaitForCRReady(ctx, namespace, crName, 30*time.Minute); err != nil {
+		if err := operator.WaitForCRReady(ctx, wandbCR.Namespace, wandbCR.Name, 30*time.Minute); err != nil {
 			fmt.Println(" ✗")
 			return err
 		}
@@ -199,6 +179,29 @@ func performDeploy(setupCluster bool, wait bool, clusterName string, workers int
 		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
 	}
 
+	return nil
+}
+
+func performCreateCluster(ctx context.Context, clusterName string, workers int) error {
+	exists, err := kind.ClusterExists(ctx, clusterName)
+	if err != nil {
+		fmt.Println(" ✗")
+		return fmt.Errorf("failed to check if cluster exists: %w", err)
+	}
+
+	if !exists {
+		if err := kind.CreateCluster(ctx, clusterName, workers); err != nil {
+			fmt.Println(" ✗")
+			return err
+		}
+
+		kind.SetKubectlContext(ctx, clusterName)
+
+		if err := kind.InstallMetricsServer(ctx); err != nil {
+			fmt.Println(" ✗")
+			return err
+		}
+	}
 	return nil
 }
 
@@ -224,6 +227,7 @@ func v2OperatorCmd() *cobra.Command {
 	var operatorChartVersion string
 	var wandbVersion string
 	var crFile string
+	var license string
 	var licenseFile string
 	var wandbNamespace string
 	var operatorNamespace string
@@ -233,37 +237,35 @@ func v2OperatorCmd() *cobra.Command {
 		Short: "Deploy the v2 operator",
 		Long:  `Deploy the v2 operator with specified versions and configuration`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Check required dependencies
-			if _, err := exec.LookPath("kubectl"); err != nil {
-				return fmt.Errorf("kubectl is required but not found in PATH. Please install kubectl: https://kubernetes.io/docs/tasks/tools/")
-			}
-			if _, err := exec.LookPath("helm"); err != nil {
-				return fmt.Errorf("helm is required but not found in PATH. Please install helm: https://helm.sh/docs/intro/install/")
-			}
-
-			// Use built-in default CR if the file doesn't exist
-			if _, err := os.Stat(crFile); os.IsNotExist(err) {
-				// Write default CR to a temp file
-				tempDir := os.TempDir()
-				tempCRFile := filepath.Join(tempDir, "wsm-default-cr.yaml")
-				if err := os.WriteFile(tempCRFile, []byte(defaultCR), 0644); err != nil {
-					return fmt.Errorf("failed to create default CR: %w", err)
-				}
-				crFile = tempCRFile
-			}
-
-			// Inject license into CR if provided
-			if licenseFile != "" {
-				modifiedCRFile, err := injectLicenseIntoCR(crFile, licenseFile)
+			if crFile != "" {
+				var err error
+				wandbCR, err = readCRFile(crFile)
 				if err != nil {
-					return fmt.Errorf("failed to inject license: %w", err)
+					fmt.Printf("failed to read CR file: %w", err)
+					return err
 				}
-				crFile = modifiedCRFile
 			}
+
+			if license != "" || licenseFile != "" {
+				if license != "" {
+					wandbCR.Spec.Wandb.License = license
+				}
+				if licenseFile != "" {
+					licenseData, err := os.ReadFile(licenseFile)
+					if err != nil {
+						fmt.Printf("failed to read license file: %w", err)
+						return err
+					}
+					wandbCR.Spec.Wandb.License = strings.TrimSpace(string(licenseData))
+				}
+			}
+
+			wandbCR.Namespace = wandbNamespace
+			wandbCR.Spec.Wandb.Version = wandbVersion
 
 			// Perform the deployment
 			deployStart := time.Now()
-			if err := performDeploy(setupCluster, wait, clusterName, workers, operatorChartVersion, wandbVersion, crFile, wandbNamespace, operatorNamespace); err != nil {
+			if err := performDeploy(setupCluster, wait, clusterName, workers, operatorChartVersion, wandbVersion, operatorNamespace); err != nil {
 				fmt.Printf("\n✗ Deployment failed: %v\n", err)
 				return err
 			}
@@ -283,17 +285,19 @@ func v2OperatorCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&setupCluster, "setup-k8s-cluster", false, "Setup a Kind cluster before deploying")
-	cmd.Flags().BoolVar(&wait, "wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
+	// TODO readd this when the CR reports ready properly
+	//cmd.Flags().BoolVar(&wait, "wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
 	cmd.Flags().StringVar(&clusterName, "cluster-name", "kind", "Name of the Kind cluster (only used with --setup-k8s-cluster)")
-	cmd.Flags().IntVar(&workers, "workers", 3, "Number of worker nodes (only used with --setup-k8s-cluster)")
+	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
 
-	cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator image version (e.g., v2.0.0)")
+	cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator image version (e.g., v2.0.0) - defaults to value in the chart")
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "1.5.2", "Operator Chart version (e.g., v2.0.0)")
 
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "0.78.0-pre-operator-v2-no-app.0", "Server manifest version (e.g., 0.76.1)")
 
 	// CR deployment
 	cmd.Flags().StringVar(&crFile, "cr-file", "", "Path to WeightsAndBiases CR YAML (uses built-in default if not provided)")
+	cmd.Flags().StringVar(&license, "license", "", "W&B license string (optional, injected into spec.wandb.license)")
 	cmd.Flags().StringVar(&licenseFile, "license-file", "", "Path to W&B license file (optional, injected into spec.wandb.license)")
 
 	// Namespaces
@@ -303,80 +307,17 @@ func v2OperatorCmd() *cobra.Command {
 	return cmd
 }
 
-// injectLicenseIntoCR reads a CR file, injects the license, and writes to a temp file
-func injectLicenseIntoCR(crPath, licensePath string) (string, error) {
-	// Read the CR YAML
+func readCRFile(crPath string) (*v2.WeightsAndBiases, error) {
 	crData, err := os.ReadFile(crPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to read CR file: %w", err)
+		return nil, fmt.Errorf("failed to read CR file: %w", err)
 	}
-
-	// Read the license
-	licenseData, err := os.ReadFile(licensePath)
+	cr := &v2.WeightsAndBiases{}
+	err = yaml.Unmarshal(crData, cr)
 	if err != nil {
-		return "", fmt.Errorf("failed to read license file: %w", err)
+		return nil, fmt.Errorf("failed to parse CR YAML: %w", err)
 	}
-	license := strings.TrimSpace(string(licenseData))
-
-	// Parse CR YAML
-	var cr map[string]interface{}
-	if err := yaml.Unmarshal(crData, &cr); err != nil {
-		return "", fmt.Errorf("failed to parse CR YAML: %w", err)
-	}
-
-	// Inject license into spec.wandb.license
-	spec, ok := cr["spec"].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("CR missing 'spec' field")
-	}
-
-	wandb, ok := spec["wandb"].(map[string]interface{})
-	if !ok {
-		wandb = make(map[string]interface{})
-		spec["wandb"] = wandb
-	}
-
-	wandb["license"] = license
-
-	// Marshal back to YAML
-	modifiedData, err := yaml.Marshal(cr)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal modified CR: %w", err)
-	}
-
-	// Write to temp file
-	tempDir := os.TempDir()
-	tempFile := filepath.Join(tempDir, "wsm-modified-cr.yaml")
-	if err := os.WriteFile(tempFile, modifiedData, 0644); err != nil {
-		return "", fmt.Errorf("failed to write modified CR: %w", err)
-	}
-
-	return tempFile, nil
-}
-
-// extractCRName reads a CR YAML file and extracts the metadata.name field
-func extractCRName(crPath string) (string, error) {
-	crData, err := os.ReadFile(crPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read CR file: %w", err)
-	}
-
-	var cr map[string]interface{}
-	if err := yaml.Unmarshal(crData, &cr); err != nil {
-		return "", fmt.Errorf("failed to parse CR YAML: %w", err)
-	}
-
-	metadata, ok := cr["metadata"].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("CR missing 'metadata' field")
-	}
-
-	name, ok := metadata["name"].(string)
-	if !ok {
-		return "", fmt.Errorf("CR missing 'metadata.name' field")
-	}
-
-	return name, nil
+	return cr, nil
 }
 
 func performTeardown(clusterName string) error {
@@ -406,8 +347,32 @@ func ClusterCmd() *cobra.Command {
 		Long:  `Create and delete Kubernetes clusters for local development`,
 	}
 
+	cmd.AddCommand(clusterCreateCmd())
 	cmd.AddCommand(clusterTeardownCmd())
 	cmd.AddCommand(clusterCleanupCmd())
+
+	return cmd
+}
+
+func clusterCreateCmd() *cobra.Command {
+	var clusterName string
+	var workers int
+
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create a new kind cluster",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := performCreateCluster(context.Background(), clusterName, workers); err != nil {
+				fmt.Printf("✗ Cluster Create failed: %v\n", err)
+				return err
+			}
+			fmt.Printf("✓ Kind cluster '%s' created successfully\n", clusterName)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&clusterName, "cluster-name", "kind", "Name of the Kind cluster (only used with --setup-k8s-cluster)")
+	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
 
 	return cmd
 }

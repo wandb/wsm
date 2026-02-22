@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 
 	"github.com/wandb/wsm/pkg/kubectl"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	config "sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
 	"sigs.k8s.io/kind/pkg/cluster"
@@ -72,13 +72,7 @@ func ClusterExists(ctx context.Context, name string) (bool, error) {
 		return false, fmt.Errorf("failed to list kind clusters: %w", err)
 	}
 
-	for _, clusterName := range clusters {
-		if clusterName == name {
-			return true, nil
-		}
-	}
-
-	return false, nil
+	return slices.Contains(clusters, name), nil
 }
 
 // InstallMetricsServer installs and patches the Kubernetes metrics-server for Kind
@@ -126,57 +120,6 @@ func CleanupDistDirectory() error {
 			return fmt.Errorf("failed to remove dist directory: %w", err)
 		}
 	}
-	return nil
-}
-
-// CheckDependencies verifies that required CLI tools are installed
-func CheckDependencies() error {
-	requiredTools := []string{"kind"}
-
-	for _, tool := range requiredTools {
-		if _, err := exec.LookPath(tool); err != nil {
-			return fmt.Errorf("%s is required but not installed. Please install %s", tool, tool)
-		}
-	}
-
-	return nil
-}
-
-// CreateDeploymentMarker creates a ConfigMap marker to track wsm-managed deployments
-// Note: Assumes the namespace already exists (created by operator manifest)
-func CreateDeploymentMarker(ctx context.Context, clusterName, namespace string) error {
-	data := map[string]string{
-		"cluster-name": clusterName,
-		"created-by":   "wsm",
-		"components":   "kind-cluster,cert-manager,operator,third-party-operators,wandb-cr",
-	}
-
-	if err := kubectl.UpsertConfigMap(data, "wsm-deployment-marker", namespace); err != nil {
-		return fmt.Errorf("failed to create deployment marker: %w", err)
-	}
-
-	return nil
-}
-
-// HasDeploymentMarker checks if a deployment marker exists
-func HasDeploymentMarker(ctx context.Context, namespace string) (bool, error) {
-	_, err := kubectl.GetConfigMap(ctx, "wsm-deployment-marker", namespace)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("failed to check for deployment marker: %w", err)
-	}
-
-	return true, nil
-}
-
-// DeleteDeploymentMarker removes the deployment marker ConfigMap
-func DeleteDeploymentMarker(ctx context.Context, namespace string) error {
-	if err := kubectl.DeleteConfigMap(ctx, "wsm-deployment-marker", namespace); err != nil {
-		return fmt.Errorf("failed to delete deployment marker: %w", err)
-	}
-
 	return nil
 }
 

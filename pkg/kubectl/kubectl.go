@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"sync"
 
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/dynamic"
@@ -212,5 +214,107 @@ func PatchDeployment(ctx context.Context, name, namespace string, patchType type
 	if err != nil {
 		return fmt.Errorf("failed to patch deployment %s/%s: %w", namespace, name, err)
 	}
+	return nil
+}
+
+func DeleteYAML(ctx context.Context, yamlContent []byte) error {
+	_, dyn, err := GetDynamicClientset()
+	if err != nil {
+		return err
+	}
+
+	mapper, err := GetRESTMapper()
+	if err != nil {
+		return err
+	}
+
+	// We should decode in reverse order to delete dependencies correctly?
+	// Actually, just regular order might be fine, but we'll see.
+	// K8s usually handles dependencies via owner references, but here they might not have them.
+
+	var objects []*unstructured.Unstructured
+	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(yamlContent), 4096)
+	for {
+		var rawObj runtime.RawExtension
+		if err := decoder.Decode(&rawObj); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("failed to decode manifest: %w", err)
+		}
+
+		obj := &unstructured.Unstructured{}
+		if err := obj.UnmarshalJSON(rawObj.Raw); err != nil {
+			return fmt.Errorf("failed to unmarshal manifest object: %w", err)
+		}
+
+		if obj.Object == nil {
+			continue
+		}
+		objects = append(objects, obj)
+	}
+
+	// Delete in reverse order
+	for i := len(objects) - 1; i >= 0; i-- {
+		obj := objects[i]
+		gvk := obj.GroupVersionKind()
+		mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+		if err != nil {
+			// If mapping fails, just skip (might have been deleted already)
+			continue
+		}
+
+		var dr dynamic.ResourceInterface
+		if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
+			dr = dyn.Resource(mapping.Resource).Namespace(obj.GetNamespace())
+		} else {
+			dr = dyn.Resource(mapping.Resource)
+		}
+
+		err = dr.Delete(ctx, obj.GetName(), metav1.DeleteOptions{})
+		if err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete object %s %s/%s: %w", gvk, obj.GetNamespace(), obj.GetName(), err)
+		}
+	}
+
+	return nil
+}
+
+func DeleteCR(ctx context.Context, name, namespace string) error {
+	gvk := schema.GroupVersionKind{
+		Group:   "apps.wandb.com",
+		Version: "v2",
+		Kind:    "WeightsAndBiases",
+	}
+	_, dyn, err := GetDynamicClientset()
+	if err != nil {
+		return err
+	}
+
+	mapper, err := GetRESTMapper()
+	if err != nil {
+		return err
+	}
+
+	mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		return fmt.Errorf("failed to get mapping for %s: %w", gvk, err)
+	}
+
+	var dr dynamic.ResourceInterface
+	if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
+		if namespace == "" {
+			return fmt.Errorf("namespace is required for namespaced resource %s", gvk)
+		}
+		dr = dyn.Resource(mapping.Resource).Namespace(namespace)
+	} else {
+		dr = dyn.Resource(mapping.Resource)
+	}
+
+	err = dr.Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to delete object %s %s/%s: %w", gvk, namespace, name, err)
+	}
+
 	return nil
 }

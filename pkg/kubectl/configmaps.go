@@ -78,3 +78,23 @@ func UpsertConfigMap(data map[string]string, name string, namespace string) erro
 
 	return nil
 }
+
+func ListConfigMaps(ctx context.Context, name string) ([]v1.ConfigMap, error) {
+	_, cs, err := GetClientset()
+	if err != nil {
+		return nil, err
+	}
+
+	cms, err := cs.CoreV1().ConfigMaps("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	var result []v1.ConfigMap
+	for _, cm := range cms.Items {
+		if cm.Name == name {
+			result = append(result, cm)
+		}
+	}
+	return result, nil
+}

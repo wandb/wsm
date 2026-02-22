@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/kind"
+	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/operator"
 	"gopkg.in/yaml.v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,19 +24,18 @@ func init() {
 	rootCmd.AddCommand(ClusterCmd())
 }
 
+// TODO once an official release publishes a manifest, we should switch to lookup up the most recent non-dev release and not have a default.
+const defaultWandbVersion = "0.78.0-rc.1771603057"
+
 var (
 	wandbCR = &v2.WeightsAndBiases{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "apps.wandb.com/v2",
 			Kind:       "WeightsAndBiases",
 		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "wandb-dev-v2",
-		},
 		Spec: v2.WeightsAndBiasesSpec{
 			Wandb: v2.WandbAppSpec{
 				Hostname: "http://localhost:8080",
-				Version:  "0.78.0-pre-manifest-testing.11",
 				Features: map[string]bool{"proxy": true},
 				InternalServiceAuth: v2.InternalServiceAuth{
 					Enabled: ptr.Bool(true),
@@ -64,12 +65,187 @@ var (
 	}
 )
 
-func performDeploy(setupCluster bool, wait bool, clusterName string, workers int, operatorChartVersion string, wandbVersion string, operatorNamespace string) error {
+// DeployV2Cmd returns the deploy-v2 command with subcommands
+func DeployV2Cmd() *cobra.Command {
+	var kubeContext string
+	cmd := &cobra.Command{
+		Use:   "deploy-v2",
+		Short: "Deploy v2 operator and resources",
+		Long:  `Deploy the v2 operator, server manifest, and custom resources`,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if kubeContext == "" {
+				return errors.New("context is required")
+			}
+
+			kubectl.SetContext(kubeContext)
+			return nil
+		},
+	}
+	cmd.PersistentFlags().StringVar(&kubeContext, "context", "", "name of the kubeconfig context to use (Required)")
+	// CR deployment
+	cmd.PersistentFlags().String("cr-file", "", "Path to WeightsAndBiases CR YAML (uses built-in default if not provided)")
+	cmd.PersistentFlags().String("license", "", "W&B license string (optional, injected into spec.wandb.license)")
+	cmd.PersistentFlags().String("license-file", "", "Path to W&B license file (optional, injected into spec.wandb.license)")
+	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
+	cmd.PersistentFlags().String("wandb-version", "", "Server manifest version (e.g., 0.76.1)")
+	cmd.PersistentFlags().String("wandb-namespace", "wandb", "Namespace for CR")
+	// TODO readd this when the CR reports ready properly
+	//cmd.Flags().Bool("wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
+
+	cmd.AddCommand(operatorDeployCmd())
+	cmd.AddCommand(wandbCmd())
+
+	return cmd
+}
+
+func wandbCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "wandb",
+		Short: "Manage W&B instances",
+		Long:  `Manage W&B instances`,
+	}
+
+	cmd.AddCommand(wandbCreateCmd())
+	cmd.AddCommand(wandbDestroyCmd())
+
+	return cmd
+}
+
+func wandbDestroyCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "destroy",
+		Short: "Destroy an instance of W&B",
+		Long:  `Destroy an instance of W&B`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			wandbNamespace, _ := cmd.Flags().GetString("wandb-namespace")
+			wandbName, _ := cmd.Flags().GetString("wandb-name")
+
+			ctx := context.Background()
+
+			err := destroyWandbCR(ctx, wandbName, wandbNamespace)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		},
+	}
+
+	return cmd
+}
+
+func wandbCreateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "deploy",
+		Short: "Deploy a W&B instance",
+		Long:  `Deploy a W&B instance with specified versions and configuration`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			crFile, _ := cmd.Flags().GetString("cr-file")
+			license, _ := cmd.Flags().GetString("license")
+			licenseFile, _ := cmd.Flags().GetString("license-file")
+			wandbNamespace, _ := cmd.Flags().GetString("wandb-namespace")
+			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
+			wandbName, _ := cmd.Flags().GetString("wandb-name")
+			wait, _ := cmd.Flags().GetBool("wait")
+
+			ctx := context.Background()
+
+			err := processWandbCR(crFile, wandbVersion, wandbName, license, licenseFile, wandbNamespace)
+			if err != nil {
+				return err
+			}
+
+			err = deployWandbCR(ctx)
+			if err != nil {
+				return err
+			}
+
+			// Step 6: Wait for CR to be ready (if requested)
+			if wait {
+				fmt.Println("Waiting for W&B instance to be ready...")
+
+				if err := operator.WaitForCRReady(ctx, wandbCR.Namespace, wandbCR.Name, 30*time.Minute); err != nil {
+					fmt.Println(" ✗")
+					return err
+				}
+			}
+
+			return nil
+		},
+	}
+
+	return cmd
+}
+
+func operatorDeployCmd() *cobra.Command {
+	var setupCluster bool
+	var includeCR bool
+	var clusterName string
+	var workers int
+	var operatorVersion string
+	var operatorChartVersion string
+	var operatorNamespace string
+
+	cmd := &cobra.Command{
+		Use:   "operator",
+		Short: "Deploy the v2 operator",
+		Long:  `Deploy the v2 operator with specified versions and configuration`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			crFile, _ := cmd.Flags().GetString("cr-file")
+			license, _ := cmd.Flags().GetString("license")
+			licenseFile, _ := cmd.Flags().GetString("license-file")
+			wandbNamespace, _ := cmd.Flags().GetString("wandb-namespace")
+			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
+			wandbName, _ := cmd.Flags().GetString("wandb-name")
+			wait, _ := cmd.Flags().GetBool("wait")
+
+			err := processWandbCR(crFile, wandbVersion, wandbName, license, licenseFile, wandbNamespace)
+			if err != nil {
+				return err
+			}
+
+			// Perform the deployment
+			deployStart := time.Now()
+			if err := performDeploy(setupCluster, includeCR, wait, clusterName, workers, operatorChartVersion, wandbVersion, operatorNamespace); err != nil {
+				fmt.Printf("\n✗ Deployment failed: %v\n", err)
+				return err
+			}
+
+			// Success summary
+			totalTime := time.Since(deployStart).Round(time.Second)
+			fmt.Printf("\n✓ Deployment complete! (%s total)\n\n", totalTime)
+			fmt.Println("Access your W&B instance:")
+			if setupCluster {
+				fmt.Printf("  • Kubectl context: kind-%s\n", clusterName)
+			}
+			fmt.Printf("  • Namespace: %s\n", wandbNamespace)
+			fmt.Printf("  • Status: kubectl get wandb -n %s\n", wandbNamespace)
+			fmt.Println()
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&setupCluster, "setup-k8s-cluster", false, "Setup a Kind cluster before deploying")
+	cmd.Flags().StringVar(&clusterName, "cluster-name", "kind", "Name of the Kind cluster (only used with --setup-k8s-cluster)")
+	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
+
+	cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator image version (e.g., v2.0.0) - defaults to value in the chart")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "1.5.2", "Operator Chart version (e.g., v2.0.0)")
+	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
+
+	cmd.Flags().BoolVar(&includeCR, "include-cr", false, "Include the Wandb CR in the operator deployment")
+	return cmd
+}
+
+func performDeploy(setupCluster bool, includeCR bool, wait bool, clusterName string, workers int, operatorChartVersion string, wandbVersion string, operatorNamespace string) error {
 	ctx := context.Background()
 
 	// Calculate total steps based on flags
-	totalSteps := 3 // Always: cert-manager, deploy operator, create CR
+	totalSteps := 2 // Always: cert-manager, deploy operator, create CR
 	if setupCluster {
+		totalSteps++
+	}
+	if includeCR {
 		totalSteps++
 	}
 	if wait {
@@ -77,22 +253,10 @@ func performDeploy(setupCluster bool, wait bool, clusterName string, workers int
 	}
 	currentStep := 1
 
-	// TODO: Persist manifest file to Kubernetes (e.g., as ConfigMap) for operator to read
-	// Currently the operator uses a baked-in manifest from the image (/0.76.1.yaml).
-	// The operator should evolve to read the manifest from a ConfigMap instead of embedding it.
-	// This will allow users to specify different manifest versions via --manifest-path.
-
-	fmt.Printf("\nDeploying W&B (v%s) to cluster '%s'\n\n", wandbVersion, clusterName)
-
 	// Step 1: Setup K8s cluster if requested
 	if setupCluster {
 		fmt.Printf("[%d/%d] Setting up cluster (%d workers)...", currentStep, totalSteps, workers)
 		start := time.Now()
-
-		if err := kind.CheckDependencies(); err != nil {
-			fmt.Println(" ✗")
-			return err
-		}
 
 		err := performCreateCluster(ctx, clusterName, workers)
 		if err != nil {
@@ -139,26 +303,7 @@ func performDeploy(setupCluster bool, wait bool, clusterName string, workers int
 		return err
 	}
 
-	if setupCluster {
-		if err := kind.CreateDeploymentMarker(ctx, clusterName, operatorNamespace); err != nil {
-			fmt.Println(" ✗")
-			return err
-		}
-	}
-
-	fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
-	currentStep++
-
-	// Step 5: Create W&B instance
-	fmt.Printf("[%d/%d] Creating W&B instance...", currentStep, totalSteps)
-	start = time.Now()
-
-	// Step 3: Create infra-operators wandbNamespace
-	if err := operator.CreateNamespace(ctx, wandbCR.Namespace); err != nil {
-		return err
-	}
-
-	if err := operator.ApplyCR(ctx, wandbCR); err != nil {
+	if err := kubectl.CreateDeploymentMarker(ctx, clusterName, operatorNamespace, "cert-manager,operator"); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -166,6 +311,19 @@ func performDeploy(setupCluster bool, wait bool, clusterName string, workers int
 	fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
 	currentStep++
 
+	if includeCR {
+		// Step 5: Create W&B instance
+		fmt.Printf("[%d/%d] Creating W&B instance...", currentStep, totalSteps)
+		start = time.Now()
+
+		err := deployWandbCR(ctx)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
+		currentStep++
+	}
 	// Step 6: Wait for CR to be ready (if requested)
 	if wait {
 		fmt.Printf("[%d/%d] Waiting for W&B instance to be ready...", currentStep, totalSteps)
@@ -179,6 +337,44 @@ func performDeploy(setupCluster bool, wait bool, clusterName string, workers int
 		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
 	}
 
+	return nil
+}
+
+func destroyWandbCR(ctx context.Context, name string, namespace string) error {
+	hasMarker, err := kubectl.HasDeploymentMarker(ctx, namespace, "wandb-cr")
+	if err != nil {
+		return err
+	}
+
+	if !hasMarker {
+		return errors.New("no wsm deployment marker found - W&B instance may not be managed by wsm\n")
+	}
+
+	if err := kubectl.DeleteCR(ctx, name, namespace); err != nil {
+		return fmt.Errorf("failed to delete W&B CR: %w", err)
+	}
+
+	if err := kubectl.DeleteDeploymentMarker(ctx, namespace, "wandb-cr"); err != nil {
+		return fmt.Errorf("failed to delete deployment marker: %w", err)
+	}
+
+	return nil
+}
+
+func deployWandbCR(ctx context.Context) error {
+	if err := operator.CreateNamespace(ctx, wandbCR.Namespace); err != nil {
+		return err
+	}
+
+	if err := operator.ApplyCR(ctx, wandbCR); err != nil {
+		fmt.Println(" ✗")
+		return err
+	}
+
+	if err := kubectl.CreateDeploymentMarker(ctx, "", wandbCR.Namespace, "wandb-cr"); err != nil {
+		fmt.Println(" ✗")
+		return err
+	}
 	return nil
 }
 
@@ -201,110 +397,55 @@ func performCreateCluster(ctx context.Context, clusterName string, workers int) 
 			fmt.Println(" ✗")
 			return err
 		}
+
+		if err := kubectl.CreateDeploymentMarker(ctx, clusterName, "default", "kind-cluster"); err != nil {
+			fmt.Println(" ✗")
+			return err
+		}
 	}
 	return nil
 }
 
-// DeployV2Cmd returns the deploy-v2 command with subcommands
-func DeployV2Cmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "deploy-v2",
-		Short: "Deploy v2 operator and resources",
-		Long:  `Deploy the v2 operator, server manifest, and custom resources`,
+func processWandbCR(crFile string, wandbVersion string, wandbName string, license string, licenseFile string, wandbNamespace string) error {
+	if crFile != "" {
+		var err error
+		wandbCR, err = readCRFile(crFile)
+		if err != nil {
+			fmt.Printf("failed to read CR file: %v\n", err)
+			return err
+		}
 	}
 
-	cmd.AddCommand(v2OperatorCmd())
+	wandbCR.Name = wandbName
 
-	return cmd
-}
+	if wandbCR.Spec.Wandb.Version == "" && wandbVersion == "" {
+		wandbCR.Spec.Wandb.Version = defaultWandbVersion
+	}
 
-func v2OperatorCmd() *cobra.Command {
-	var setupCluster bool
-	var wait bool
-	var clusterName string
-	var workers int
-	var operatorVersion string
-	var operatorChartVersion string
-	var wandbVersion string
-	var crFile string
-	var license string
-	var licenseFile string
-	var wandbNamespace string
-	var operatorNamespace string
+	if wandbVersion != "" {
+		wandbCR.Spec.Wandb.Version = wandbVersion
+	}
 
-	cmd := &cobra.Command{
-		Use:   "operator",
-		Short: "Deploy the v2 operator",
-		Long:  `Deploy the v2 operator with specified versions and configuration`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if crFile != "" {
-				var err error
-				wandbCR, err = readCRFile(crFile)
-				if err != nil {
-					fmt.Printf("failed to read CR file: %w", err)
-					return err
-				}
-			}
+	if license != "" && licenseFile != "" {
+		return fmt.Errorf("cannot specify both license and license file")
+	}
 
-			if license != "" || licenseFile != "" {
-				if license != "" {
-					wandbCR.Spec.Wandb.License = license
-				}
-				if licenseFile != "" {
-					licenseData, err := os.ReadFile(licenseFile)
-					if err != nil {
-						fmt.Printf("failed to read license file: %w", err)
-						return err
-					}
-					wandbCR.Spec.Wandb.License = strings.TrimSpace(string(licenseData))
-				}
-			}
-
-			wandbCR.Namespace = wandbNamespace
-			wandbCR.Spec.Wandb.Version = wandbVersion
-
-			// Perform the deployment
-			deployStart := time.Now()
-			if err := performDeploy(setupCluster, wait, clusterName, workers, operatorChartVersion, wandbVersion, operatorNamespace); err != nil {
-				fmt.Printf("\n✗ Deployment failed: %v\n", err)
+	if license != "" || licenseFile != "" {
+		if license != "" {
+			wandbCR.Spec.Wandb.License = license
+		}
+		if licenseFile != "" {
+			licenseData, err := os.ReadFile(licenseFile)
+			if err != nil {
+				fmt.Printf("failed to read license file: %v\n", err)
 				return err
 			}
-
-			// Success summary
-			totalTime := time.Since(deployStart).Round(time.Second)
-			fmt.Printf("\n✓ Deployment complete! (%s total)\n\n", totalTime)
-			fmt.Println("Access your W&B instance:")
-			if setupCluster {
-				fmt.Printf("  • Kubectl context: kind-%s\n", clusterName)
-			}
-			fmt.Printf("  • Namespace: %s\n", wandbNamespace)
-			fmt.Printf("  • Status: kubectl get wandb -n %s\n", wandbNamespace)
-			fmt.Println()
-			return nil
-		},
+			wandbCR.Spec.Wandb.License = strings.TrimSpace(string(licenseData))
+		}
 	}
 
-	cmd.Flags().BoolVar(&setupCluster, "setup-k8s-cluster", false, "Setup a Kind cluster before deploying")
-	// TODO readd this when the CR reports ready properly
-	//cmd.Flags().BoolVar(&wait, "wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
-	cmd.Flags().StringVar(&clusterName, "cluster-name", "kind", "Name of the Kind cluster (only used with --setup-k8s-cluster)")
-	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
-
-	cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator image version (e.g., v2.0.0) - defaults to value in the chart")
-	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "1.5.2", "Operator Chart version (e.g., v2.0.0)")
-
-	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "0.78.0-pre-operator-v2-no-app.0", "Server manifest version (e.g., 0.76.1)")
-
-	// CR deployment
-	cmd.Flags().StringVar(&crFile, "cr-file", "", "Path to WeightsAndBiases CR YAML (uses built-in default if not provided)")
-	cmd.Flags().StringVar(&license, "license", "", "W&B license string (optional, injected into spec.wandb.license)")
-	cmd.Flags().StringVar(&licenseFile, "license-file", "", "Path to W&B license file (optional, injected into spec.wandb.license)")
-
-	// Namespaces
-	cmd.Flags().StringVar(&wandbNamespace, "wandbNamespace", "wandb", "Namespace for CR")
-	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
-
-	return cmd
+	wandbCR.Namespace = wandbNamespace
+	return nil
 }
 
 func readCRFile(crPath string) (*v2.WeightsAndBiases, error) {
@@ -320,8 +461,17 @@ func readCRFile(crPath string) (*v2.WeightsAndBiases, error) {
 	return cr, nil
 }
 
-func performTeardown(clusterName string) error {
+func performDestroy(clusterName string) error {
 	ctx := context.Background()
+
+	hasMarker, err := kubectl.HasDeploymentMarker(ctx, "default", "kind-cluster")
+	if err != nil {
+		return err
+	}
+
+	if !hasMarker {
+		return errors.New("no wsm deployment marker found - cluster may not be managed by wsm\n")
+	}
 
 	fmt.Printf("→ Tearing down cluster '%s'...\n", clusterName)
 
@@ -348,7 +498,7 @@ func ClusterCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(clusterCreateCmd())
-	cmd.AddCommand(clusterTeardownCmd())
+	cmd.AddCommand(clusterDestroyCmd())
 	cmd.AddCommand(clusterCleanupCmd())
 
 	return cmd
@@ -371,23 +521,36 @@ func clusterCreateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&clusterName, "cluster-name", "kind", "Name of the Kind cluster (only used with --setup-k8s-cluster)")
-	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
+	cmd.Flags().StringVar(&clusterName, "cluster-name", "kind", "Name of the Kind cluster")
+	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes")
 
 	return cmd
 }
 
-func clusterTeardownCmd() *cobra.Command {
+func clusterDestroyCmd() *cobra.Command {
 	var clusterName string
-
 	cmd := &cobra.Command{
-		Use:   "teardown",
-		Short: "Teardown Kind cluster and cleanup",
+		Use:   "destroy",
+		Short: "Destroy Kind cluster and cleanup",
 		Long:  `Delete the Kind cluster and cleanup resources`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := performTeardown(clusterName); err != nil {
-				fmt.Printf("✗ Teardown failed: %v\n", err)
+			ctx := context.Background()
+			hasMarker, err := kubectl.HasDeploymentMarker(ctx, "default", "kind-cluster")
+			if err != nil {
 				return err
+			}
+
+			if !hasMarker {
+				return fmt.Errorf("no wsm deployment marker found - cluster may not be managed by wsm")
+			}
+
+			fmt.Printf("→ Deleting Kind cluster '%s'...\n", clusterName)
+			if err := kind.DeleteCluster(ctx, clusterName); err != nil {
+				return err
+			}
+
+			if err := kind.CleanupDistDirectory(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 			}
 
 			fmt.Printf("✓ Kind cluster '%s' deleted successfully\n", clusterName)
@@ -395,56 +558,80 @@ func clusterTeardownCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&clusterName, "name", "kind", "Name of the Kind cluster to delete")
+	cmd.Flags().StringVar(&clusterName, "cluster-name", "kind", "Name of the Kind cluster to delete")
 
 	return cmd
 }
 
-func performCleanup(clusterName string, deleteCluster bool, operatorNamespace string, namespace string) error {
+func performCleanup() error {
 	ctx := context.Background()
 
-	// Check for deployment marker
-	fmt.Println("→ Checking for wsm deployment marker...")
-	hasMarker, err := kind.HasDeploymentMarker(ctx, operatorNamespace)
+	// 1. Delete W&B CRs in all namespaces that have the marker
+	wandbNamespaces, err := kubectl.FindNamespacesWithMarker(ctx, "wandb-cr")
 	if err != nil {
 		return err
 	}
 
-	if !hasMarker {
-		return fmt.Errorf("no wsm deployment marker found - cluster may not be managed by wsm")
+	if len(wandbNamespaces) == 0 {
+		fmt.Println("! No wsm-managed W&B deployments found.")
 	}
 
-	// TODO: Delete W&B CR (respects retentionPolicy)
-	fmt.Println("→ Deleting W&B CR...")
-	// operator.DeleteCR(ctx, namespace)
+	for _, ns := range wandbNamespaces {
+		crs, err := operator.ListCRs(ctx, ns)
+		if err != nil {
+			fmt.Printf("✗ Failed to list W&B CRs in namespace %s: %v\n", ns, err)
+			continue
+		}
 
-	// TODO: Delete operator
-	fmt.Println("→ Deleting operator...")
-	// operator.DeleteOperator(ctx, operatorNamespace)
+		for _, cr := range crs {
+			fmt.Printf("→ Deleting W&B CR '%s' in namespace '%s'...\n", cr, ns)
+			if err := operator.DeleteCR(ctx, cr, ns); err != nil {
+				fmt.Printf("  ✗ Failed to delete W&B CR %s/%s: %v\n", ns, cr, err)
+			}
+		}
 
-	// TODO: Delete third-party operators
-	fmt.Println("→ Deleting third-party operators...")
-	// operator.DeleteThirdPartyOperators(ctx)
+		fmt.Printf("→ Removing deployment marker in namespace '%s'...\n", ns)
+		if err := kubectl.DeleteDeploymentMarker(ctx, ns, "wandb-cr"); err != nil {
+			fmt.Printf("  ✗ Failed to delete deployment marker in %s: %v\n", ns, err)
+		}
+	}
 
-	// TODO: Delete cert-manager
-	fmt.Println("→ Deleting cert-manager...")
-	// operator.DeleteCertManager(ctx)
-
-	// Delete the deployment marker
-	fmt.Println("→ Removing deployment marker...")
-	if err := kind.DeleteDeploymentMarker(ctx, operatorNamespace); err != nil {
+	// 2. Delete W&B operators in all namespaces that have the marker
+	operatorNamespaces, err := kubectl.FindNamespacesWithMarker(ctx, "operator")
+	if err != nil {
 		return err
 	}
 
-	// Optionally delete the Kind cluster
-	if deleteCluster {
-		fmt.Printf("→ Deleting Kind cluster '%s'...\n", clusterName)
-		if err := kind.DeleteCluster(ctx, clusterName); err != nil {
+	if len(operatorNamespaces) == 0 {
+		fmt.Println("! No wsm-managed W&B operators found.")
+	}
+
+	for _, ns := range operatorNamespaces {
+		fmt.Printf("→ Deleting W&B operator in namespace '%s'...\n", ns)
+		if err := operator.DeleteOperator(ctx, ns); err != nil {
+			fmt.Printf("  ✗ Failed to delete operator in %s: %v\n", ns, err)
 			return err
 		}
 
-		if err := kind.CleanupDistDirectory(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		fmt.Printf("→ Removing deployment marker in namespace '%s'...\n", ns)
+		if err := kubectl.DeleteDeploymentMarker(ctx, ns, "operator"); err != nil {
+			fmt.Printf("  ✗ Failed to delete deployment marker in %s: %v\n", ns, err)
+			return err
+		}
+	}
+
+	// 3. Delete cert-manager
+	fmt.Println("→ Deleting cert-manager...")
+	if err := operator.DeleteCertManager(ctx); err != nil {
+		fmt.Printf("  ✗ Failed to delete cert-manager: %v\n", err)
+	}
+
+	cmNamespaces, err := kubectl.FindNamespacesWithMarker(ctx, "cert-manager")
+	if err == nil {
+		for _, ns := range cmNamespaces {
+			if err := kubectl.DeleteDeploymentMarker(ctx, ns, "cert-manager"); err != nil {
+				fmt.Printf("  ✗ Failed to remove cert-manager marker in %s: %v\n", ns, err)
+			}
 		}
 	}
 
@@ -452,35 +639,32 @@ func performCleanup(clusterName string, deleteCluster bool, operatorNamespace st
 }
 
 func clusterCleanupCmd() *cobra.Command {
-	var clusterName string
-	var deleteCluster bool
-	var operatorNamespace string
-	var namespace string
+	var kubeContext string
 
 	cmd := &cobra.Command{
 		Use:   "cleanup",
 		Short: "Cleanup wsm-managed resources",
-		Long:  `Delete all resources deployed by wsm, including operator, CR, and optionally the cluster`,
+		Long:  `Delete all resources deployed by wsm, including operator and CR`,
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if kubeContext == "" {
+				return errors.New("context is required")
+			}
+
+			kubectl.SetContext(kubeContext)
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := performCleanup(clusterName, deleteCluster, operatorNamespace, namespace); err != nil {
+			if err := performCleanup(); err != nil {
 				fmt.Printf("✗ Cleanup failed: %v\n", err)
 				return err
 			}
 
 			fmt.Println("✓ Cleanup completed successfully")
-			if deleteCluster {
-				fmt.Printf("→ Kind cluster '%s' deleted\n", clusterName)
-			} else {
-				fmt.Printf("→ Kind cluster '%s' preserved\n", clusterName)
-			}
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&clusterName, "name", "kind", "Name of the Kind cluster")
-	cmd.Flags().BoolVar(&deleteCluster, "delete-cluster", false, "Also delete the Kind cluster")
-	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "operator-system", "Namespace where operator is deployed")
-	cmd.Flags().StringVar(&namespace, "namespace", "default", "Namespace where CR is deployed")
+	cmd.Flags().StringVar(&kubeContext, "context", "", "name of the kubeconfig context to use (Required)")
 
 	return cmd
 }

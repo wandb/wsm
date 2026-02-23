@@ -266,6 +266,8 @@ func performDeploy(setupCluster bool, includeCR bool, wait bool, clusterName str
 
 		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
 		currentStep++
+	} else {
+		clusterName = ""
 	}
 
 	// Step 2: Install cert-manager
@@ -304,7 +306,7 @@ func performDeploy(setupCluster bool, includeCR bool, wait bool, clusterName str
 		return err
 	}
 
-	if err := kubectl.CreateDeploymentMarker(ctx, clusterName, operatorNamespace, "cert-manager,operator"); err != nil {
+	if err := kubectl.CreateDeploymentMarker(ctx, "", operatorNamespace, "cert-manager,operator"); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -324,18 +326,19 @@ func performDeploy(setupCluster bool, includeCR bool, wait bool, clusterName str
 
 		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
 		currentStep++
-	}
-	// Step 6: Wait for CR to be ready (if requested)
-	if wait {
-		fmt.Printf("[%d/%d] Waiting for W&B instance to be ready...", currentStep, totalSteps)
-		start = time.Now()
 
-		if err := operator.WaitForCRReady(ctx, wandbCR.Namespace, wandbCR.Name, 30*time.Minute); err != nil {
-			fmt.Println(" ✗")
-			return err
+		// Step 6: Wait for CR to be ready (if requested)
+		if wait {
+			fmt.Printf("[%d/%d] Waiting for W&B instance to be ready...", currentStep, totalSteps)
+			start = time.Now()
+
+			if err := operator.WaitForCRReady(ctx, wandbCR.Namespace, wandbCR.Name, 30*time.Minute); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+
+			fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
 		}
-
-		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
 	}
 
 	return nil

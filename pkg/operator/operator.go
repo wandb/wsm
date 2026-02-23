@@ -333,7 +333,10 @@ func checkReleaseExists(actionConfig *action.Configuration, releaseName string) 
 		return false, err
 	}
 	for _, r := range releases {
-		release := r.(*v1.Release)
+		release, ok := r.(*v1.Release)
+		if !ok {
+			continue
+		}
 		if release.Name == releaseName {
 			return true, nil
 		}

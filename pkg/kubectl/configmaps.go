@@ -3,11 +3,40 @@ package kubectl
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func GetConfigMap(ctx context.Context, name, namespace string) (*v1.ConfigMap, error) {
+	_, cs, err := GetClientset()
+	if err != nil {
+		return nil, err
+	}
+
+	cm, err := cs.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return cm, nil
+}
+
+func DeleteConfigMap(ctx context.Context, name, namespace string) error {
+	_, cs, err := GetClientset()
+	if err != nil {
+		return err
+	}
+
+	err = cs.CoreV1().ConfigMaps(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
 
 func UpsertConfigMap(data map[string]string, name string, namespace string) error {
 	ctx := context.Background()
@@ -20,11 +49,12 @@ func UpsertConfigMap(data map[string]string, name string, namespace string) erro
 	existingConfigMap, err := cs.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		// If the ConfigMap doesn't exist, create it
-		if strings.Contains(err.Error(), "not found") {
+		if errors.IsNotFound(err) {
 			configMap := &v1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      name,
 					Namespace: namespace,
+					Labels:    map[string]string{"app.kubernetes.io/managed-by": "wsm"},
 				},
 				Data: data,
 			}
@@ -47,4 +77,24 @@ func UpsertConfigMap(data map[string]string, name string, namespace string) erro
 	}
 
 	return nil
+}
+
+func ListConfigMaps(ctx context.Context, name string) ([]v1.ConfigMap, error) {
+	_, cs, err := GetClientset()
+	if err != nil {
+		return nil, err
+	}
+
+	cms, err := cs.CoreV1().ConfigMaps("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	var result []v1.ConfigMap
+	for _, cm := range cms.Items {
+		if cm.Name == name {
+			result = append(result, cm)
+		}
+	}
+	return result, nil
 }

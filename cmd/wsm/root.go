@@ -24,9 +24,7 @@ func Execute() {
 	}
 }
 
-func init() {
-
-}
+func init() {}
 
 func main() {
 	Execute()

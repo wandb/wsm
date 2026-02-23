@@ -6,10 +6,14 @@ maintaining W&B server instances for airgapped environments and local developmen
 
 ## Install
 
-Download and install WSM:
+Operator v2 compatible builds are only available from source at the moment.
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/wandb/wsm/operator-v2/install.sh | bash /usr/local/bin
+git clone https://github.com/wandb/wsm
+cd wsm
+git checkout operator-v2
+go build -o wsm ./cmd/wsm
+./wsm --help
 ```
 
 ## Usage

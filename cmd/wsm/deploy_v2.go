@@ -182,7 +182,7 @@ func operatorDeployCmd() *cobra.Command {
 	var includeCR bool
 	var clusterName string
 	var workers int
-	var operatorVersion string
+	//var operatorVersion string
 	var operatorChartVersion string
 	var operatorNamespace string
 
@@ -229,7 +229,8 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().StringVar(&clusterName, "cluster-name", "kind", "Name of the Kind cluster (only used with --setup-k8s-cluster)")
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
 
-	cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator image version (e.g., v2.0.0) - defaults to value in the chart")
+	//TODO Decide whether to expose this or have it depend on the chart version
+	//cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator image version (e.g., v2.0.0) - defaults to value in the chart")
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "1.5.2", "Operator Chart version (e.g., v2.0.0)")
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
 

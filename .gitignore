@@ -29,3 +29,5 @@ bundle/
 /wsm
 
 test-wsm/
+
+.idea/

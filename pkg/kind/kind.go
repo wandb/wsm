@@ -107,6 +107,12 @@ func InstallMetricsServer(ctx context.Context) error {
 	return nil
 }
 
+// ExportKubeconfig ensures the kubeconfig for a Kind cluster is written to the default kubeconfig location
+func ExportKubeconfig(name string) error {
+	provider := cluster.NewProvider()
+	return provider.ExportKubeConfig(name, "", false)
+}
+
 // SetKubectlContext sets the kubectl context to the specified Kind cluster
 func SetKubectlContext(ctx context.Context, name string) {
 	contextName := fmt.Sprintf("kind-%s", name)

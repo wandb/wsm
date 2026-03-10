@@ -5,8 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -22,7 +20,6 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/util/homedir"
 )
 
 var (
@@ -30,6 +27,8 @@ var (
 	clientset   *kubernetes.Clientset
 	dynamicHost *dynamic.DynamicClient
 	mapper      meta.RESTMapper
+	initErr     error
+	mapperErr   error
 	once        sync.Once
 	mapperOnce  sync.Once
 	kubeContext string
@@ -41,28 +40,22 @@ func SetContext(ctx string) {
 
 func initMapper() {
 	mapperOnce.Do(func() {
-		if clientset != nil {
-			gr, err := restmapper.GetAPIGroupResources(clientset.Discovery())
-			if err != nil {
-				return
-			}
-			mapper = restmapper.NewDiscoveryRESTMapper(gr)
+		if clientset == nil {
+			mapperErr = fmt.Errorf("cannot initialize REST mapper: clientset is nil")
+			return
 		}
+		gr, err := restmapper.GetAPIGroupResources(clientset.Discovery())
+		if err != nil {
+			mapperErr = fmt.Errorf("failed to discover API resources (is the cluster reachable?): %w", err)
+			return
+		}
+		mapper = restmapper.NewDiscoveryRESTMapper(gr)
 	})
 }
 
 func initConfig() {
 	once.Do(func() {
-		kubeconfig := os.Getenv("KUBECONFIG")
-		if kubeconfig == "" {
-			home := homedir.HomeDir()
-			if home != "" {
-				kubeconfig = filepath.Join(home, ".kube", "config")
-			}
-		}
-
 		loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-		loadingRules.ExplicitPath = kubeconfig
 		configOverrides := &clientcmd.ConfigOverrides{}
 		if kubeContext != "" {
 			configOverrides.CurrentContext = kubeContext
@@ -71,15 +64,31 @@ func initConfig() {
 		var err error
 		config, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides).ClientConfig()
 		if err != nil {
-			// fallback to in-cluster config
+			if kubeContext != "" {
+				// Don't fall back to in-cluster config when a specific context was requested
+				initErr = fmt.Errorf("failed to load kubeconfig (context=%q): %w", kubeContext, err)
+				return
+			}
+			// fallback to in-cluster config only when no context is specified
 			config, err = rest.InClusterConfig()
 			if err != nil {
+				initErr = fmt.Errorf("failed to load kubeconfig: %w", err)
 				return
 			}
 		}
 
-		clientset, _ = kubernetes.NewForConfig(config)
-		dynamicHost, _ = dynamic.NewForConfig(config)
+		var csErr error
+		clientset, csErr = kubernetes.NewForConfig(config)
+		if csErr != nil {
+			initErr = fmt.Errorf("failed to create kubernetes clientset: %w", csErr)
+			return
+		}
+
+		dynamicHost, err = dynamic.NewForConfig(config)
+		if err != nil {
+			initErr = fmt.Errorf("failed to create dynamic client: %w", err)
+			return
+		}
 
 		initMapper()
 	})
@@ -87,49 +96,65 @@ func initConfig() {
 
 func GetConfig() (*rest.Config, error) {
 	initConfig()
+	if initErr != nil {
+		return nil, initErr
+	}
 	if config == nil {
-		return nil, os.ErrNotExist
+		return nil, fmt.Errorf("kubernetes config not initialized")
 	}
 	return config, nil
 }
 
 func GetDynamicClientset() (*rest.Config, *dynamic.DynamicClient, error) {
 	initConfig()
+	if initErr != nil {
+		return nil, nil, initErr
+	}
 	if config == nil || dynamicHost == nil {
-		return nil, nil, os.ErrNotExist
+		return nil, nil, fmt.Errorf("kubernetes client not initialized")
 	}
 	return config, dynamicHost, nil
 }
 
 func GetClientset() (*rest.Config, *kubernetes.Clientset, error) {
 	initConfig()
+	if initErr != nil {
+		return nil, nil, initErr
+	}
 	if config == nil || clientset == nil {
-		return nil, nil, os.ErrNotExist
+		return nil, nil, fmt.Errorf("kubernetes client not initialized")
 	}
 	return config, clientset, nil
 }
 
 func GetRESTMapper() (meta.RESTMapper, error) {
 	initConfig()
+	if initErr != nil {
+		return nil, initErr
+	}
 	initMapper()
+	if mapperErr != nil {
+		return nil, mapperErr
+	}
 	if mapper == nil {
-		return nil, os.ErrNotExist
+		return nil, fmt.Errorf("REST mapper not initialized")
 	}
 	return mapper, nil
 }
 
 func RefreshRESTMapper() (meta.RESTMapper, error) {
 	initConfig()
-	if clientset != nil {
-		gr, err := restmapper.GetAPIGroupResources(clientset.Discovery())
-		if err != nil {
-			return nil, err
-		}
-		mapper = restmapper.NewDiscoveryRESTMapper(gr)
+	if initErr != nil {
+		return nil, initErr
 	}
-	if mapper == nil {
-		return nil, os.ErrNotExist
+	if clientset == nil {
+		return nil, fmt.Errorf("cannot refresh REST mapper: clientset is nil")
 	}
+	gr, err := restmapper.GetAPIGroupResources(clientset.Discovery())
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover API resources: %w", err)
+	}
+	mapper = restmapper.NewDiscoveryRESTMapper(gr)
 	return mapper, nil
 }
 

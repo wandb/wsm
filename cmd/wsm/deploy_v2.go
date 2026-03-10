@@ -406,6 +406,31 @@ func performCreateCluster(ctx context.Context, clusterName string, workers int) 
 			fmt.Println(" ✗")
 			return err
 		}
+	} else {
+		// Cluster exists but kubeconfig may be stale/incomplete — re-export it
+		if err := kind.ExportKubeconfig(clusterName); err != nil {
+			// Cluster entry exists but container is gone (e.g. Docker/OrbStack cleaned up) — recreate
+			fmt.Printf("\n  → Existing cluster '%s' is unreachable, recreating...", clusterName)
+			if delErr := kind.DeleteCluster(ctx, clusterName); delErr != nil {
+				fmt.Println(" ✗")
+				return fmt.Errorf("failed to delete stale cluster: %w", delErr)
+			}
+			if err := kind.CreateCluster(ctx, clusterName, workers); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+			kind.SetKubectlContext(ctx, clusterName)
+
+			if err := kind.InstallMetricsServer(ctx); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+
+			if err := kubectl.CreateDeploymentMarker(ctx, clusterName, "default", "kind-cluster"); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+		}
 	}
 	return nil
 }

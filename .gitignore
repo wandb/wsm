@@ -31,3 +31,5 @@ bundle/
 test-wsm/
 
 .idea/
+.k8s-images
+license.key

@@ -64,6 +64,16 @@ func DeleteCluster(ctx context.Context, name string) error {
 	return nil
 }
 
+// ListClusters returns the names of all local Kind clusters.
+func ListClusters() ([]string, error) {
+	provider := cluster.NewProvider()
+	names, err := provider.List()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list kind clusters: %w", err)
+	}
+	return names, nil
+}
+
 // ClusterExists checks if a Kind cluster with the given name exists
 func ClusterExists(ctx context.Context, name string) (bool, error) {
 	provider := cluster.NewProvider()

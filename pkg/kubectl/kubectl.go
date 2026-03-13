@@ -39,6 +39,17 @@ func SetContext(ctx string) {
 	kubeContext = ctx
 }
 
+// ResetClients resets the cached k8s clients so the next call re-initializes
+// with the current kubeContext. Must be called after SetContext.
+func ResetClients() {
+	config = nil
+	clientset = nil
+	dynamicHost = nil
+	mapper = nil
+	once = sync.Once{}
+	mapperOnce = sync.Once{}
+}
+
 func initMapper() {
 	mapperOnce.Do(func() {
 		if clientset != nil {

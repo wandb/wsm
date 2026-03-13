@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"time"
 
 	"github.com/wandb/wsm/pkg/kubectl"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	config "sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
 	"sigs.k8s.io/kind/pkg/cluster"
@@ -152,16 +154,98 @@ func LoadImageToCluster(ctx context.Context, imageName, clusterName string) erro
 	return nil
 }
 
-// generateClusterConfig creates a Kind cluster configuration with specified worker nodes
+// generateClusterConfig creates a Kind cluster configuration with specified worker nodes.
+// The control-plane node is always configured with:
+//   - extraPortMappings: host:8080 → container:80, host:8443 → container:443
+//   - ingress-ready node label so nginx-ingress can bind to those ports
 func generateClusterConfig(workers int) config.Cluster {
-	kindConfig := config.Cluster{}
-	if workers > 0 {
-		kindConfig.Nodes = make([]config.Node, workers+1)
-		kindConfig.Nodes[0] = config.Node{Role: config.ControlPlaneRole, Image: "kindest/node:v1.35.1@sha256:05d7bcdefbda08b4e038f644c4df690cdac3fba8b06f8289f30e10026720a1ab"}
-		for i := 0; i < workers; i++ {
-			kindConfig.Nodes[i+1] = config.Node{Role: config.WorkerRole, Image: "kindest/node:v1.35.1@sha256:05d7bcdefbda08b4e038f644c4df690cdac3fba8b06f8289f30e10026720a1ab"}
-		}
+	const nodeImage = "kindest/node:v1.35.1@sha256:05d7bcdefbda08b4e038f644c4df690cdac3fba8b06f8289f30e10026720a1ab"
+
+	controlPlane := config.Node{
+		Role:  config.ControlPlaneRole,
+		Image: nodeImage,
+		ExtraPortMappings: []config.PortMapping{
+			{ContainerPort: 80, HostPort: 8080, Protocol: config.PortMappingProtocolTCP},
+			{ContainerPort: 443, HostPort: 8443, Protocol: config.PortMappingProtocolTCP},
+		},
+		KubeadmConfigPatches: []string{`kind: InitConfiguration
+nodeRegistration:
+  kubeletExtraArgs:
+    node-labels: "ingress-ready=true"
+`},
 	}
 
+	kindConfig := config.Cluster{}
+	kindConfig.Nodes = make([]config.Node, workers+1)
+	kindConfig.Nodes[0] = controlPlane
+	for i := 0; i < workers; i++ {
+		kindConfig.Nodes[i+1] = config.Node{Role: config.WorkerRole, Image: nodeImage}
+	}
 	return kindConfig
+}
+
+// InstallIngressNGINX installs the nginx ingress controller for Kind clusters and waits
+// for it to be ready. This enables Ingress resources to work with the host port mappings
+// configured in generateClusterConfig (host 8080 → container 80).
+func InstallIngressNGINX(ctx context.Context) error {
+	const manifestURL = "https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml"
+
+	resp, err := http.Get(manifestURL)
+	if err != nil {
+		return fmt.Errorf("failed to download nginx ingress manifest: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to download nginx ingress manifest: status %d", resp.StatusCode)
+	}
+
+	manifest, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read nginx ingress manifest: %w", err)
+	}
+
+	if err := kubectl.ApplyYAML(ctx, manifest); err != nil {
+		return fmt.Errorf("failed to apply nginx ingress manifest: %w", err)
+	}
+
+	return nil
+}
+
+// WaitForIngressNGINX waits until the nginx ingress controller pod is ready.
+func WaitForIngressNGINX(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ready, err := ingressControllerReady(ctx)
+		if err == nil && ready {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+	return fmt.Errorf("nginx ingress controller did not become ready within %s", timeout)
+}
+
+func ingressControllerReady(ctx context.Context) (bool, error) {
+	_, cs, err := kubectl.GetClientset()
+	if err != nil {
+		return false, err
+	}
+	pods, err := cs.CoreV1().Pods("ingress-nginx").List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/component=controller",
+	})
+	if err != nil || len(pods.Items) == 0 {
+		return false, err
+	}
+	for _, pod := range pods.Items {
+		for _, cond := range pod.Status.Conditions {
+			if cond.Type == "Ready" && cond.Status == "True" {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }

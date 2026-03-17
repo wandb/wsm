@@ -309,7 +309,7 @@ func DeleteOperator(ctx context.Context, namespace string) error {
 	}
 
 	uninstallClient := action.NewUninstall(actionConfig)
-	uninstallClient.WaitStrategy = "hook-only"
+	uninstallClient.WaitStrategy = "hookOnly"
 	uninstallClient.Timeout = 5 * time.Minute
 
 	_, err = uninstallClient.Run(releaseName)

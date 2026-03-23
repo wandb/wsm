@@ -95,6 +95,7 @@ wsm deploy-v2 [command] [flags]
 - `operator`: Deploy the v2 operator with specified versions and configuration.
   - `--operator-chart-version string`: Operator Chart version (e.g., v2.0.0) (default "1.5.2").
   - `--operator-namespace string`: Namespace for operator (default "wandb-operators").
+  - `--install-cert-manager`: Cert-manager install mode: `auto` (detect and reuse existing), `true` (force install flow), `false` (skip installation) (default "auto").
   - `--include-cr`: Include the WeightsAndBiases Custom Resource in the operator deployment.
   - `--setup-k8s-cluster`: Setup a Kind cluster before deploying.
   - `--cluster-name string`: Name of the Kind cluster (only used with `--setup-k8s-cluster`) (default "kind").

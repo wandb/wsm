@@ -51,28 +51,54 @@ func CreateNamespace(ctx context.Context, namespace string) error {
 	return nil
 }
 
-// InstallCertManager installs cert-manager using kubernetes client
-func InstallCertManager(ctx context.Context) error {
-	const certManagerURL = "https://github.com/cert-manager/cert-manager/releases/download/v1.19.2/cert-manager.yaml"
+const (
+	certManagerNamespace      = "cert-manager"
+	certManagerDeploymentName = "cert-manager"
+	certManagerManifestURL    = "https://github.com/cert-manager/cert-manager/releases/download/v1.19.2/cert-manager.yaml"
+)
 
-	resp, err := http.Get(certManagerURL)
-	if err != nil {
-		return fmt.Errorf("failed to download cert-manager manifest: %w", err)
+// InstallCertManager installs cert-manager.
+// When skipIfPresent is true, installation is skipped if the cert-manager deployment already exists.
+func InstallCertManager(ctx context.Context, skipIfPresent bool) error {
+	if skipIfPresent {
+		deploymentExists, err := certManagerDeploymentExists(ctx)
+		if err != nil {
+			return err
+		}
+		if deploymentExists {
+			return nil
+		}
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to download cert-manager manifest: status code %d", resp.StatusCode)
+	manifest, err := downloadCertManagerManifest()
+	if err != nil {
+		return err
 	}
 
-	manifest, err := io.ReadAll(resp.Body)
-
-	err = kubectl.ApplyYAML(ctx, manifest)
-	if err != nil {
+	if err := kubectl.ApplyYAML(ctx, manifest); err != nil {
 		return fmt.Errorf("failed to apply cert-manager manifest: %w", err)
 	}
 
 	return nil
+}
+
+func downloadCertManagerManifest() ([]byte, error) {
+	resp, err := http.Get(certManagerManifestURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download cert-manager manifest: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to download cert-manager manifest: status code %d", resp.StatusCode)
+	}
+
+	manifest, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read cert-manager manifest: %w", err)
+	}
+
+	return manifest, nil
 }
 
 // WaitForCertManager waits for cert-manager to be ready
@@ -82,47 +108,44 @@ func WaitForCertManager(ctx context.Context, timeout time.Duration) error {
 		return err
 	}
 
-	deployments := []string{"cert-manager", "cert-manager-webhook", "cert-manager-cainjector"}
-
 	return wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-		for _, name := range deployments {
-			deploy, err := cs.AppsV1().Deployments("cert-manager").Get(ctx, name, metav1.GetOptions{})
-			if err != nil {
-				return false, nil
-			}
+		deploy, err := cs.AppsV1().Deployments(certManagerNamespace).Get(ctx, certManagerDeploymentName, metav1.GetOptions{})
+		if err != nil {
+			return false, nil
+		}
 
-			isAvailable := false
-			for _, cond := range deploy.Status.Conditions {
-				if cond.Type == "Available" && cond.Status == corev1.ConditionTrue {
-					isAvailable = true
-					break
-				}
-			}
-			if !isAvailable {
-				return false, nil
+		isAvailable := false
+		for _, cond := range deploy.Status.Conditions {
+			if cond.Type == "Available" && cond.Status == corev1.ConditionTrue {
+				isAvailable = true
+				break
 			}
 		}
-		return true, nil
+		return isAvailable, nil
 	})
+}
+
+func certManagerDeploymentExists(ctx context.Context) (bool, error) {
+	_, cs, err := kubectl.GetClientset()
+	if err != nil {
+		return false, err
+	}
+
+	_, err = cs.AppsV1().Deployments(certManagerNamespace).Get(ctx, certManagerDeploymentName, metav1.GetOptions{})
+	if err == nil {
+		return true, nil
+	}
+	if errors.IsNotFound(err) {
+		return false, nil
+	}
+	return false, fmt.Errorf("failed to check cert-manager deployment %q: %w", certManagerDeploymentName, err)
 }
 
 // DeleteCertManager deletes the cert-manager resources
 func DeleteCertManager(ctx context.Context) error {
-	const manifestURL = "https://github.com/cert-manager/cert-manager/releases/download/v1.19.2/cert-manager.yaml"
-
-	resp, err := http.Get(manifestURL)
+	manifest, err := downloadCertManagerManifest()
 	if err != nil {
-		return fmt.Errorf("failed to download cert-manager manifest for deletion: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to download cert-manager manifest for deletion: status code %d", resp.StatusCode)
-	}
-
-	manifest, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read cert-manager manifest for deletion: %w", err)
+		return fmt.Errorf("failed to prepare cert-manager manifest for deletion: %w", err)
 	}
 
 	// We don't have a DeleteYAML in kubectl, but we can use ApplyYAML with a trick or add DeleteYAML.

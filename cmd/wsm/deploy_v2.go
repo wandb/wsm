@@ -27,6 +27,12 @@ func init() {
 // TODO once an official release publishes a manifest, we should switch to lookup up the most recent non-dev release and not have a default.
 const defaultWandbVersion = "0.78.0-pre.1772047260"
 
+const (
+	certManagerInstallModeAuto  = "auto"
+	certManagerInstallModeTrue  = "true"
+	certManagerInstallModeFalse = "false"
+)
+
 var (
 	wandbCR = &v2.WeightsAndBiases{
 		TypeMeta: metav1.TypeMeta{
@@ -179,6 +185,7 @@ func wandbCreateCmd() *cobra.Command {
 
 func operatorDeployCmd() *cobra.Command {
 	var setupCluster bool
+	var installCertManagerMode string
 	var includeCR bool
 	var clusterName string
 	var workers int
@@ -206,7 +213,7 @@ func operatorDeployCmd() *cobra.Command {
 
 			// Perform the deployment
 			deployStart := time.Now()
-			if err := performDeploy(setupCluster, includeCR, wait, clusterName, workers, operatorChartVersion, wandbVersion, operatorNamespace); err != nil {
+			if err := performDeploy(setupCluster, installCertManagerMode, includeCR, wait, clusterName, workers, operatorChartVersion, wandbVersion, operatorNamespace); err != nil {
 				fmt.Printf("\n✗ Deployment failed: %v\n", err)
 				return err
 			}
@@ -233,16 +240,18 @@ func operatorDeployCmd() *cobra.Command {
 	//cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator image version (e.g., v2.0.0) - defaults to value in the chart")
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "1.5.2", "Operator Chart version (e.g., v2.0.0)")
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
+	cmd.Flags().StringVar(&installCertManagerMode, "install-cert-manager", certManagerInstallModeAuto, "Cert-manager install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
 
 	cmd.Flags().BoolVar(&includeCR, "include-cr", false, "Include the Wandb CR in the operator deployment")
 	return cmd
 }
 
-func performDeploy(setupCluster bool, includeCR bool, wait bool, clusterName string, workers int, operatorChartVersion string, wandbVersion string, operatorNamespace string) error {
+func performDeploy(setupCluster bool, installCertManagerMode string, includeCR bool, wait bool, clusterName string, workers int, operatorChartVersion string, wandbVersion string, operatorNamespace string) error {
 	ctx := context.Background()
+	installCertManagerMode = strings.ToLower(strings.TrimSpace(installCertManagerMode))
 
 	// Calculate total steps based on flags
-	totalSteps := 2 // Always: cert-manager, deploy operator, create CR
+	totalSteps := 2 // Always: ensure cert-manager, deploy operator
 	if setupCluster {
 		totalSteps++
 	}
@@ -270,21 +279,42 @@ func performDeploy(setupCluster bool, includeCR bool, wait bool, clusterName str
 		clusterName = ""
 	}
 
-	// Step 2: Install cert-manager
-	fmt.Printf("[%d/%d] Installing cert-manager...", currentStep, totalSteps)
+	// Step 2: Ensure cert-manager
+	fmt.Printf("[%d/%d] Ensuring cert-manager...", currentStep, totalSteps)
 	start := time.Now()
 
-	if err := operator.InstallCertManager(ctx); err != nil {
+	switch installCertManagerMode {
+	case certManagerInstallModeAuto:
+		if err := operator.InstallCertManager(ctx, true); err != nil {
+			fmt.Println(" ✗")
+			return err
+		}
+	case certManagerInstallModeTrue:
+		if err := operator.InstallCertManager(ctx, false); err != nil {
+			fmt.Println(" ✗")
+			return err
+		}
+	case certManagerInstallModeFalse:
+		// Skip installation and only verify cert-manager readiness below.
+	default:
 		fmt.Println(" ✗")
-		return err
+		return fmt.Errorf("invalid --install-cert-manager value %q (expected: auto, true, false)", installCertManagerMode)
 	}
 
 	if err := operator.WaitForCertManager(ctx, 5*time.Minute); err != nil {
 		fmt.Println(" ✗")
+		if installCertManagerMode == certManagerInstallModeFalse {
+			return fmt.Errorf("cert-manager is not ready and installation is disabled (--install-cert-manager=false): %w", err)
+		}
 		return err
 	}
 
-	fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
+	switch {
+	case installCertManagerMode == certManagerInstallModeFalse:
+		fmt.Printf(" ✓ (%s, installation disabled)\n", time.Since(start).Round(time.Second))
+	default:
+		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
+	}
 	currentStep++
 
 	// Step 3: Create infra-operators wandbNamespace

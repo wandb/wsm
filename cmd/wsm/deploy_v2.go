@@ -276,7 +276,7 @@ func performDeploy(setupCluster bool, installCertManagerMode string, includeCR b
 		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
 		currentStep++
 	} else {
-		clusterName = ""
+		_ = clusterName
 	}
 
 	// Step 2: Ensure cert-manager
@@ -309,8 +309,8 @@ func performDeploy(setupCluster bool, installCertManagerMode string, includeCR b
 		return err
 	}
 
-	switch {
-	case installCertManagerMode == certManagerInstallModeFalse:
+	switch installCertManagerMode {
+	case certManagerInstallModeFalse:
 		fmt.Printf(" ✓ (%s, installation disabled)\n", time.Since(start).Round(time.Second))
 	default:
 		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
@@ -381,7 +381,7 @@ func destroyWandbCR(ctx context.Context, name string, namespace string) error {
 	}
 
 	if !hasMarker {
-		return errors.New("no wsm deployment marker found - W&B instance may not be managed by wsm\n")
+		return errors.New("no wsm deployment marker found - W&B instance may not be managed by wsm")
 	}
 
 	if err := kubectl.DeleteCR(ctx, name, namespace); err != nil {
@@ -493,34 +493,6 @@ func readCRFile(crPath string) (*v2.WeightsAndBiases, error) {
 		return nil, fmt.Errorf("failed to parse CR YAML: %w", err)
 	}
 	return cr, nil
-}
-
-func performDestroy(clusterName string) error {
-	ctx := context.Background()
-
-	hasMarker, err := kubectl.HasDeploymentMarker(ctx, "default", "kind-cluster")
-	if err != nil {
-		return err
-	}
-
-	if !hasMarker {
-		return errors.New("no wsm deployment marker found - cluster may not be managed by wsm\n")
-	}
-
-	fmt.Printf("→ Tearing down cluster '%s'...\n", clusterName)
-
-	// Delete the Kind cluster
-	if err := kind.DeleteCluster(ctx, clusterName); err != nil {
-		return err
-	}
-
-	// Cleanup dist directory
-	if err := kind.CleanupDistDirectory(); err != nil {
-		// Non-fatal, just warn
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
-	}
-
-	return nil
 }
 
 // ClusterCmd returns the cluster command with subcommands

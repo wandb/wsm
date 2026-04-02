@@ -6,14 +6,23 @@ maintaining W&B server instances for airgapped environments and local developmen
 
 ## Install
 
-Operator v2 compatible builds are only available from source at the moment.
-
+Operator v2 compatible builds are only available from source at the moment  
+`pkg-config` is required for installation, run the following command to install it
+```bash
+brew install pkg-config gpgme
+```
+Install WSM from source 
 ```bash
 git clone https://github.com/wandb/wsm
 cd wsm
 git checkout operator-v2
 go build -o wsm ./cmd/wsm
 ./wsm --help
+[optional] sudo mv wsm /usr/local/bin/wsm
+```
+or if you have sudo permissions
+```aiignore
+sudo make install
 ```
 
 ## Usage
@@ -94,6 +103,7 @@ wsm deploy-v2 [command] [flags]
 **Subcommands:**
 - `operator`: Deploy the v2 operator with specified versions and configuration.
   - `--operator-chart-version string`: Operator Chart version (e.g., v2.0.0) (default "1.5.2").
+    - Note: The Chart version specified will determine the image tag of operator deployed based on the [values file](https://github.com/wandb/operator/blob/v2/deploy/operator/values.yaml#L11)
   - `--operator-namespace string`: Namespace for operator (default "wandb-operators").
   - `--install-cert-manager`: Cert-manager install mode: `auto` (detect and reuse existing), `true` (force install flow), `false` (skip installation) (default "auto").
   - `--include-cr`: Include the WeightsAndBiases Custom Resource in the operator deployment.
@@ -180,6 +190,7 @@ wsm download --platform linux/amd64
 - tar
 - kubectl (for deployment)
 - docker (for cluster management and image downloading)
+- pkg-config
 
 ## Support
 

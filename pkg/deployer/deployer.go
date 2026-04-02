@@ -35,7 +35,7 @@ func GetChannelSpec(license string) (*spec.Spec, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	resBody, err := io.ReadAll(resp.Body)
 	if err != nil {

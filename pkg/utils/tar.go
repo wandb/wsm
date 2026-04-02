@@ -13,13 +13,13 @@ func TarDir(sourceDir, tarballPath string) error {
 	if err != nil {
 		return err
 	}
-	defer tarball.Close()
+	defer func() { _ = tarball.Close() }()
 
 	gzipWriter := gzip.NewWriter(tarball)
-	defer gzipWriter.Close()
+	defer func() { _ = gzipWriter.Close() }()
 
 	tarWriter := tar.NewWriter(gzipWriter)
-	defer tarWriter.Close()
+	defer func() { _ = tarWriter.Close() }()
 
 	return filepath.Walk(sourceDir, func(file string, fi os.FileInfo, err error) error {
 		if err != nil {
@@ -42,7 +42,7 @@ func TarDir(sourceDir, tarballPath string) error {
 			if err != nil {
 				return err
 			}
-			defer data.Close()
+			defer func() { _ = data.Close() }()
 			if _, err := io.Copy(tarWriter, data); err != nil {
 				return err
 			}

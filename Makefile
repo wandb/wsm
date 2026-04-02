@@ -8,8 +8,20 @@ ifeq ($(shell uname),Darwin)
 	export LDFLAGS=-w
 endif
 
+ifeq ($(OS),Windows_NT)
+	INSTALL_DIR ?= $(USERPROFILE)/bin
+	BINARY = wsm.exe
+else
+	INSTALL_DIR ?= /usr/local/bin
+	BINARY = wsm
+endif
+
 build:
-	CGO_ENABLED=0 go build -tags containers_image_openpgp -o wsm ./cmd/wsm
+	CGO_ENABLED=0 go build -tags containers_image_openpgp -o $(BINARY) ./cmd/wsm
+
+install: build
+	install -d $(INSTALL_DIR)
+	install $(BINARY) $(INSTALL_DIR)/$(BINARY)
 
 # Modern linter installation
 install-lint:
@@ -51,4 +63,4 @@ safe-update-deps:
 	go get -u ./...
 	go mod tidy
 
-.PHONY: install-lint lint lint-fix fmt test build clean-lint safe-update-deps
+.PHONY: install-lint lint lint-fix fmt test build install clean-lint safe-update-deps

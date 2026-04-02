@@ -190,6 +190,7 @@ wsm download --platform linux/amd64
 - tar
 - kubectl (for deployment)
 - docker (for cluster management and image downloading)
+- pkg-config
 
 ## Support
 

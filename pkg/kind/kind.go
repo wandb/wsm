@@ -95,7 +95,7 @@ func InstallMetricsServer(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to download metrics-server manifest: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("failed to download metrics-server manifest: status code %d", resp.StatusCode)
@@ -194,7 +194,7 @@ func InstallIngressNGINX(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to download nginx ingress manifest: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("failed to download nginx ingress manifest: status %d", resp.StatusCode)

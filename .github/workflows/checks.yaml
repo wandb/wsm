@@ -15,7 +15,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.24
+          go-version: "1.25"
           cache: true
           cache-dependency-path: go.sum
       - name: Install dependencies
@@ -32,15 +32,15 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.24
+          go-version: "1.25"
           cache: true
           cache-dependency-path: go.sum
       - name: Install gpgme dependencies
         run: sudo apt-get update && sudo apt-get install -y libgpgme-dev
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
-          version: v1.64.5
+          version: v2.11.4
           args: --timeout=5m
 
   fmt:
@@ -52,7 +52,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.24
+          go-version: "1.25"
           cache: true
           cache-dependency-path: go.sum
       - name: Format
@@ -69,7 +69,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.24
+          go-version: "1.25"
       - name: Check for changes in go.mod or go.sum
         run: |
           go mod tidy

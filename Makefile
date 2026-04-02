@@ -1,6 +1,6 @@
-GO_VERSION = 1.24.0
+GO_VERSION = 1.25.0
 
-GOLANGCI_LINT_VERSION = v1.64.5
+GOLANGCI_LINT_VERSION = v2.11.4
 
 # Set environment variables to suppress linker warnings on macOS
 ifeq ($(shell uname),Darwin)

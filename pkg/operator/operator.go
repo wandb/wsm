@@ -87,7 +87,7 @@ func downloadCertManagerManifest() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to download cert-manager manifest: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to download cert-manager manifest: status code %d", resp.StatusCode)
@@ -199,7 +199,7 @@ func DeployOperator(ctx context.Context, namespace string, version string) error
 		upgradeClient.WaitStrategy = "hookOnly"
 
 		// Get the chart
-		cp, err := upgradeClient.ChartPathOptions.LocateChart(chartRef, settings)
+		cp, err := upgradeClient.LocateChart(chartRef, settings)
 		if err != nil {
 			return fmt.Errorf("failed to locate chart: %w", err)
 		}
@@ -224,7 +224,7 @@ func DeployOperator(ctx context.Context, namespace string, version string) error
 		installClient.WaitStrategy = "hookOnly"
 
 		// Get the chart
-		cp, err := installClient.ChartPathOptions.LocateChart(chartRef, settings)
+		cp, err := installClient.LocateChart(chartRef, settings)
 		if err != nil {
 			return fmt.Errorf("failed to locate chart: %w", err)
 		}

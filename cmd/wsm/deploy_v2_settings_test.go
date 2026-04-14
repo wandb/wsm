@@ -1,8 +1,11 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -215,5 +218,40 @@ func TestBuildOperatorReleaseValuesTreatsEmptyOTelStringsAsUnset(t *testing.T) {
 	}
 	if got, _, _ := unstructured.NestedString(values, "telemetry", "otel", "serviceName"); got != "wandb-service" {
 		t.Fatalf("expected telemetry.otel.serviceName to fall back to default, got %q", got)
+	}
+}
+
+func TestProcessWandbCRFillsMissingMetadataFromDefaults(t *testing.T) {
+	previousCR := wandbCR
+	t.Cleanup(func() {
+		wandbCR = previousCR
+	})
+
+	crPath := filepath.Join(t.TempDir(), "wandb.yaml")
+	crYAML := []byte(`
+apiVersion: apps.wandb.com/v2
+kind: WeightsAndBiases
+spec:
+  wandb:
+    version: 0.79.0
+`)
+	if err := os.WriteFile(crPath, crYAML, 0o644); err != nil {
+		t.Fatalf("failed to write CR fixture: %v", err)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.Flags().String(flagWandbName, "wandb", "")
+	cmd.Flags().String(flagWandbNamespace, "wandb", "")
+	cmd.Flags().String(flagWandbVersion, "", "")
+
+	if err := processWandbCR(cmd, crPath, "", "default-name", "", "", "default-namespace"); err != nil {
+		t.Fatalf("processWandbCR returned error: %v", err)
+	}
+
+	if got := wandbCR.GetName(); got != "default-name" {
+		t.Fatalf("expected metadata.name to be defaulted, got %q", got)
+	}
+	if got := wandbCR.GetNamespace(); got != "default-namespace" {
+		t.Fatalf("expected metadata.namespace to be defaulted, got %q", got)
 	}
 }

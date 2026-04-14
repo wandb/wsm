@@ -473,11 +473,11 @@ func processWandbCR(cmd *cobra.Command, crFile string, wandbVersion string, wand
 		wandbCR.SetKind("WeightsAndBiases")
 	}
 
-	if crFile == "" || cmd.Flags().Changed(flagWandbName) {
+	if strings.TrimSpace(wandbCR.GetName()) == "" || cmd.Flags().Changed(flagWandbName) {
 		wandbCR.SetName(wandbName)
 	}
 
-	if crFile == "" || cmd.Flags().Changed(flagWandbNamespace) {
+	if strings.TrimSpace(wandbCR.GetNamespace()) == "" || cmd.Flags().Changed(flagWandbNamespace) {
 		wandbCR.SetNamespace(wandbNamespace)
 	}
 

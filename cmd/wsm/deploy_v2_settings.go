@@ -241,7 +241,10 @@ func applyWandbCROverrides(cr *unstructured.Unstructured, overrides wandbCROverr
 
 	switch {
 	case normalizedMode != nil && *normalizedMode == "":
-		unstructured.RemoveNestedField(cr.Object, "spec", "networking", "mode")
+		if overrides.hasAdditionalNetworkingConfig() {
+			return fmt.Errorf("--%s=none cannot be combined with other networking settings", flagNetworkingMode)
+		}
+		removeNestedFieldAndEmptyParents(cr.Object, "spec", "networking")
 	case normalizedMode != nil:
 		if err := unstructured.SetNestedField(cr.Object, *normalizedMode, "spec", "networking", "mode"); err != nil {
 			return err
@@ -391,6 +394,11 @@ func buildOperatorReleaseValues(managedNamespace string, overrides operatorTelem
 func (o operatorTelemetryOverrides) changed() bool {
 	return o.mode != nil || o.namespace != nil || o.otelSecretName != nil || o.otelProtocol != nil ||
 		o.otelServiceName != nil || o.resourceAttributes != nil || o.forwardEndpoint != nil
+}
+
+func (o wandbCROverrides) hasAdditionalNetworkingConfig() bool {
+	return o.ingressClassName != nil || o.networkingAnnotations != nil || o.networkingTLSSecretName != nil ||
+		o.networkingCertManagerIssuer != nil || o.networkingCertManagerClusterRef != nil
 }
 
 func normalizeNetworkingMode(mode *string) (*string, error) {

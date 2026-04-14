@@ -108,6 +108,48 @@ func TestApplyWandbCROverridesRejectsIngressClassWithGatewayMode(t *testing.T) {
 	}
 }
 
+func TestApplyWandbCROverridesNetworkingModeNoneRemovesEntireNetworkingTree(t *testing.T) {
+	cr := defaultWandbCR()
+	if err := unstructured.SetNestedField(cr.Object, "gateway", "spec", "networking", "mode"); err != nil {
+		t.Fatalf("failed to seed networking mode: %v", err)
+	}
+	if err := unstructured.SetNestedField(cr.Object, "existing", "spec", "networking", "ingress", "ingressClassName"); err != nil {
+		t.Fatalf("failed to seed ingress class: %v", err)
+	}
+	if err := unstructured.SetNestedField(cr.Object, "listener", "spec", "networking", "gatewayAPI", "listenerName"); err != nil {
+		t.Fatalf("failed to seed gateway listener: %v", err)
+	}
+	if err := unstructured.SetNestedField(cr.Object, "tls-secret", "spec", "networking", "tls", "secretName"); err != nil {
+		t.Fatalf("failed to seed tls secret: %v", err)
+	}
+	if err := unstructured.SetNestedStringMap(cr.Object, map[string]string{"foo": "bar"}, "spec", "networking", "annotations"); err != nil {
+		t.Fatalf("failed to seed annotations: %v", err)
+	}
+
+	mode := "none"
+	if err := applyWandbCROverrides(cr, wandbCROverrides{networkingMode: &mode}); err != nil {
+		t.Fatalf("applyWandbCROverrides returned error: %v", err)
+	}
+
+	if _, found, _ := unstructured.NestedFieldNoCopy(cr.Object, "spec", "networking"); found {
+		t.Fatalf("expected spec.networking to be removed entirely")
+	}
+}
+
+func TestApplyWandbCROverridesRejectsNetworkingModeNoneWithOtherNetworkingFlags(t *testing.T) {
+	cr := defaultWandbCR()
+	mode := "none"
+	ingressClass := "nginx"
+
+	err := applyWandbCROverrides(cr, wandbCROverrides{
+		networkingMode:   &mode,
+		ingressClassName: &ingressClass,
+	})
+	if err == nil {
+		t.Fatalf("expected error when networking mode none is combined with other networking settings")
+	}
+}
+
 func TestBuildOperatorReleaseValuesForwardMode(t *testing.T) {
 	mode := "forward"
 	secretName := "wandb-otel-connection"

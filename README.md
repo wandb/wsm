@@ -109,6 +109,9 @@ wsm deploy-v2 [command] [flags]
   - `--operator-telemetry-mode string`: Operator chart telemetry mode: `off`, `forward`, or `full`.
   - `--operator-telemetry-namespace string`: Managed namespace for operator telemetry resources (defaults to the W&B CR namespace).
   - `--operator-telemetry-otel-secret-name string`: Secret name used for operator-managed telemetry connection settings.
+  - `--operator-telemetry-otel-protocol string`: OTLP protocol for operator-managed telemetry (defaults to `http/protobuf`).
+  - `--operator-telemetry-otel-service-name string`: OTEL service name for operator-managed telemetry (defaults to `wandb-service`).
+  - `--operator-telemetry-otel-resource-attributes string`: OTEL resource attributes for operator-managed telemetry.
   - `--operator-telemetry-forward-endpoint string`: Forward OTLP telemetry to this endpoint when telemetry mode is `forward`.
   - `--include-cr`: Include the WeightsAndBiases Custom Resource in the operator deployment.
   - `--setup-k8s-cluster`: Setup a Kind cluster before deploying.

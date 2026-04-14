@@ -9,17 +9,46 @@ import (
 func TestApplyWandbCROverridesCurrentSchema(t *testing.T) {
 	cr := defaultWandbCR()
 
+	host := "https://wandb.example.com"
+	mode := "ingress"
+	ingressClass := "nginx"
+	tlsSecret := "wandb-tls"
+	clusterIssuer := "letsencrypt"
 	disableTelemetry := false
 	enableMySQLTelemetry := true
 
 	err := applyWandbCROverrides(cr, wandbCROverrides{
-		managedInfraTelemetryEnabled: &disableTelemetry,
-		mysqlTelemetryEnabled:        &enableMySQLTelemetry,
+		hostname:                        &host,
+		networkingMode:                  &mode,
+		ingressClassName:                &ingressClass,
+		networkingAnnotations:           map[string]string{" nginx.ingress.kubernetes.io/proxy-body-size ": " 0 "},
+		networkingTLSSecretName:         &tlsSecret,
+		networkingCertManagerClusterRef: &clusterIssuer,
+		managedInfraTelemetryEnabled:    &disableTelemetry,
+		mysqlTelemetryEnabled:           &enableMySQLTelemetry,
 	})
 	if err != nil {
 		t.Fatalf("applyWandbCROverrides returned error: %v", err)
 	}
 
+	if got, _, _ := unstructured.NestedString(cr.Object, "spec", "wandb", "hostname"); got != host {
+		t.Fatalf("expected hostname %q, got %q", host, got)
+	}
+	if got, _, _ := unstructured.NestedString(cr.Object, "spec", "networking", "mode"); got != "ingress" {
+		t.Fatalf("expected networking mode ingress, got %q", got)
+	}
+	if got, _, _ := unstructured.NestedString(cr.Object, "spec", "networking", "ingress", "ingressClassName"); got != ingressClass {
+		t.Fatalf("expected ingressClassName %q, got %q", ingressClass, got)
+	}
+	if got, _, _ := unstructured.NestedString(cr.Object, "spec", "networking", "tls", "secretName"); got != tlsSecret {
+		t.Fatalf("expected tls secret %q, got %q", tlsSecret, got)
+	}
+	if got, _, _ := unstructured.NestedString(cr.Object, "spec", "networking", "tls", "certManager", "clusterIssuer"); got != clusterIssuer {
+		t.Fatalf("expected cluster issuer %q, got %q", clusterIssuer, got)
+	}
+	if got, _, _ := unstructured.NestedStringMap(cr.Object, "spec", "networking", "annotations"); got["nginx.ingress.kubernetes.io/proxy-body-size"] != "0" {
+		t.Fatalf("expected trimmed annotation value, got %#v", got)
+	}
 	if got, _, _ := unstructured.NestedBool(cr.Object, "spec", "mysql", "managedMysql", "telemetry", "enabled"); !got {
 		t.Fatalf("expected mysql telemetry to remain enabled")
 	}
@@ -62,6 +91,20 @@ func TestApplyWandbCROverridesFallsBackToOldTelemetryPaths(t *testing.T) {
 	}
 	if _, found, _ := unstructured.NestedFieldNoCopy(cr.Object, "spec", "mysql", "managedMysql"); found {
 		t.Fatalf("did not expect managedMysql path to be created for old-style CR")
+	}
+}
+
+func TestApplyWandbCROverridesRejectsIngressClassWithGatewayMode(t *testing.T) {
+	cr := defaultWandbCR()
+	mode := "gateway"
+	ingressClass := "nginx"
+
+	err := applyWandbCROverrides(cr, wandbCROverrides{
+		networkingMode:   &mode,
+		ingressClassName: &ingressClass,
+	})
+	if err == nil {
+		t.Fatalf("expected error when ingress class is combined with gateway mode")
 	}
 }
 

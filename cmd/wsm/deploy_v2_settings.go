@@ -11,12 +11,22 @@ import (
 )
 
 const (
+	flagCRFile                          = "cr-file"
+	flagHostname                        = "hostname"
+	flagIngressClassName                = "ingress-class-name"
+	flagLicense                         = "license"
+	flagLicenseFile                     = "license-file"
 	flagManagedInfraTelemetryEnabled    = "managed-infra-telemetry-enabled"
 	flagMySQLTelemetryEnabled           = "mysql-telemetry-enabled"
 	flagRedisTelemetryEnabled           = "redis-telemetry-enabled"
 	flagKafkaTelemetryEnabled           = "kafka-telemetry-enabled"
 	flagObjectStoreTelemetryEnabled     = "object-store-telemetry-enabled"
 	flagClickHouseTelemetryEnabled      = "clickhouse-telemetry-enabled"
+	flagNetworkingAnnotations           = "networking-annotations"
+	flagNetworkingMode                  = "networking-mode"
+	flagNetworkingTLSSecretName         = "networking-tls-secret-name"
+	flagNetworkingCertManagerIssuer     = "networking-cert-manager-issuer"
+	flagNetworkingCertManagerClusterRef = "networking-cert-manager-cluster-issuer"
 	flagOperatorTelemetryForwardURL     = "operator-telemetry-forward-endpoint"
 	flagOperatorTelemetryMode           = "operator-telemetry-mode"
 	flagOperatorTelemetryNamespace      = "operator-telemetry-namespace"
@@ -30,12 +40,19 @@ const (
 )
 
 type wandbCROverrides struct {
-	managedInfraTelemetryEnabled *bool
-	mysqlTelemetryEnabled        *bool
-	redisTelemetryEnabled        *bool
-	kafkaTelemetryEnabled        *bool
-	objectStoreTelemetryEnabled  *bool
-	clickHouseTelemetryEnabled   *bool
+	hostname                        *string
+	networkingMode                  *string
+	ingressClassName                *string
+	networkingAnnotations           map[string]string
+	networkingTLSSecretName         *string
+	networkingCertManagerIssuer     *string
+	networkingCertManagerClusterRef *string
+	managedInfraTelemetryEnabled    *bool
+	mysqlTelemetryEnabled           *bool
+	redisTelemetryEnabled           *bool
+	kafkaTelemetryEnabled           *bool
+	objectStoreTelemetryEnabled     *bool
+	clickHouseTelemetryEnabled      *bool
 }
 
 type operatorTelemetryOverrides struct {
@@ -130,6 +147,24 @@ func extractWandbCROverrides(cmd *cobra.Command) (wandbCROverrides, error) {
 	var overrides wandbCROverrides
 	var err error
 
+	if overrides.hostname, err = stringFlagIfChanged(cmd, flagHostname); err != nil {
+		return overrides, err
+	}
+	if overrides.networkingMode, err = stringFlagIfChanged(cmd, flagNetworkingMode); err != nil {
+		return overrides, err
+	}
+	if overrides.ingressClassName, err = stringFlagIfChanged(cmd, flagIngressClassName); err != nil {
+		return overrides, err
+	}
+	if overrides.networkingTLSSecretName, err = stringFlagIfChanged(cmd, flagNetworkingTLSSecretName); err != nil {
+		return overrides, err
+	}
+	if overrides.networkingCertManagerIssuer, err = stringFlagIfChanged(cmd, flagNetworkingCertManagerIssuer); err != nil {
+		return overrides, err
+	}
+	if overrides.networkingCertManagerClusterRef, err = stringFlagIfChanged(cmd, flagNetworkingCertManagerClusterRef); err != nil {
+		return overrides, err
+	}
 	if overrides.managedInfraTelemetryEnabled, err = boolFlagIfChanged(cmd, flagManagedInfraTelemetryEnabled); err != nil {
 		return overrides, err
 	}
@@ -147,6 +182,13 @@ func extractWandbCROverrides(cmd *cobra.Command) (wandbCROverrides, error) {
 	}
 	if overrides.clickHouseTelemetryEnabled, err = boolFlagIfChanged(cmd, flagClickHouseTelemetryEnabled); err != nil {
 		return overrides, err
+	}
+	if cmd.Flags().Changed(flagNetworkingAnnotations) {
+		annotations, err := cmd.Flags().GetStringToString(flagNetworkingAnnotations)
+		if err != nil {
+			return overrides, err
+		}
+		overrides.networkingAnnotations = annotations
 	}
 
 	return overrides, nil
@@ -182,6 +224,63 @@ func extractOperatorTelemetryOverrides(cmd *cobra.Command) (operatorTelemetryOve
 }
 
 func applyWandbCROverrides(cr *unstructured.Unstructured, overrides wandbCROverrides) error {
+	if overrides.hostname != nil {
+		setOrRemoveNestedString(cr.Object, overrides.hostname, "spec", "wandb", "hostname")
+	}
+
+	mode := overrides.networkingMode
+	if mode == nil && overrides.ingressClassName != nil {
+		defaultMode := "ingress"
+		mode = &defaultMode
+	}
+
+	normalizedMode, err := normalizeNetworkingMode(mode)
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case normalizedMode != nil && *normalizedMode == "":
+		unstructured.RemoveNestedField(cr.Object, "spec", "networking", "mode")
+	case normalizedMode != nil:
+		if err := unstructured.SetNestedField(cr.Object, *normalizedMode, "spec", "networking", "mode"); err != nil {
+			return err
+		}
+	}
+
+	if normalizedMode != nil {
+		switch *normalizedMode {
+		case "ingress":
+			removeNestedFieldAndEmptyParents(cr.Object, "spec", "networking", "gatewayAPI")
+		case "gateway":
+			removeNestedFieldAndEmptyParents(cr.Object, "spec", "networking", "ingress")
+		}
+	}
+
+	if overrides.ingressClassName != nil {
+		if normalizedMode != nil && *normalizedMode == "gateway" {
+			return fmt.Errorf("%s requires --%s=ingress", flagIngressClassName, flagNetworkingMode)
+		}
+		setOrRemoveNestedString(cr.Object, overrides.ingressClassName, "spec", "networking", "ingress", "ingressClassName")
+	}
+
+	if overrides.networkingAnnotations != nil {
+		if len(overrides.networkingAnnotations) == 0 {
+			removeNestedFieldAndEmptyParents(cr.Object, "spec", "networking", "annotations")
+		} else if err := unstructured.SetNestedStringMap(cr.Object, sanitizeStringMap(overrides.networkingAnnotations), "spec", "networking", "annotations"); err != nil {
+			return err
+		}
+	}
+
+	setOrRemoveNestedString(cr.Object, overrides.networkingTLSSecretName, "spec", "networking", "tls", "secretName")
+	setOrRemoveNestedString(cr.Object, overrides.networkingCertManagerClusterRef, "spec", "networking", "tls", "certManager", "clusterIssuer")
+	setOrRemoveNestedString(cr.Object, overrides.networkingCertManagerIssuer, "spec", "networking", "tls", "certManager", "issuer")
+
+	removeEmptyMap(cr.Object, "spec", "networking", "tls", "certManager")
+	removeEmptyMap(cr.Object, "spec", "networking", "tls")
+	removeEmptyMap(cr.Object, "spec", "networking", "ingress")
+	removeEmptyMap(cr.Object, "spec", "networking")
+
 	if overrides.managedInfraTelemetryEnabled != nil {
 		for _, component := range []string{"mysql", "redis", "kafka", "objectStore", "clickhouse"} {
 			if err := setManagedInfraTelemetry(cr, component, *overrides.managedInfraTelemetryEnabled); err != nil {
@@ -294,6 +393,25 @@ func (o operatorTelemetryOverrides) changed() bool {
 		o.otelServiceName != nil || o.resourceAttributes != nil || o.forwardEndpoint != nil
 }
 
+func normalizeNetworkingMode(mode *string) (*string, error) {
+	if mode == nil {
+		return nil, nil
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(*mode))
+	switch normalized {
+	case "", "none":
+		normalized = ""
+	case "ingress":
+	case "gateway", "gatewayapi":
+		normalized = "gateway"
+	default:
+		return nil, fmt.Errorf("networking mode must be one of \"none\", \"ingress\", or \"gateway\"")
+	}
+
+	return &normalized, nil
+}
+
 func setManagedInfraTelemetry(cr *unstructured.Unstructured, component string, enabled bool) error {
 	path := managedInfraTelemetryPath(cr.Object, component)
 	return unstructured.SetNestedField(cr.Object, enabled, append(path, "telemetry", "enabled")...)
@@ -391,6 +509,23 @@ func removeEmptyMap(obj map[string]interface{}, fields ...string) {
 func hasNestedField(obj map[string]interface{}, fields ...string) bool {
 	_, found, err := unstructured.NestedFieldNoCopy(obj, fields...)
 	return err == nil && found
+}
+
+func sanitizeStringMap(values map[string]string) map[string]string {
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		out[trimmedKey] = strings.TrimSpace(value)
+	}
+	return out
+}
+
+func wandbCRUsesIngress(cr *unstructured.Unstructured) bool {
+	mode, found, err := unstructured.NestedString(cr.Object, "spec", "networking", "mode")
+	return err == nil && found && strings.EqualFold(mode, "ingress")
 }
 
 func stringOrDefault(value *string, fallback string) string {

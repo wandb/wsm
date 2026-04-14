@@ -112,6 +112,7 @@ wsm deploy-v2 [command] [flags]
   - `--operator-telemetry-forward-endpoint string`: Forward OTLP telemetry to this endpoint when telemetry mode is `forward`.
   - `--include-cr`: Include the WeightsAndBiases Custom Resource in the operator deployment.
   - `--setup-k8s-cluster`: Setup a Kind cluster before deploying.
+    - When used with `--include-cr` and `--networking-mode ingress`, WSM also installs `ingress-nginx` in the Kind cluster.
   - `--cluster-name string`: Name of the Kind cluster (only used with `--setup-k8s-cluster`) (default "kind").
   - `--workers int`: Number of worker nodes (only used with `--setup-k8s-cluster`).
   - *Accepts all flags listed under `wandb deploy` below (Used with `--include-cr`).*
@@ -120,11 +121,18 @@ wsm deploy-v2 [command] [flags]
     - `--cr-file string`: Path to WeightsAndBiases CR YAML (uses built-in default if not provided).
     - `--license string`: W&B license string (optional, injected into spec.wandb.license).
     - `--license-file string`: Path to W&B license file (optional, injected into spec.wandb.license).
+    - `--hostname string`: Override `spec.wandb.hostname`.
     - `--wandb-name string`: Name of the W&B instance (default "wandb").
     - `--wandb-namespace string`: Namespace for CR (default "wandb").
     - `--wandb-version string`: Server manifest version (e.g., 0.76.1).
     - `--managed-infra-telemetry-enabled[=true|false]`: Set telemetry for all managed infrastructure components.
     - `--mysql-telemetry-enabled`, `--redis-telemetry-enabled`, `--kafka-telemetry-enabled`, `--object-store-telemetry-enabled`, `--clickhouse-telemetry-enabled`: Override telemetry per managed component.
+    - `--networking-mode string`: Set `spec.networking.mode` to `none`, `ingress`, or `gateway`.
+    - `--ingress-class-name string`: Set `spec.networking.ingress.ingressClassName`.
+    - `--networking-annotations key=value,key2=value2`: Set `spec.networking.annotations`.
+    - `--networking-tls-secret-name string`: Set `spec.networking.tls.secretName`.
+    - `--networking-cert-manager-cluster-issuer string`: Set `spec.networking.tls.certManager.clusterIssuer`.
+    - `--networking-cert-manager-issuer string`: Set `spec.networking.tls.certManager.issuer`.
   - `destroy`: Destroy an instance of W&B.
     - `--wandb-name string`: Name of the W&B instance (default "wandb").
     - `--wandb-namespace string`: Namespace for CR (default "wandb").

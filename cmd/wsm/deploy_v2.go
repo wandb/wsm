@@ -57,12 +57,19 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
 	cmd.PersistentFlags().String("wandb-version", "", "Server manifest version (e.g., 0.76.1)")
 	cmd.PersistentFlags().String("wandb-namespace", "wandb", "Namespace for CR")
+	cmd.PersistentFlags().String(flagHostname, "", "Override spec.wandb.hostname in the generated CR")
 	cmd.PersistentFlags().Bool(flagManagedInfraTelemetryEnabled, false, "Set telemetry.enabled for all managed infrastructure components (use =false to disable)")
 	cmd.PersistentFlags().Bool(flagMySQLTelemetryEnabled, false, "Set spec.mysql managed telemetry.enabled (use =false to disable)")
 	cmd.PersistentFlags().Bool(flagRedisTelemetryEnabled, false, "Set spec.redis managed telemetry.enabled (use =false to disable)")
 	cmd.PersistentFlags().Bool(flagKafkaTelemetryEnabled, false, "Set spec.kafka managed telemetry.enabled (use =false to disable)")
 	cmd.PersistentFlags().Bool(flagObjectStoreTelemetryEnabled, false, "Set spec.objectStore managed telemetry.enabled (use =false to disable)")
 	cmd.PersistentFlags().Bool(flagClickHouseTelemetryEnabled, false, "Set spec.clickhouse managed telemetry.enabled (use =false to disable)")
+	cmd.PersistentFlags().String(flagNetworkingMode, "", "Set spec.networking.mode: none, ingress, or gateway")
+	cmd.PersistentFlags().String(flagIngressClassName, "", "Set spec.networking.ingress.ingressClassName")
+	cmd.PersistentFlags().StringToString(flagNetworkingAnnotations, map[string]string{}, "Set spec.networking.annotations (key=value,key2=value2)")
+	cmd.PersistentFlags().String(flagNetworkingTLSSecretName, "", "Set spec.networking.tls.secretName")
+	cmd.PersistentFlags().String(flagNetworkingCertManagerClusterRef, "", "Set spec.networking.tls.certManager.clusterIssuer")
+	cmd.PersistentFlags().String(flagNetworkingCertManagerIssuer, "", "Set spec.networking.tls.certManager.issuer")
 	// TODO readd this when the CR reports ready properly
 	//cmd.Flags().Bool("wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
 
@@ -235,10 +242,14 @@ func operatorDeployCmd() *cobra.Command {
 func performDeploy(setupCluster bool, installCertManagerMode string, includeCR bool, wait bool, clusterName string, workers int, operatorChartVersion string, operatorNamespace string, operatorReleaseValues map[string]interface{}) error {
 	ctx := context.Background()
 	installCertManagerMode = strings.ToLower(strings.TrimSpace(installCertManagerMode))
+	installIngressController := setupCluster && includeCR && wandbCRUsesIngress(wandbCR)
 
 	// Calculate total steps based on flags
 	totalSteps := 2 // Always: ensure cert-manager, deploy operator
 	if setupCluster {
+		totalSteps++
+	}
+	if installIngressController {
 		totalSteps++
 	}
 	if includeCR {
@@ -263,6 +274,23 @@ func performDeploy(setupCluster bool, installCertManagerMode string, includeCR b
 		currentStep++
 	} else {
 		_ = clusterName
+	}
+
+	if installIngressController {
+		fmt.Printf("[%d/%d] Installing ingress-nginx...", currentStep, totalSteps)
+		start := time.Now()
+
+		if err := kind.InstallIngressNGINX(ctx); err != nil {
+			fmt.Println(" ✗")
+			return err
+		}
+		if err := kind.WaitForIngressNGINX(ctx, 5*time.Minute); err != nil {
+			fmt.Println(" ✗")
+			return err
+		}
+
+		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
+		currentStep++
 	}
 
 	// Step 2: Ensure cert-manager

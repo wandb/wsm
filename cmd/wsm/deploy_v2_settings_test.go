@@ -194,3 +194,26 @@ func TestBuildOperatorReleaseValuesRequiresModeForOtherFlags(t *testing.T) {
 		t.Fatalf("expected error when operator telemetry flags are set without a mode")
 	}
 }
+
+func TestBuildOperatorReleaseValuesTreatsEmptyOTelStringsAsUnset(t *testing.T) {
+	mode := "full"
+	secretName := "wandb-otel-connection"
+	empty := "   "
+
+	values, err := buildOperatorReleaseValues("wandb", operatorTelemetryOverrides{
+		mode:            &mode,
+		otelSecretName:  &secretName,
+		otelProtocol:    &empty,
+		otelServiceName: &empty,
+	})
+	if err != nil {
+		t.Fatalf("buildOperatorReleaseValues returned error: %v", err)
+	}
+
+	if got, _, _ := unstructured.NestedString(values, "telemetry", "otel", "protocol"); got != "http/protobuf" {
+		t.Fatalf("expected telemetry.otel.protocol to fall back to default, got %q", got)
+	}
+	if got, _, _ := unstructured.NestedString(values, "telemetry", "otel", "serviceName"); got != "wandb-service" {
+		t.Fatalf("expected telemetry.otel.serviceName to fall back to default, got %q", got)
+	}
+}

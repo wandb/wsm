@@ -540,5 +540,9 @@ func stringOrDefault(value *string, fallback string) string {
 	if value == nil {
 		return fallback
 	}
-	return strings.TrimSpace(*value)
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return fallback
+	}
+	return trimmed
 }

@@ -12,11 +12,7 @@ import (
 	"github.com/wandb/wsm/pkg/kind"
 	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/operator"
-	"gopkg.in/yaml.v3"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"knative.dev/pkg/ptr"
-
-	"github.com/wandb/operator/api/v2"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func init() {
@@ -34,41 +30,7 @@ const (
 )
 
 var (
-	wandbCR = &v2.WeightsAndBiases{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "apps.wandb.com/v2",
-			Kind:       "WeightsAndBiases",
-		},
-		Spec: v2.WeightsAndBiasesSpec{
-			Wandb: v2.WandbAppSpec{
-				Hostname: "http://localhost:8080",
-				Features: map[string]bool{"proxy": true},
-				InternalServiceAuth: v2.InternalServiceAuth{
-					Enabled: ptr.Bool(true),
-				},
-			},
-			MySQL: v2.WBMySQLSpec{
-				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
-				Telemetry:   v2.Telemetry{Enabled: true},
-			},
-			Redis: v2.WBRedisSpec{
-				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
-				Telemetry:   v2.Telemetry{Enabled: true},
-			},
-			Kafka: v2.WBKafkaSpec{
-				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
-				Telemetry:   v2.Telemetry{Enabled: true},
-			},
-			Minio: v2.WBMinioSpec{
-				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
-				Telemetry:   v2.Telemetry{Enabled: true},
-			},
-			ClickHouse: v2.WBClickHouseSpec{
-				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
-				Telemetry:   v2.Telemetry{Enabled: true},
-			},
-		},
-	}
+	wandbCR = defaultWandbCR()
 )
 
 // DeployV2Cmd returns the deploy-v2 command with subcommands
@@ -95,6 +57,12 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
 	cmd.PersistentFlags().String("wandb-version", "", "Server manifest version (e.g., 0.76.1)")
 	cmd.PersistentFlags().String("wandb-namespace", "wandb", "Namespace for CR")
+	cmd.PersistentFlags().Bool(flagManagedInfraTelemetryEnabled, false, "Set telemetry.enabled for all managed infrastructure components (use =false to disable)")
+	cmd.PersistentFlags().Bool(flagMySQLTelemetryEnabled, false, "Set spec.mysql managed telemetry.enabled (use =false to disable)")
+	cmd.PersistentFlags().Bool(flagRedisTelemetryEnabled, false, "Set spec.redis managed telemetry.enabled (use =false to disable)")
+	cmd.PersistentFlags().Bool(flagKafkaTelemetryEnabled, false, "Set spec.kafka managed telemetry.enabled (use =false to disable)")
+	cmd.PersistentFlags().Bool(flagObjectStoreTelemetryEnabled, false, "Set spec.objectStore managed telemetry.enabled (use =false to disable)")
+	cmd.PersistentFlags().Bool(flagClickHouseTelemetryEnabled, false, "Set spec.clickhouse managed telemetry.enabled (use =false to disable)")
 	// TODO readd this when the CR reports ready properly
 	//cmd.Flags().Bool("wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
 
@@ -156,7 +124,7 @@ func wandbCreateCmd() *cobra.Command {
 
 			ctx := context.Background()
 
-			err := processWandbCR(crFile, wandbVersion, wandbName, license, licenseFile, wandbNamespace)
+			err := processWandbCR(cmd, crFile, wandbVersion, wandbName, license, licenseFile, wandbNamespace)
 			if err != nil {
 				return err
 			}
@@ -170,7 +138,7 @@ func wandbCreateCmd() *cobra.Command {
 			if wait {
 				fmt.Println("Waiting for W&B instance to be ready...")
 
-				if err := operator.WaitForCRReady(ctx, wandbCR.Namespace, wandbCR.Name, 30*time.Minute); err != nil {
+				if err := operator.WaitForCRReady(ctx, wandbCR.GetNamespace(), wandbCR.GetName(), 30*time.Minute); err != nil {
 					fmt.Println(" ✗")
 					return err
 				}
@@ -192,6 +160,7 @@ func operatorDeployCmd() *cobra.Command {
 	//var operatorVersion string
 	var operatorChartVersion string
 	var operatorNamespace string
+	var operatorReleaseValues map[string]interface{}
 
 	cmd := &cobra.Command{
 		Use:   "operator",
@@ -206,14 +175,24 @@ func operatorDeployCmd() *cobra.Command {
 			wandbName, _ := cmd.Flags().GetString("wandb-name")
 			wait, _ := cmd.Flags().GetBool("wait")
 
-			err := processWandbCR(crFile, wandbVersion, wandbName, license, licenseFile, wandbNamespace)
+			err := processWandbCR(cmd, crFile, wandbVersion, wandbName, license, licenseFile, wandbNamespace)
+			if err != nil {
+				return err
+			}
+
+			telemetryOverrides, err := extractOperatorTelemetryOverrides(cmd)
+			if err != nil {
+				return err
+			}
+
+			operatorReleaseValues, err = buildOperatorReleaseValues(wandbCR.GetNamespace(), telemetryOverrides)
 			if err != nil {
 				return err
 			}
 
 			// Perform the deployment
 			deployStart := time.Now()
-			if err := performDeploy(setupCluster, installCertManagerMode, includeCR, wait, clusterName, workers, operatorChartVersion, wandbVersion, operatorNamespace); err != nil {
+			if err := performDeploy(setupCluster, installCertManagerMode, includeCR, wait, clusterName, workers, operatorChartVersion, operatorNamespace, operatorReleaseValues); err != nil {
 				fmt.Printf("\n✗ Deployment failed: %v\n", err)
 				return err
 			}
@@ -225,8 +204,8 @@ func operatorDeployCmd() *cobra.Command {
 			if setupCluster {
 				fmt.Printf("  • Kubectl context: kind-%s\n", clusterName)
 			}
-			fmt.Printf("  • Namespace: %s\n", wandbNamespace)
-			fmt.Printf("  • Status: kubectl get wandb -n %s\n", wandbNamespace)
+			fmt.Printf("  • Namespace: %s\n", wandbCR.GetNamespace())
+			fmt.Printf("  • Status: kubectl get wandb -n %s\n", wandbCR.GetNamespace())
 			fmt.Println()
 			return nil
 		},
@@ -241,12 +220,19 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "1.5.2", "Operator Chart version (e.g., v2.0.0)")
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
 	cmd.Flags().StringVar(&installCertManagerMode, "install-cert-manager", certManagerInstallModeAuto, "Cert-manager install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
+	cmd.Flags().String(flagOperatorTelemetryMode, "", "Operator chart telemetry mode: off, forward, or full")
+	cmd.Flags().String(flagOperatorTelemetryNamespace, "", "Managed namespace for operator telemetry resources (defaults to the W&B CR namespace)")
+	cmd.Flags().String(flagOperatorTelemetryOTelSecretName, "", "Secret name for operator-managed telemetry connection settings")
+	cmd.Flags().String(flagOperatorTelemetryOTelProtocol, "", "OTLP protocol for operator-managed telemetry (defaults to http/protobuf)")
+	cmd.Flags().String(flagOperatorTelemetryOTelService, "", "OTEL service name for operator-managed telemetry (defaults to wandb-service)")
+	cmd.Flags().String(flagOperatorTelemetryOTelResources, "", "OTEL resource attributes for operator-managed telemetry")
+	cmd.Flags().String(flagOperatorTelemetryForwardURL, "", "Forward OTLP telemetry to this endpoint when operator telemetry mode is forward")
 
 	cmd.Flags().BoolVar(&includeCR, "include-cr", false, "Include the Wandb CR in the operator deployment")
 	return cmd
 }
 
-func performDeploy(setupCluster bool, installCertManagerMode string, includeCR bool, wait bool, clusterName string, workers int, operatorChartVersion string, wandbVersion string, operatorNamespace string) error {
+func performDeploy(setupCluster bool, installCertManagerMode string, includeCR bool, wait bool, clusterName string, workers int, operatorChartVersion string, operatorNamespace string, operatorReleaseValues map[string]interface{}) error {
 	ctx := context.Background()
 	installCertManagerMode = strings.ToLower(strings.TrimSpace(installCertManagerMode))
 
@@ -326,7 +312,7 @@ func performDeploy(setupCluster bool, installCertManagerMode string, includeCR b
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
 	start = time.Now()
 
-	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion); err != nil {
+	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, operatorReleaseValues); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -362,7 +348,7 @@ func performDeploy(setupCluster bool, installCertManagerMode string, includeCR b
 			fmt.Printf("[%d/%d] Waiting for W&B instance to be ready...", currentStep, totalSteps)
 			start = time.Now()
 
-			if err := operator.WaitForCRReady(ctx, wandbCR.Namespace, wandbCR.Name, 30*time.Minute); err != nil {
+			if err := operator.WaitForCRReady(ctx, wandbCR.GetNamespace(), wandbCR.GetName(), 30*time.Minute); err != nil {
 				fmt.Println(" ✗")
 				return err
 			}
@@ -396,7 +382,7 @@ func destroyWandbCR(ctx context.Context, name string, namespace string) error {
 }
 
 func deployWandbCR(ctx context.Context) error {
-	if err := operator.CreateNamespace(ctx, wandbCR.Namespace); err != nil {
+	if err := operator.CreateNamespace(ctx, wandbCR.GetNamespace()); err != nil {
 		return err
 	}
 
@@ -405,7 +391,7 @@ func deployWandbCR(ctx context.Context) error {
 		return err
 	}
 
-	if err := kubectl.CreateDeploymentMarker(ctx, "", wandbCR.Namespace, "wandb-cr"); err != nil {
+	if err := kubectl.CreateDeploymentMarker(ctx, "", wandbCR.GetNamespace(), "wandb-cr"); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -440,7 +426,7 @@ func performCreateCluster(ctx context.Context, clusterName string, workers int) 
 	return nil
 }
 
-func processWandbCR(crFile string, wandbVersion string, wandbName string, license string, licenseFile string, wandbNamespace string) error {
+func processWandbCR(cmd *cobra.Command, crFile string, wandbVersion string, wandbName string, license string, licenseFile string, wandbNamespace string) error {
 	if crFile != "" {
 		var err error
 		wandbCR, err = readCRFile(crFile)
@@ -448,16 +434,33 @@ func processWandbCR(crFile string, wandbVersion string, wandbName string, licens
 			fmt.Printf("failed to read CR file: %v\n", err)
 			return err
 		}
+	} else {
+		wandbCR = defaultWandbCR()
 	}
 
-	wandbCR.Name = wandbName
-
-	if wandbCR.Spec.Wandb.Version == "" && wandbVersion == "" {
-		wandbCR.Spec.Wandb.Version = defaultWandbVersion
+	if wandbCR.GetAPIVersion() == "" {
+		wandbCR.SetAPIVersion("apps.wandb.com/v2")
+	}
+	if wandbCR.GetKind() == "" {
+		wandbCR.SetKind("WeightsAndBiases")
 	}
 
-	if wandbVersion != "" {
-		wandbCR.Spec.Wandb.Version = wandbVersion
+	if crFile == "" || cmd.Flags().Changed(flagWandbName) {
+		wandbCR.SetName(wandbName)
+	}
+
+	if crFile == "" || cmd.Flags().Changed(flagWandbNamespace) {
+		wandbCR.SetNamespace(wandbNamespace)
+	}
+
+	currentVersion, _, _ := unstructured.NestedString(wandbCR.Object, "spec", "wandb", "version")
+	switch {
+	case cmd.Flags().Changed(flagWandbVersion):
+		setOrRemoveNestedString(wandbCR.Object, &wandbVersion, "spec", "wandb", "version")
+	case strings.TrimSpace(currentVersion) == "":
+		if err := unstructured.SetNestedField(wandbCR.Object, defaultWandbVersion, "spec", "wandb", "version"); err != nil {
+			return err
+		}
 	}
 
 	if license != "" && licenseFile != "" {
@@ -466,7 +469,7 @@ func processWandbCR(crFile string, wandbVersion string, wandbName string, licens
 
 	if license != "" || licenseFile != "" {
 		if license != "" {
-			wandbCR.Spec.Wandb.License = license
+			setOrRemoveNestedString(wandbCR.Object, &license, "spec", "wandb", "license")
 		}
 		if licenseFile != "" {
 			licenseData, err := os.ReadFile(licenseFile)
@@ -474,25 +477,17 @@ func processWandbCR(crFile string, wandbVersion string, wandbName string, licens
 				fmt.Printf("failed to read license file: %v\n", err)
 				return err
 			}
-			wandbCR.Spec.Wandb.License = strings.TrimSpace(string(licenseData))
+			licenseText := strings.TrimSpace(string(licenseData))
+			setOrRemoveNestedString(wandbCR.Object, &licenseText, "spec", "wandb", "license")
 		}
 	}
 
-	wandbCR.Namespace = wandbNamespace
-	return nil
-}
+	overrides, err := extractWandbCROverrides(cmd)
+	if err != nil {
+		return err
+	}
 
-func readCRFile(crPath string) (*v2.WeightsAndBiases, error) {
-	crData, err := os.ReadFile(crPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read CR file: %w", err)
-	}
-	cr := &v2.WeightsAndBiases{}
-	err = yaml.Unmarshal(crData, cr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse CR YAML: %w", err)
-	}
-	return cr, nil
+	return applyWandbCROverrides(wandbCR, overrides)
 }
 
 // ClusterCmd returns the cluster command with subcommands

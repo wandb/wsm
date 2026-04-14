@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/docker/go-connections/tlsconfig"
-	v2 "github.com/wandb/operator/api/v2"
 	"github.com/wandb/wsm/pkg/kubectl"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/loader"
@@ -21,7 +20,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -156,7 +154,7 @@ func DeleteCertManager(ctx context.Context) error {
 }
 
 // DeployOperator deploys the W&B operator chart version specified.  The chart is called operator and is available in oci://us-docker.pkg.dev/wandb-production/public/wandb/charts
-func DeployOperator(ctx context.Context, namespace string, version string) error {
+func DeployOperator(ctx context.Context, namespace string, version string, releaseValues map[string]interface{}) error {
 	const repositoryURL = "oci://us-docker.pkg.dev/wandb-production/public/wandb/charts"
 	const chartName = "operator"
 	const chartRef = repositoryURL + "/" + chartName
@@ -185,11 +183,16 @@ func DeployOperator(ctx context.Context, namespace string, version string) error
 		return fmt.Errorf("failed to check if release exists: %w", err)
 	}
 
-	releaseValues := map[string]interface{}{
-		"wandb": map[string]interface{}{
-			"install": false,
-		},
+	if releaseValues == nil {
+		releaseValues = map[string]interface{}{}
 	}
+
+	wandbValues, ok := releaseValues["wandb"].(map[string]interface{})
+	if !ok || wandbValues == nil {
+		wandbValues = map[string]interface{}{}
+	}
+	wandbValues["install"] = false
+	releaseValues["wandb"] = wandbValues
 
 	if releaseExists {
 		// Create upgrade action
@@ -440,7 +443,7 @@ func newRegistryClient(settings *cli.EnvSettings, certFile, keyFile, caFile stri
 }
 
 // ApplyCR applies a WeightsAndBiases CR to the cluster (idempotent)
-func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases) error {
+func ApplyCR(ctx context.Context, wandbCR *unstructured.Unstructured) error {
 	_, dyn, err := kubectl.GetDynamicClientset()
 	if err != nil {
 		return err
@@ -464,11 +467,7 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases) error {
 		}
 	}
 
-	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(wandbCR)
-	if err != nil {
-		return fmt.Errorf("failed to convert to unstructured: %w", err)
-	}
-	obj := &unstructured.Unstructured{Object: data}
+	obj := wandbCR.DeepCopy()
 
 	// Ensure GVK is set on the unstructured object
 	obj.SetGroupVersionKind(gvk)
@@ -478,9 +477,9 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases) error {
 		return fmt.Errorf("failed to marshal CR: %w", err)
 	}
 
-	dr := dyn.Resource(mapping.Resource).Namespace(wandbCR.Namespace)
+	dr := dyn.Resource(mapping.Resource).Namespace(wandbCR.GetNamespace())
 
-	if _, err := dr.Patch(ctx, wandbCR.Name, types.ApplyPatchType, raw, metav1.PatchOptions{
+	if _, err := dr.Patch(ctx, wandbCR.GetName(), types.ApplyPatchType, raw, metav1.PatchOptions{
 		FieldManager: "wsm",
 	}); err != nil {
 		return fmt.Errorf("failed to apply CR: %w", err)

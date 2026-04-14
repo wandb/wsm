@@ -106,6 +106,10 @@ wsm deploy-v2 [command] [flags]
     - Note: The Chart version specified will determine the image tag of operator deployed based on the [values file](https://github.com/wandb/operator/blob/v2/deploy/operator/values.yaml#L11)
   - `--operator-namespace string`: Namespace for operator (default "wandb-operators").
   - `--install-cert-manager`: Cert-manager install mode: `auto` (detect and reuse existing), `true` (force install flow), `false` (skip installation) (default "auto").
+  - `--operator-telemetry-mode string`: Operator chart telemetry mode: `off`, `forward`, or `full`.
+  - `--operator-telemetry-namespace string`: Managed namespace for operator telemetry resources (defaults to the W&B CR namespace).
+  - `--operator-telemetry-otel-secret-name string`: Secret name used for operator-managed telemetry connection settings.
+  - `--operator-telemetry-forward-endpoint string`: Forward OTLP telemetry to this endpoint when telemetry mode is `forward`.
   - `--include-cr`: Include the WeightsAndBiases Custom Resource in the operator deployment.
   - `--setup-k8s-cluster`: Setup a Kind cluster before deploying.
   - `--cluster-name string`: Name of the Kind cluster (only used with `--setup-k8s-cluster`) (default "kind").
@@ -119,6 +123,8 @@ wsm deploy-v2 [command] [flags]
     - `--wandb-name string`: Name of the W&B instance (default "wandb").
     - `--wandb-namespace string`: Namespace for CR (default "wandb").
     - `--wandb-version string`: Server manifest version (e.g., 0.76.1).
+    - `--managed-infra-telemetry-enabled[=true|false]`: Set telemetry for all managed infrastructure components.
+    - `--mysql-telemetry-enabled`, `--redis-telemetry-enabled`, `--kafka-telemetry-enabled`, `--object-store-telemetry-enabled`, `--clickhouse-telemetry-enabled`: Override telemetry per managed component.
   - `destroy`: Destroy an instance of W&B.
     - `--wandb-name string`: Name of the W&B instance (default "wandb").
     - `--wandb-namespace string`: Namespace for CR (default "wandb").

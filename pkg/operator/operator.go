@@ -23,7 +23,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -156,7 +155,12 @@ func DeleteCertManager(ctx context.Context) error {
 }
 
 // DeployOperator deploys the W&B operator chart version specified.  The chart is called operator and is available in oci://us-docker.pkg.dev/wandb-production/public/wandb/charts
-func DeployOperator(ctx context.Context, namespace string, version string) error {
+func DeployOperator(
+	ctx context.Context,
+	namespace string,
+	version string,
+	telemetryMode string,
+) error {
 	const repositoryURL = "oci://us-docker.pkg.dev/wandb-production/public/wandb/charts"
 	const chartName = "operator"
 	const chartRef = repositoryURL + "/" + chartName
@@ -165,6 +169,7 @@ func DeployOperator(ctx context.Context, namespace string, version string) error
 	// Initialize Helm settings
 	settings := cli.New()
 	settings.SetNamespace(namespace)
+	settings.KubeContext = kubectl.GetContext()
 
 	// Initialize action configuration
 	actionConfig, err := initActionConfig(settings)
@@ -189,6 +194,14 @@ func DeployOperator(ctx context.Context, namespace string, version string) error
 		"wandb": map[string]interface{}{
 			"install": false,
 		},
+		"wandb-operator": map[string]interface{}{
+			"image": map[string]interface{}{
+				"pullPolicy": "Always",
+			},
+		},
+		"telemetry": map[string]interface{}{
+			"mode": telemetryMode,
+		},
 	}
 
 	if releaseExists {
@@ -197,6 +210,7 @@ func DeployOperator(ctx context.Context, namespace string, version string) error
 		upgradeClient.Namespace = namespace
 		upgradeClient.Version = version
 		upgradeClient.WaitStrategy = "hookOnly"
+		upgradeClient.ForceConflicts = true
 
 		// Get the chart
 		cp, err := upgradeClient.LocateChart(chartRef, settings)
@@ -325,6 +339,7 @@ func DeleteOperator(ctx context.Context, namespace string) error {
 
 	settings := cli.New()
 	settings.SetNamespace(namespace)
+	settings.KubeContext = kubectl.GetContext()
 
 	actionConfig, err := initActionConfig(settings)
 	if err != nil {
@@ -441,29 +456,7 @@ func newRegistryClient(settings *cli.EnvSettings, certFile, keyFile, caFile stri
 
 // ApplyCR applies a WeightsAndBiases CR to the cluster (idempotent)
 func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases) error {
-	_, dyn, err := kubectl.GetDynamicClientset()
-	if err != nil {
-		return err
-	}
-
-	mapper, err := kubectl.GetRESTMapper()
-	if err != nil {
-		return err
-	}
-
 	gvk := wandbCR.GroupVersionKind()
-	mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-	if err != nil {
-		// If mapping fails, try refreshing the mapper as CRDs might have been just installed
-		if refreshedMapper, refreshErr := kubectl.RefreshRESTMapper(); refreshErr == nil {
-			mapping, err = refreshedMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-		}
-
-		if err != nil {
-			return fmt.Errorf("failed to get mapping for %s: %w", gvk, err)
-		}
-	}
-
 	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(wandbCR)
 	if err != nil {
 		return fmt.Errorf("failed to convert to unstructured: %w", err)
@@ -473,16 +466,7 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases) error {
 	// Ensure GVK is set on the unstructured object
 	obj.SetGroupVersionKind(gvk)
 
-	raw, err := obj.MarshalJSON()
-	if err != nil {
-		return fmt.Errorf("failed to marshal CR: %w", err)
-	}
-
-	dr := dyn.Resource(mapping.Resource).Namespace(wandbCR.Namespace)
-
-	if _, err := dr.Patch(ctx, wandbCR.Name, types.ApplyPatchType, raw, metav1.PatchOptions{
-		FieldManager: "wsm",
-	}); err != nil {
+	if err := kubectl.ApplyUnstructured(ctx, obj); err != nil {
 		return fmt.Errorf("failed to apply CR: %w", err)
 	}
 

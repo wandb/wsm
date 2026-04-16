@@ -33,3 +33,12 @@ test-wsm/
 .idea/
 .k8s-images
 license.key
+
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl

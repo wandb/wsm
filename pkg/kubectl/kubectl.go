@@ -10,6 +10,8 @@ import (
 	"sync"
 
 	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -157,20 +159,15 @@ func IsConnectedToCluster() bool {
 func ApplyYAML(ctx context.Context, yamlContent []byte) error {
 	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(yamlContent), 4096)
 	for {
-		var rawObj runtime.RawExtension
-		if err := decoder.Decode(&rawObj); err != nil {
+		obj := &unstructured.Unstructured{}
+		if err := decoder.Decode(obj); err != nil {
 			if err == io.EOF {
 				break
 			}
 			return fmt.Errorf("failed to decode manifest: %w", err)
 		}
 
-		obj := &unstructured.Unstructured{}
-		if err := obj.UnmarshalJSON(rawObj.Raw); err != nil {
-			return fmt.Errorf("failed to unmarshal manifest object: %w", err)
-		}
-
-		if obj.Object == nil {
+		if len(obj.Object) == 0 {
 			continue
 		}
 
@@ -206,27 +203,18 @@ func DeleteYAML(ctx context.Context, yamlContent []byte) error {
 		return err
 	}
 
-	// We should decode in reverse order to delete dependencies correctly?
-	// Actually, just regular order might be fine, but we'll see.
-	// K8s usually handles dependencies via owner references, but here they might not have them.
-
 	var objects []*unstructured.Unstructured
 	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(yamlContent), 4096)
 	for {
-		var rawObj runtime.RawExtension
-		if err := decoder.Decode(&rawObj); err != nil {
+		obj := &unstructured.Unstructured{}
+		if err := decoder.Decode(obj); err != nil {
 			if err == io.EOF {
 				break
 			}
 			return fmt.Errorf("failed to decode manifest: %w", err)
 		}
 
-		obj := &unstructured.Unstructured{}
-		if err := obj.UnmarshalJSON(rawObj.Raw); err != nil {
-			return fmt.Errorf("failed to unmarshal manifest object: %w", err)
-		}
-
-		if obj.Object == nil {
+		if len(obj.Object) == 0 {
 			continue
 		}
 		objects = append(objects, obj)
@@ -376,6 +364,32 @@ func ApplyClusterIssuer(ctx context.Context, issuer *certmanagerv1.ClusterIssuer
 		Kind:    "ClusterIssuer",
 	})
 	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(issuer)
+	if err != nil {
+		return err
+	}
+	return ApplyUnstructured(ctx, &unstructured.Unstructured{Object: data})
+}
+
+func ApplyIngressClass(ctx context.Context, ingressClass networkingv1.IngressClass) error {
+	ingressClass.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "networking.k8s.io",
+		Version: "v1",
+		Kind:    "IngressClass",
+	})
+	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&ingressClass)
+	if err != nil {
+		return err
+	}
+	return ApplyUnstructured(ctx, &unstructured.Unstructured{Object: data})
+}
+
+func ApplyStorageClass(ctx context.Context, storageClass *storagev1.StorageClass) error {
+	storageClass.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "storage.k8s.io",
+		Version: "v1",
+		Kind:    "StorageClass",
+	})
+	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(storageClass)
 	if err != nil {
 		return err
 	}

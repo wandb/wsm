@@ -106,6 +106,7 @@ wsm deploy-v2 [command] [flags]
     - Note: The Chart version specified will determine the image tag of operator deployed based on the [values file](https://github.com/wandb/operator/blob/v2/deploy/operator/values.yaml#L11)
   - `--operator-namespace string`: Namespace for operator (default "wandb-operators").
   - `--install-cert-manager`: Cert-manager install mode: `auto` (detect and reuse existing), `true` (force install flow), `false` (skip installation) (default "auto").
+  - `--install-nginx-gateway`: Nginx-gateway-fabric install mode: `auto` (detect and reuse existing), `true` (force install flow), `false` (skip installation) (default "false").
   - `--include-cr`: Include the WeightsAndBiases Custom Resource in the operator deployment.
   - `--setup-k8s-cluster`: Setup a Kind cluster before deploying.
   - `--cluster-name string`: Name of the Kind cluster (only used with `--setup-k8s-cluster`) (default "kind").

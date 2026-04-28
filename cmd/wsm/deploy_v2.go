@@ -120,12 +120,13 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().Bool("create-aws-storage-class", false, "Create an Storage class for the W&B instance")
 	cmd.PersistentFlags().String("ingress-class", "", "Enable Ingress support with the specified ingress class")
 	cmd.PersistentFlags().String("gateway-class", "nginx", "Enable Gateway API support with the specified gateway class")
+	cmd.PersistentFlags().String("issuer-name", "", "TLS issuer name for Gateway API")
 	cmd.PersistentFlags().Bool("add-ingress-annotations", false, "Add cloud provider annotations to Ingress or Gateway API")
 	cmd.PersistentFlags().String("license", "", "W&B license string (optional, injected into spec.wandb.license)")
 	cmd.PersistentFlags().String("license-file", "", "Path to W&B license file (optional, injected into spec.wandb.license)")
 	cmd.PersistentFlags().String("observability-mode", "off", "Enable observability for applications")
 	cmd.PersistentFlags().String("retention-policy", "detach", "Retention policy for W&B instance (detach, purge) - defaults to detach")
-	cmd.PersistentFlags().String("size", "small", "W&B instance size (dev, small, medium, large, xlarge, 2xlarge, 4xlarge)")
+	cmd.PersistentFlags().String("size", "small", "W&B instance size (dev, micro, small, medium, large, xlarge, 2xlarge, 4xlarge)")
 	cmd.PersistentFlags().String("wandb-hostname", "http://localhost:8080", "Hostname to use for the W&B instance")
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
 	cmd.PersistentFlags().String("wandb-version", "", "Server manifest version (e.g., 0.76.1)")
@@ -257,6 +258,7 @@ func wandbCreateCmd() *cobra.Command {
 			telemetryMode, _ := cmd.Flags().GetString("observability-mode")
 			gatewayClass, _ := cmd.Flags().GetString("gateway-class")
 			ingressClass, _ := cmd.Flags().GetString("ingress-class")
+			issuerName, _ := cmd.Flags().GetString("issuer-name")
 			size, _ := cmd.Flags().GetString("size")
 			retentionPolicy, _ := cmd.Flags().GetString("retention-policy")
 			wandbNamespace, _ := cmd.Flags().GetString("wandb-namespace")
@@ -274,6 +276,7 @@ func wandbCreateCmd() *cobra.Command {
 				wandbHostname,
 				gatewayClass,
 				ingressClass,
+				issuerName,
 				addIngressAnnotations,
 				license,
 				licenseFile,
@@ -333,6 +336,7 @@ func operatorDeployCmd() *cobra.Command {
 			addIngressAnnotations, _ := cmd.Flags().GetBool("add-ingress-annotations")
 			gatewayClass, _ := cmd.Flags().GetString("gateway-class")
 			ingressClass, _ := cmd.Flags().GetString("ingress-class")
+			issuerName, _ := cmd.Flags().GetString("issuer-name")
 			size, _ := cmd.Flags().GetString("size")
 			retentionPolicy, _ := cmd.Flags().GetString("retention-policy")
 			license, _ := cmd.Flags().GetString("license")
@@ -351,6 +355,7 @@ func operatorDeployCmd() *cobra.Command {
 				wandbHostname,
 				gatewayClass,
 				ingressClass,
+				issuerName,
 				addIngressAnnotations,
 				license,
 				licenseFile,
@@ -825,6 +830,7 @@ func processWandbCR(
 	wandbHostname string,
 	gatewayClass string,
 	ingressClass string,
+	issuerName string,
 	addIngressAnnotations bool,
 	license string,
 	licenseFile string,
@@ -901,12 +907,23 @@ func processWandbCR(
 		}
 	}
 
-	if createCA && strings.HasPrefix(wandbCR.Spec.Wandb.Hostname, "https") {
-		wandbCR.Spec.Networking.TLS = &v2.TLSConfig{
-			SecretName: wandbName + "-tls-secret",
-			CertManager: &v2.CertManagerConfig{
-				Issuer: wandbName + "-ca-issuer",
-			},
+	if strings.HasPrefix(wandbCR.Spec.Wandb.Hostname, "https") {
+		if createCA {
+			wandbCR.Spec.Networking.TLS = &v2.TLSConfig{
+				SecretName: wandbName + "-tls-secret",
+				CertManager: &v2.CertManagerConfig{
+					Issuer: wandbName + "-ca-issuer",
+				},
+			}
+		} else if issuerName != "" {
+			wandbCR.Spec.Networking.TLS = &v2.TLSConfig{
+				SecretName: wandbName + "-tls-secret",
+				CertManager: &v2.CertManagerConfig{
+					Issuer: issuerName,
+				},
+			}
+		} else {
+			return fmt.Errorf("cannot specify TLS without a CA or issuer")
 		}
 	}
 

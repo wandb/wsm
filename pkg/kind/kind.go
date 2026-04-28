@@ -18,7 +18,7 @@ import (
 )
 
 // CreateCluster creates a Kind cluster with specified name and number of worker nodes
-func CreateCluster(ctx context.Context, name string, workers int) error {
+func CreateCluster(ctx context.Context, name string, workers int, httpPort int32, httpsPort int32) error {
 	provider := cluster.NewProvider()
 
 	// Check if cluster already exists
@@ -31,7 +31,7 @@ func CreateCluster(ctx context.Context, name string, workers int) error {
 	}
 
 	// Generate Kind cluster config
-	kindConfig := generateClusterConfig(workers)
+	kindConfig := generateClusterConfig(workers, httpPort, httpsPort)
 	// Create cluster using kind library
 	if err := provider.Create(
 		name,
@@ -116,6 +116,11 @@ func InstallMetricsServer(ctx context.Context) error {
 		return fmt.Errorf("failed to patch metrics-server: %w", err)
 	}
 
+	// Wait for metrics-server to be ready
+	if err := WaitForMetricsServer(ctx, 2*time.Minute); err != nil {
+		return fmt.Errorf("metrics-server did not become ready: %w", err)
+	}
+
 	return nil
 }
 
@@ -156,17 +161,17 @@ func LoadImageToCluster(ctx context.Context, imageName, clusterName string) erro
 
 // generateClusterConfig creates a Kind cluster configuration with specified worker nodes.
 // The control-plane node is always configured with:
-//   - extraPortMappings: host:8080 → container:80, host:8443 → container:443
+//   - extraPortMappings: host:httpPort → container:httpPort, host:httpsPort → container:httpsPort
 //   - ingress-ready node label so nginx-ingress can bind to those ports
-func generateClusterConfig(workers int) config.Cluster {
+func generateClusterConfig(workers int, httpPort int32, httpsPort int32) config.Cluster {
 	const nodeImage = "kindest/node:v1.35.1@sha256:05d7bcdefbda08b4e038f644c4df690cdac3fba8b06f8289f30e10026720a1ab"
 
 	controlPlane := config.Node{
 		Role:  config.ControlPlaneRole,
 		Image: nodeImage,
 		ExtraPortMappings: []config.PortMapping{
-			{ContainerPort: 80, HostPort: 8080, Protocol: config.PortMappingProtocolTCP},
-			{ContainerPort: 443, HostPort: 8443, Protocol: config.PortMappingProtocolTCP},
+			{ContainerPort: 31437, HostPort: httpPort, Protocol: config.PortMappingProtocolTCP},
+			{ContainerPort: 30478, HostPort: httpsPort, Protocol: config.PortMappingProtocolTCP},
 		},
 		KubeadmConfigPatches: []string{`kind: InitConfiguration
 nodeRegistration:
@@ -248,4 +253,42 @@ func ingressControllerReady(ctx context.Context) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func metricsServerReady(ctx context.Context) (bool, error) {
+	_, cs, err := kubectl.GetClientset()
+	if err != nil {
+		return false, err
+	}
+	pods, err := cs.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{
+		LabelSelector: "k8s-app=metrics-server",
+	})
+	if err != nil || len(pods.Items) == 0 {
+		return false, err
+	}
+	for _, pod := range pods.Items {
+		for _, cond := range pod.Status.Conditions {
+			if cond.Type == "Ready" && cond.Status == "True" {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// WaitForMetricsServer waits until the metrics-server pod is ready.
+func WaitForMetricsServer(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ready, err := metricsServerReady(ctx)
+		if err == nil && ready {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+	return fmt.Errorf("metrics-server did not become ready within %s", timeout)
 }

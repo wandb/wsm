@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -30,7 +31,7 @@ func init() {
 }
 
 // TODO once an official release publishes a manifest, we should switch to lookup up the most recent non-dev release and not have a default.
-const defaultWandbVersion = "0.80.1-dpanzella-operator-test.0"
+const defaultWandbVersion = "0.79.2"
 
 const (
 	certManagerInstallModeAuto  = "auto"
@@ -51,7 +52,7 @@ var (
 		Spec: v2.WeightsAndBiasesSpec{
 			Wandb: v2.WandbAppSpec{
 				Hostname: "http://localhost:8080",
-				Features: map[string]bool{"proxy": true},
+				Features: map[string]bool{},
 				InternalServiceAuth: v2.InternalServiceAuth{
 					Enabled: ptr.Bool(false),
 				},
@@ -147,6 +148,7 @@ func wandbCmd() *cobra.Command {
 
 	cmd.AddCommand(wandbCreateCmd())
 	cmd.AddCommand(wandbDestroyCmd())
+	cmd.AddCommand(wandbGetCACertCmd())
 
 	return cmd
 }
@@ -172,6 +174,71 @@ func wandbDestroyCmd() *cobra.Command {
 	}
 
 	return cmd
+}
+
+func wandbGetCACertCmd() *cobra.Command {
+	var outputDir string
+
+	cmd := &cobra.Command{
+		Use:   "get-ca-cert",
+		Short: "Write the W&B CA certificate to a local file",
+		Long:  `Retrieve the W&B deployment CA certificate and write it to a local file named after the W&B CR`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			wandbNamespace, _ := cmd.Flags().GetString("wandb-namespace")
+			wandbName, _ := cmd.Flags().GetString("wandb-name")
+
+			outputPath, err := exportWandbCACert(kubectl.GetSecretDataMap, os.WriteFile, wandbName, wandbNamespace, outputDir)
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Wrote W&B CA certificate to %s\n", outputPath)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&outputDir, "output-dir", ".", "Directory to write the CA certificate file")
+
+	return cmd
+}
+
+func exportWandbCACert(
+	getSecretDataMap func(name string, namespace string) (map[string][]byte, error),
+	writeFile func(name string, data []byte, perm os.FileMode) error,
+	wandbName string,
+	namespace string,
+	outputDir string,
+) (string, error) {
+	secretName := wandbName + "-root-cert"
+
+	secretData, err := getSecretDataMap(secretName, namespace)
+	if err != nil {
+		return "", fmt.Errorf("failed to retrieve CA secret %q in namespace %q: %w", secretName, namespace, err)
+	}
+
+	certData, err := caCertFromSecretData(secretData)
+	if err != nil {
+		return "", fmt.Errorf("CA certificate does not exist for W&B CR %q: %w", wandbName, err)
+	}
+
+	outputPath := filepath.Join(outputDir, wandbName+".crt")
+	if err := writeFile(outputPath, certData, 0644); err != nil {
+		return "", fmt.Errorf("failed to write CA certificate to %q: %w", outputPath, err)
+	}
+
+	return outputPath, nil
+}
+
+func caCertFromSecretData(secretData map[string][]byte) ([]byte, error) {
+	if certData, ok := secretData["ca.crt"]; ok && len(certData) > 0 {
+		return certData, nil
+	}
+
+	if certData, ok := secretData["tls.crt"]; ok && len(certData) > 0 {
+		return certData, nil
+	}
+
+	return nil, errors.New("secret is missing non-empty \"ca.crt\" or \"tls.crt\" data")
 }
 
 func wandbCreateCmd() *cobra.Command {
@@ -246,11 +313,11 @@ func operatorDeployCmd() *cobra.Command {
 	var setupCluster bool
 	var installCertManagerMode string
 	var installNginxGatewayMode string
-	var disableGatewayApi bool
+	var enableGatewayAPI bool
 	var includeCR bool
 	var clusterName string
 	var workers int
-	//var operatorVersion string
+	var operatorVersion string
 	var operatorChartVersion string
 	var operatorNamespace string
 
@@ -303,14 +370,14 @@ func operatorDeployCmd() *cobra.Command {
 				setupCluster,
 				installCertManagerMode,
 				installNginxGatewayMode,
-				disableGatewayApi,
+				enableGatewayAPI,
 				includeCR,
 				wait,
 				clusterName,
 				telemetryMode,
 				workers,
 				operatorChartVersion,
-				wandbVersion,
+				operatorVersion,
 				operatorNamespace,
 				createCA,
 				createAwsStorageClass,
@@ -343,13 +410,13 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
 
 	//TODO Decide whether to expose this or have it depend on the chart version
-	//cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator image version (e.g., v2.0.0) - defaults to value in the chart")
-	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "1.5.3", "Operator Chart version (e.g., v2.0.0)")
+	cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator image version (e.g., v2.0.0) - defaults to value in the chart")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-alpha.1", "Operator Chart version (e.g., v2.0.0)")
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
 	cmd.Flags().StringVar(&installCertManagerMode, "install-cert-manager", certManagerInstallModeAuto, "Cert-manager install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
-	cmd.Flags().StringVar(&installNginxGatewayMode, "install-nginx-gateway", nginxGatewayInstallModeFalse, "Nginx-gateway-fabric install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
+	cmd.Flags().StringVar(&installNginxGatewayMode, "install-nginx-gateway", nginxGatewayInstallModeAuto, "Nginx-gateway-fabric install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
 
-	cmd.Flags().BoolVar(&disableGatewayApi, "disable-gateway-api", false, "Disables Gateway API support for cert-manager")
+	cmd.Flags().BoolVar(&enableGatewayAPI, "enable-gateway-api", true, "Disables Gateway API support for cert-manager")
 	cmd.Flags().BoolVar(&includeCR, "include-cr", false, "Include the Wandb CR in the operator deployment")
 	return cmd
 }
@@ -358,14 +425,14 @@ func performDeploy(
 	setupCluster bool,
 	installCertManagerMode string,
 	installNginxGatewayMode string,
-	disableGatewayApi bool,
+	enableGatewayAPI bool,
 	includeCR bool,
 	wait bool,
 	clusterName string,
 	telemetryMode string,
 	workers int,
 	operatorChartVersion string,
-	wandbVersion string,
+	operatorVersion string,
 	operatorNamespace string,
 	createCA bool,
 	createAwsStorageClass bool,
@@ -373,8 +440,8 @@ func performDeploy(
 	ingressClass string,
 ) error {
 	ctx := context.Background()
-	installCertManagerMode = strings.ToLower(strings.TrimSpace(installCertManagerMode))
 	installNginxGatewayMode = strings.ToLower(strings.TrimSpace(installNginxGatewayMode))
+	installCertManagerMode = strings.ToLower(strings.TrimSpace(installCertManagerMode))
 
 	// Calculate total steps based on flags
 	totalSteps := 2 // Always: ensure cert-manager, deploy operator
@@ -397,7 +464,7 @@ func performDeploy(
 		fmt.Printf("[%d/%d] Setting up cluster (%d workers)...", currentStep, totalSteps, workers)
 		start := time.Now()
 
-		err := performCreateCluster(ctx, clusterName, workers)
+		err := performCreateCluster(ctx, clusterName, workers, 8080, 8443)
 		if err != nil {
 			return err
 		}
@@ -407,44 +474,6 @@ func performDeploy(
 	} else {
 		_ = clusterName
 	}
-
-	// Step 2: Ensure cert-manager
-	fmt.Printf("[%d/%d] Ensuring cert-manager...", currentStep, totalSteps)
-	start := time.Now()
-
-	switch installCertManagerMode {
-	case certManagerInstallModeAuto:
-		if err := operator.InstallCertManager(ctx, disableGatewayApi, true); err != nil {
-			fmt.Println(" ✗")
-			return err
-		}
-	case certManagerInstallModeTrue:
-		if err := operator.InstallCertManager(ctx, disableGatewayApi, false); err != nil {
-			fmt.Println(" ✗")
-			return err
-		}
-	case certManagerInstallModeFalse:
-		// Skip installation and only verify cert-manager readiness below.
-	default:
-		fmt.Println(" ✗")
-		return fmt.Errorf("invalid --install-cert-manager value %q (expected: auto, true, false)", installCertManagerMode)
-	}
-
-	if err := operator.WaitForCertManager(ctx, 5*time.Minute); err != nil {
-		fmt.Println(" ✗")
-		if installCertManagerMode == certManagerInstallModeFalse {
-			return fmt.Errorf("cert-manager is not ready and installation is disabled (--install-cert-manager=false): %w", err)
-		}
-		return err
-	}
-
-	switch installCertManagerMode {
-	case certManagerInstallModeFalse:
-		fmt.Printf(" ✓ (%s, installation disabled)\n", time.Since(start).Round(time.Second))
-	default:
-		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
-	}
-	currentStep++
 
 	// Step: Ensure nginx-gateway-fabric
 	if installNginxGatewayMode != nginxGatewayInstallModeFalse {
@@ -473,16 +502,51 @@ func performDeploy(
 		currentStep++
 	}
 
-	// Step 3: Create infra-operators wandbNamespace
+	// Step: Ensure cert-manager
+	if installCertManagerMode != certManagerInstallModeFalse {
+		fmt.Printf("[%d/%d] Ensuring cert-manager...", currentStep, totalSteps)
+		start := time.Now()
+
+		switch installCertManagerMode {
+		case certManagerInstallModeAuto:
+			if err := operator.InstallCertManager(ctx, enableGatewayAPI, true); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+		case certManagerInstallModeTrue:
+			if err := operator.InstallCertManager(ctx, enableGatewayAPI, false); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+		case certManagerInstallModeFalse:
+			// Skip installation and only verify cert-manager readiness below.
+		default:
+			fmt.Println(" ✗")
+			return fmt.Errorf("invalid --install-cert-manager value %q (expected: auto, true, false)", installCertManagerMode)
+		}
+
+		if err := operator.WaitForCertManager(ctx, 5*time.Minute); err != nil {
+			fmt.Println(" ✗")
+			if installCertManagerMode == certManagerInstallModeFalse {
+				return fmt.Errorf("cert-manager is not ready and installation is disabled (--install-cert-manager=false): %w", err)
+			}
+			return err
+		}
+
+		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
+		currentStep++
+	}
+
+	// Step: Create infra-operators wandbNamespace
 	if err := operator.CreateNamespace(ctx, operatorNamespace); err != nil {
 		return err
 	}
 
 	// Step 4: Deploy W&B operator
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
-	start = time.Now()
+	start := time.Now()
 
-	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, telemetryMode); err != nil {
+	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, operatorVersion, telemetryMode); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -593,7 +657,7 @@ func deployWandbCR(ctx context.Context, createCA bool, createAwsStorageClass, cr
 	return nil
 }
 
-func performCreateCluster(ctx context.Context, clusterName string, workers int) error {
+func performCreateCluster(ctx context.Context, clusterName string, workers int, httpPort int32, httpsPort int32) error {
 	exists, err := kind.ClusterExists(ctx, clusterName)
 	if err != nil {
 		fmt.Println(" ✗")
@@ -601,7 +665,7 @@ func performCreateCluster(ctx context.Context, clusterName string, workers int) 
 	}
 
 	if !exists {
-		if err := kind.CreateCluster(ctx, clusterName, workers); err != nil {
+		if err := kind.CreateCluster(ctx, clusterName, workers, httpPort, httpsPort); err != nil {
 			fmt.Println(" ✗")
 			return err
 		}
@@ -737,7 +801,7 @@ func createDefaultAwsStorageClass(ctx context.Context) error {
 		},
 		ReclaimPolicy:        nil,
 		MountOptions:         nil,
-		AllowVolumeExpansion: nil,
+		AllowVolumeExpansion: ptr.Bool(true),
 		VolumeBindingMode:    nil,
 		AllowedTopologies: []corev1.TopologySelectorTerm{
 			{
@@ -899,12 +963,12 @@ func ClusterCmd() *cobra.Command {
 func clusterCreateCmd() *cobra.Command {
 	var clusterName string
 	var workers int
-
+	var httpPort, httpsPort int32
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a new kind cluster",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := performCreateCluster(context.Background(), clusterName, workers); err != nil {
+			if err := performCreateCluster(context.Background(), clusterName, workers, httpPort, httpsPort); err != nil {
 				fmt.Printf("✗ Cluster Create failed: %v\n", err)
 				return err
 			}
@@ -915,6 +979,8 @@ func clusterCreateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&clusterName, "cluster-name", "kind", "Name of the Kind cluster")
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes")
+	cmd.Flags().Int32Var(&httpPort, "http-port", 8080, "HTTP port for Kind cluster ingress")
+	cmd.Flags().Int32Var(&httpsPort, "https-port", 8443, "HTTPS port for Kind cluster ingress")
 
 	return cmd
 }

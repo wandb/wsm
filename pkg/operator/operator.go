@@ -68,7 +68,7 @@ const (
 
 // InstallCertManager installs cert-manager.
 // When skipIfPresent is true, installation is skipped if the cert-manager deployment already exists.
-func InstallCertManager(ctx context.Context, disableGatewayApi bool, skipIfPresent bool) error {
+func InstallCertManager(ctx context.Context, enableGatewayAPI bool, skipIfPresent bool) error {
 	if skipIfPresent {
 		deploymentExists, err := certManagerDeploymentExists(ctx)
 		if err != nil {
@@ -112,7 +112,7 @@ func InstallCertManager(ctx context.Context, disableGatewayApi bool, skipIfPrese
 			"enabled": true,
 		},
 		"config": map[string]interface{}{
-			"enableGatewayAPI": !disableGatewayApi,
+			"enableGatewayAPI": enableGatewayAPI,
 		},
 		"startupapicheck": map[string]interface{}{
 			"enabled": false,
@@ -292,7 +292,19 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool) error {
 		return fmt.Errorf("failed to check if release exists: %w", err)
 	}
 
-	releaseValues := map[string]interface{}{}
+	releaseValues := map[string]any{}
+
+	if strings.HasPrefix(kubectl.GetContext(), "kind-") {
+		releaseValues["nginx"] = map[string]any{
+			"service": map[string]any{
+				"type": "NodePort",
+				"nodePorts": []map[string]any{
+					{"port": 31437, "listenerPort": 8080},
+					{"port": 30478, "listenerPort": 8443},
+				},
+			},
+		}
+	}
 
 	if releaseExists {
 		// Create upgrade action
@@ -301,6 +313,7 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool) error {
 		upgradeClient.Version = nginxGatewayVersion
 		upgradeClient.WaitStrategy = "hookOnly"
 		upgradeClient.ForceConflicts = true
+		upgradeClient.SkipSchemaValidation = true
 
 		// Get the chart
 		cp, err := upgradeClient.LocateChart(nginxGatewayChartRef, settings)
@@ -326,6 +339,7 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool) error {
 		installClient.ReleaseName = nginxGatewayReleaseName
 		installClient.Version = nginxGatewayVersion
 		installClient.WaitStrategy = "hookOnly"
+		installClient.SkipSchemaValidation = true
 
 		// Get the chart
 		cp, err := installClient.LocateChart(nginxGatewayChartRef, settings)
@@ -482,7 +496,8 @@ func installGatewayApiCRDs(ctx context.Context) error {
 func DeployOperator(
 	ctx context.Context,
 	namespace string,
-	version string,
+	chartVersion string,
+	operatorVersion string,
 	telemetryMode string,
 ) error {
 	const repositoryURL = "oci://us-docker.pkg.dev/wandb-production/public/wandb/charts"
@@ -532,7 +547,7 @@ func DeployOperator(
 		// Create upgrade action
 		upgradeClient := action.NewUpgrade(actionConfig)
 		upgradeClient.Namespace = namespace
-		upgradeClient.Version = version
+		upgradeClient.Version = chartVersion
 		upgradeClient.WaitStrategy = "hookOnly"
 		upgradeClient.ForceConflicts = true
 
@@ -558,7 +573,7 @@ func DeployOperator(
 		installClient := action.NewInstall(actionConfig)
 		installClient.Namespace = namespace
 		installClient.ReleaseName = releaseName
-		installClient.Version = version
+		installClient.Version = chartVersion
 		installClient.WaitStrategy = "hookOnly"
 
 		// Get the chart

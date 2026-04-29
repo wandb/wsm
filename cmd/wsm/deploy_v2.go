@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,9 +14,14 @@ import (
 	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/operator"
 	"gopkg.in/yaml.v3"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"knative.dev/pkg/ptr"
 
+	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	certmanagermetav1 "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	"github.com/wandb/operator/api/v2"
 )
 
@@ -25,12 +31,16 @@ func init() {
 }
 
 // TODO once an official release publishes a manifest, we should switch to lookup up the most recent non-dev release and not have a default.
-const defaultWandbVersion = "0.78.0-pre.1772047260"
+const defaultWandbVersion = "0.79.2"
 
 const (
 	certManagerInstallModeAuto  = "auto"
 	certManagerInstallModeTrue  = "true"
 	certManagerInstallModeFalse = "false"
+
+	nginxGatewayInstallModeAuto  = "auto"
+	nginxGatewayInstallModeTrue  = "true"
+	nginxGatewayInstallModeFalse = "false"
 )
 
 var (
@@ -42,30 +52,45 @@ var (
 		Spec: v2.WeightsAndBiasesSpec{
 			Wandb: v2.WandbAppSpec{
 				Hostname: "http://localhost:8080",
-				Features: map[string]bool{"proxy": true},
+				Features: map[string]bool{},
 				InternalServiceAuth: v2.InternalServiceAuth{
-					Enabled: ptr.Bool(true),
+					Enabled: ptr.Bool(false),
 				},
 			},
-			MySQL: v2.WBMySQLSpec{
-				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
-				Telemetry:   v2.Telemetry{Enabled: true},
+			MySQL: v2.MySQLSpec{
+				ManagedMysql: &v2.ManagedMysqlSpec{
+					Telemetry: v2.Telemetry{
+						Enabled: false,
+					},
+				},
 			},
-			Redis: v2.WBRedisSpec{
-				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
-				Telemetry:   v2.Telemetry{Enabled: true},
+			Redis: v2.RedisSpec{
+				ManagedRedis: &v2.ManagedRedisSpec{
+					Telemetry: v2.Telemetry{
+						Enabled: false,
+					},
+				},
 			},
-			Kafka: v2.WBKafkaSpec{
-				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
-				Telemetry:   v2.Telemetry{Enabled: true},
+			Kafka: v2.KafkaSpec{
+				ManagedKafka: &v2.ManagedKafkaSpec{
+					Telemetry: v2.Telemetry{
+						Enabled: false,
+					},
+				},
 			},
-			Minio: v2.WBMinioSpec{
-				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
-				Telemetry:   v2.Telemetry{Enabled: true},
+			ObjectStore: v2.ObjectStoreSpec{
+				ManagedObjectStore: &v2.ManagedObjectStoreSpec{
+					Telemetry: v2.Telemetry{
+						Enabled: false,
+					},
+				},
 			},
-			ClickHouse: v2.WBClickHouseSpec{
-				WBInfraSpec: v2.WBInfraSpec{Enabled: true},
-				Telemetry:   v2.Telemetry{Enabled: true},
+			ClickHouse: v2.ClickHouseSpec{
+				ManagedClickHouse: &v2.ManagedClickHouseSpec{
+					Telemetry: v2.Telemetry{
+						Enabled: false,
+					},
+				},
 			},
 		},
 	}
@@ -90,8 +115,19 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&kubeContext, "context", "", "name of the kubeconfig context to use (Required)")
 	// CR deployment
 	cmd.PersistentFlags().String("cr-file", "", "Path to WeightsAndBiases CR YAML (uses built-in default if not provided)")
+	cmd.PersistentFlags().Bool("create-ca", true, "Create a self-signed CA certificate for the W&B instance")
+	cmd.PersistentFlags().Bool("create-aws-ingress-class", false, "Create an AWS Ingress Class for the W&B instance (requires --ingress-class to be set)")
+	cmd.PersistentFlags().Bool("create-aws-storage-class", false, "Create a Storage class for the W&B instance")
+	cmd.PersistentFlags().String("ingress-class", "", "Enable Ingress support with the specified ingress class")
+	cmd.PersistentFlags().String("gateway-class", "nginx", "Enable Gateway API support with the specified gateway class")
+	cmd.PersistentFlags().String("issuer-name", "", "TLS issuer name for Gateway API")
+	cmd.PersistentFlags().Bool("add-ingress-annotations", false, "Add cloud provider annotations to Ingress or Gateway API")
 	cmd.PersistentFlags().String("license", "", "W&B license string (optional, injected into spec.wandb.license)")
 	cmd.PersistentFlags().String("license-file", "", "Path to W&B license file (optional, injected into spec.wandb.license)")
+	cmd.PersistentFlags().String("observability-mode", "off", "Enable observability for applications")
+	cmd.PersistentFlags().String("retention-policy", "detach", "Retention policy for W&B instance (detach, purge) - defaults to detach")
+	cmd.PersistentFlags().String("size", "small", "W&B instance size (dev, micro, small, medium, large, xlarge, 2xlarge, 4xlarge)")
+	cmd.PersistentFlags().String("wandb-hostname", "http://localhost:8080", "Hostname to use for the W&B instance")
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
 	cmd.PersistentFlags().String("wandb-version", "", "Server manifest version (e.g., 0.76.1)")
 	cmd.PersistentFlags().String("wandb-namespace", "wandb", "Namespace for CR")
@@ -113,6 +149,7 @@ func wandbCmd() *cobra.Command {
 
 	cmd.AddCommand(wandbCreateCmd())
 	cmd.AddCommand(wandbDestroyCmd())
+	cmd.AddCommand(wandbGetCACertCmd())
 
 	return cmd
 }
@@ -140,6 +177,71 @@ func wandbDestroyCmd() *cobra.Command {
 	return cmd
 }
 
+func wandbGetCACertCmd() *cobra.Command {
+	var outputDir string
+
+	cmd := &cobra.Command{
+		Use:   "get-ca-cert",
+		Short: "Write the W&B CA certificate to a local file",
+		Long:  `Retrieve the W&B deployment CA certificate and write it to a local file named after the W&B CR`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			wandbNamespace, _ := cmd.Flags().GetString("wandb-namespace")
+			wandbName, _ := cmd.Flags().GetString("wandb-name")
+
+			outputPath, err := exportWandbCACert(kubectl.GetSecretDataMap, os.WriteFile, wandbName, wandbNamespace, outputDir)
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Wrote W&B CA certificate to %s\n", outputPath)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&outputDir, "output-dir", ".", "Directory to write the CA certificate file")
+
+	return cmd
+}
+
+func exportWandbCACert(
+	getSecretDataMap func(name string, namespace string) (map[string][]byte, error),
+	writeFile func(name string, data []byte, perm os.FileMode) error,
+	wandbName string,
+	namespace string,
+	outputDir string,
+) (string, error) {
+	secretName := wandbName + "-root-cert"
+
+	secretData, err := getSecretDataMap(secretName, namespace)
+	if err != nil {
+		return "", fmt.Errorf("failed to retrieve CA secret %q in namespace %q: %w", secretName, namespace, err)
+	}
+
+	certData, err := caCertFromSecretData(secretData)
+	if err != nil {
+		return "", fmt.Errorf("CA certificate does not exist for W&B CR %q: %w", wandbName, err)
+	}
+
+	outputPath := filepath.Join(outputDir, wandbName+".crt")
+	if err := writeFile(outputPath, certData, 0644); err != nil {
+		return "", fmt.Errorf("failed to write CA certificate to %q: %w", outputPath, err)
+	}
+
+	return outputPath, nil
+}
+
+func caCertFromSecretData(secretData map[string][]byte) ([]byte, error) {
+	if certData, ok := secretData["ca.crt"]; ok && len(certData) > 0 {
+		return certData, nil
+	}
+
+	if certData, ok := secretData["tls.crt"]; ok && len(certData) > 0 {
+		return certData, nil
+	}
+
+	return nil, errors.New("secret is missing non-empty \"ca.crt\" or \"tls.crt\" data")
+}
+
 func wandbCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "deploy",
@@ -147,21 +249,48 @@ func wandbCreateCmd() *cobra.Command {
 		Long:  `Deploy a W&B instance with specified versions and configuration`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			crFile, _ := cmd.Flags().GetString("cr-file")
+			createCA, _ := cmd.Flags().GetBool("create-ca")
+			createAwsIngressClass, _ := cmd.Flags().GetBool("create-aws-ingress-class")
+			createAwsStorageClass, _ := cmd.Flags().GetBool("create-aws-storage-class")
+			addIngressAnnotations, _ := cmd.Flags().GetBool("add-ingress-annotations")
 			license, _ := cmd.Flags().GetString("license")
 			licenseFile, _ := cmd.Flags().GetString("license-file")
+			telemetryMode, _ := cmd.Flags().GetString("observability-mode")
+			gatewayClass, _ := cmd.Flags().GetString("gateway-class")
+			ingressClass, _ := cmd.Flags().GetString("ingress-class")
+			issuerName, _ := cmd.Flags().GetString("issuer-name")
+			size, _ := cmd.Flags().GetString("size")
+			retentionPolicy, _ := cmd.Flags().GetString("retention-policy")
 			wandbNamespace, _ := cmd.Flags().GetString("wandb-namespace")
 			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
 			wandbName, _ := cmd.Flags().GetString("wandb-name")
+			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
 			wait, _ := cmd.Flags().GetBool("wait")
 
 			ctx := context.Background()
 
-			err := processWandbCR(crFile, wandbVersion, wandbName, license, licenseFile, wandbNamespace)
+			err := processWandbCR(
+				crFile,
+				wandbVersion,
+				wandbName,
+				wandbHostname,
+				gatewayClass,
+				ingressClass,
+				issuerName,
+				addIngressAnnotations,
+				license,
+				licenseFile,
+				telemetryMode,
+				wandbNamespace,
+				createCA,
+				size,
+				retentionPolicy,
+			)
 			if err != nil {
 				return err
 			}
 
-			err = deployWandbCR(ctx)
+			err = deployWandbCR(ctx, createCA, createAwsStorageClass, createAwsIngressClass, ingressClass)
 			if err != nil {
 				return err
 			}
@@ -186,10 +315,12 @@ func wandbCreateCmd() *cobra.Command {
 func operatorDeployCmd() *cobra.Command {
 	var setupCluster bool
 	var installCertManagerMode string
+	var installNginxGatewayMode string
+	var enableGatewayAPI bool
 	var includeCR bool
 	var clusterName string
 	var workers int
-	//var operatorVersion string
+	var operatorVersion string
 	var operatorChartVersion string
 	var operatorNamespace string
 
@@ -199,21 +330,65 @@ func operatorDeployCmd() *cobra.Command {
 		Long:  `Deploy the v2 operator with specified versions and configuration`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			crFile, _ := cmd.Flags().GetString("cr-file")
+			createCA, _ := cmd.Flags().GetBool("create-ca")
+			createAwsIngressClass, _ := cmd.Flags().GetBool("create-aws-ingress-class")
+			createAwsStorageClass, _ := cmd.Flags().GetBool("create-aws-storage-class")
+			addIngressAnnotations, _ := cmd.Flags().GetBool("add-ingress-annotations")
+			gatewayClass, _ := cmd.Flags().GetString("gateway-class")
+			ingressClass, _ := cmd.Flags().GetString("ingress-class")
+			issuerName, _ := cmd.Flags().GetString("issuer-name")
+			size, _ := cmd.Flags().GetString("size")
+			retentionPolicy, _ := cmd.Flags().GetString("retention-policy")
 			license, _ := cmd.Flags().GetString("license")
 			licenseFile, _ := cmd.Flags().GetString("license-file")
+			telemetryMode, _ := cmd.Flags().GetString("observability-mode")
 			wandbNamespace, _ := cmd.Flags().GetString("wandb-namespace")
 			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
 			wandbName, _ := cmd.Flags().GetString("wandb-name")
+			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
 			wait, _ := cmd.Flags().GetBool("wait")
 
-			err := processWandbCR(crFile, wandbVersion, wandbName, license, licenseFile, wandbNamespace)
+			err := processWandbCR(
+				crFile,
+				wandbVersion,
+				wandbName,
+				wandbHostname,
+				gatewayClass,
+				ingressClass,
+				issuerName,
+				addIngressAnnotations,
+				license,
+				licenseFile,
+				telemetryMode,
+				wandbNamespace,
+				createCA,
+				size,
+				retentionPolicy,
+			)
 			if err != nil {
 				return err
 			}
 
 			// Perform the deployment
 			deployStart := time.Now()
-			if err := performDeploy(setupCluster, installCertManagerMode, includeCR, wait, clusterName, workers, operatorChartVersion, wandbVersion, operatorNamespace); err != nil {
+			if err := performDeploy(
+				setupCluster,
+				installCertManagerMode,
+				installNginxGatewayMode,
+				enableGatewayAPI,
+				includeCR,
+				wait,
+				clusterName,
+				telemetryMode,
+				workers,
+				operatorChartVersion,
+				operatorVersion,
+				operatorNamespace,
+				createCA,
+				createAwsStorageClass,
+				createAwsIngressClass,
+				ingressClass,
+			); err != nil {
 				fmt.Printf("\n✗ Deployment failed: %v\n", err)
 				return err
 			}
@@ -221,13 +396,16 @@ func operatorDeployCmd() *cobra.Command {
 			// Success summary
 			totalTime := time.Since(deployStart).Round(time.Second)
 			fmt.Printf("\n✓ Deployment complete! (%s total)\n\n", totalTime)
-			fmt.Println("Access your W&B instance:")
-			if setupCluster {
-				fmt.Printf("  • Kubectl context: kind-%s\n", clusterName)
+
+			if includeCR {
+				fmt.Println("Access your W&B instance:")
+				if setupCluster {
+					fmt.Printf("  • Kubectl context: kind-%s\n", clusterName)
+				}
+				fmt.Printf("  • Namespace: %s\n", wandbNamespace)
+				fmt.Printf("  • Status: kubectl get wandb -n %s\n", wandbNamespace)
+				fmt.Println()
 			}
-			fmt.Printf("  • Namespace: %s\n", wandbNamespace)
-			fmt.Printf("  • Status: kubectl get wandb -n %s\n", wandbNamespace)
-			fmt.Println()
 			return nil
 		},
 	}
@@ -237,22 +415,45 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
 
 	//TODO Decide whether to expose this or have it depend on the chart version
-	//cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator image version (e.g., v2.0.0) - defaults to value in the chart")
-	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "1.5.2", "Operator Chart version (e.g., v2.0.0)")
+	cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator image version (e.g., v2.0.0) - defaults to value in the chart")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-alpha.1", "Operator Chart version (e.g., v2.0.0)")
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
 	cmd.Flags().StringVar(&installCertManagerMode, "install-cert-manager", certManagerInstallModeAuto, "Cert-manager install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
+	cmd.Flags().StringVar(&installNginxGatewayMode, "install-nginx-gateway", nginxGatewayInstallModeAuto, "Nginx-gateway-fabric install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
 
+	cmd.Flags().BoolVar(&enableGatewayAPI, "enable-gateway-api", true, "Disables Gateway API support for cert-manager")
 	cmd.Flags().BoolVar(&includeCR, "include-cr", false, "Include the Wandb CR in the operator deployment")
 	return cmd
 }
 
-func performDeploy(setupCluster bool, installCertManagerMode string, includeCR bool, wait bool, clusterName string, workers int, operatorChartVersion string, wandbVersion string, operatorNamespace string) error {
+func performDeploy(
+	setupCluster bool,
+	installCertManagerMode string,
+	installNginxGatewayMode string,
+	enableGatewayAPI bool,
+	includeCR bool,
+	wait bool,
+	clusterName string,
+	telemetryMode string,
+	workers int,
+	operatorChartVersion string,
+	operatorVersion string,
+	operatorNamespace string,
+	createCA bool,
+	createAwsStorageClass bool,
+	createAwsIngressClass bool,
+	ingressClass string,
+) error {
 	ctx := context.Background()
+	installNginxGatewayMode = strings.ToLower(strings.TrimSpace(installNginxGatewayMode))
 	installCertManagerMode = strings.ToLower(strings.TrimSpace(installCertManagerMode))
 
 	// Calculate total steps based on flags
 	totalSteps := 2 // Always: ensure cert-manager, deploy operator
 	if setupCluster {
+		totalSteps++
+	}
+	if installNginxGatewayMode != nginxGatewayInstallModeFalse {
 		totalSteps++
 	}
 	if includeCR {
@@ -268,7 +469,7 @@ func performDeploy(setupCluster bool, installCertManagerMode string, includeCR b
 		fmt.Printf("[%d/%d] Setting up cluster (%d workers)...", currentStep, totalSteps, workers)
 		start := time.Now()
 
-		err := performCreateCluster(ctx, clusterName, workers)
+		err := performCreateCluster(ctx, clusterName, workers, 8080, 8443)
 		if err != nil {
 			return err
 		}
@@ -279,54 +480,78 @@ func performDeploy(setupCluster bool, installCertManagerMode string, includeCR b
 		_ = clusterName
 	}
 
-	// Step 2: Ensure cert-manager
-	fmt.Printf("[%d/%d] Ensuring cert-manager...", currentStep, totalSteps)
-	start := time.Now()
+	// Step: Ensure nginx-gateway-fabric
+	if installNginxGatewayMode != nginxGatewayInstallModeFalse {
+		fmt.Printf("[%d/%d] Ensuring nginx-gateway-fabric...", currentStep, totalSteps)
+		start := time.Now()
 
-	switch installCertManagerMode {
-	case certManagerInstallModeAuto:
-		if err := operator.InstallCertManager(ctx, true); err != nil {
+		switch installNginxGatewayMode {
+		case nginxGatewayInstallModeAuto:
+			if err := operator.InstallNginxGateway(ctx, true); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+		case nginxGatewayInstallModeTrue:
+			if err := operator.InstallNginxGateway(ctx, false); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+		}
+
+		if err := operator.WaitForNginxGateway(ctx, 5*time.Minute); err != nil {
 			fmt.Println(" ✗")
 			return err
 		}
-	case certManagerInstallModeTrue:
-		if err := operator.InstallCertManager(ctx, false); err != nil {
-			fmt.Println(" ✗")
-			return err
-		}
-	case certManagerInstallModeFalse:
-		// Skip installation and only verify cert-manager readiness below.
-	default:
-		fmt.Println(" ✗")
-		return fmt.Errorf("invalid --install-cert-manager value %q (expected: auto, true, false)", installCertManagerMode)
-	}
 
-	if err := operator.WaitForCertManager(ctx, 5*time.Minute); err != nil {
-		fmt.Println(" ✗")
-		if installCertManagerMode == certManagerInstallModeFalse {
-			return fmt.Errorf("cert-manager is not ready and installation is disabled (--install-cert-manager=false): %w", err)
-		}
-		return err
-	}
-
-	switch installCertManagerMode {
-	case certManagerInstallModeFalse:
-		fmt.Printf(" ✓ (%s, installation disabled)\n", time.Since(start).Round(time.Second))
-	default:
 		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
+		currentStep++
 	}
-	currentStep++
 
-	// Step 3: Create infra-operators wandbNamespace
+	// Step: Ensure cert-manager
+	if installCertManagerMode != certManagerInstallModeFalse {
+		fmt.Printf("[%d/%d] Ensuring cert-manager...", currentStep, totalSteps)
+		start := time.Now()
+
+		switch installCertManagerMode {
+		case certManagerInstallModeAuto:
+			if err := operator.InstallCertManager(ctx, enableGatewayAPI, true); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+		case certManagerInstallModeTrue:
+			if err := operator.InstallCertManager(ctx, enableGatewayAPI, false); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+		case certManagerInstallModeFalse:
+			// Skip installation and only verify cert-manager readiness below.
+		default:
+			fmt.Println(" ✗")
+			return fmt.Errorf("invalid --install-cert-manager value %q (expected: auto, true, false)", installCertManagerMode)
+		}
+
+		if err := operator.WaitForCertManager(ctx, 5*time.Minute); err != nil {
+			fmt.Println(" ✗")
+			if installCertManagerMode == certManagerInstallModeFalse {
+				return fmt.Errorf("cert-manager is not ready and installation is disabled (--install-cert-manager=false): %w", err)
+			}
+			return err
+		}
+
+		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
+		currentStep++
+	}
+
+	// Step: Create infra-operators wandbNamespace
 	if err := operator.CreateNamespace(ctx, operatorNamespace); err != nil {
 		return err
 	}
 
 	// Step 4: Deploy W&B operator
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
-	start = time.Now()
+	start := time.Now()
 
-	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion); err != nil {
+	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, operatorVersion, telemetryMode); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -336,7 +561,11 @@ func performDeploy(setupCluster bool, installCertManagerMode string, includeCR b
 		return err
 	}
 
-	if err := kubectl.CreateDeploymentMarker(ctx, "", operatorNamespace, "cert-manager,operator"); err != nil {
+	markers := "cert-manager,operator"
+	if installNginxGatewayMode != nginxGatewayInstallModeFalse {
+		markers += ",nginx-gateway"
+	}
+	if err := kubectl.CreateDeploymentMarker(ctx, "", operatorNamespace, markers); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -349,7 +578,7 @@ func performDeploy(setupCluster bool, installCertManagerMode string, includeCR b
 		fmt.Printf("[%d/%d] Creating W&B instance...", currentStep, totalSteps)
 		start = time.Now()
 
-		err := deployWandbCR(ctx)
+		err := deployWandbCR(ctx, createCA, createAwsStorageClass, createAwsIngressClass, ingressClass)
 		if err != nil {
 			return err
 		}
@@ -395,9 +624,30 @@ func destroyWandbCR(ctx context.Context, name string, namespace string) error {
 	return nil
 }
 
-func deployWandbCR(ctx context.Context) error {
+func deployWandbCR(ctx context.Context, createCA bool, createAwsStorageClass, createAwsIngressClass bool, ingressClass string) error {
 	if err := operator.CreateNamespace(ctx, wandbCR.Namespace); err != nil {
 		return err
+	}
+
+	if createCA {
+		err := createCAIssuer(ctx, wandbCR.Name, wandbCR.Namespace)
+		if err != nil {
+			return fmt.Errorf("failed to create CA issuer: %w", err)
+		}
+	}
+
+	if createAwsIngressClass {
+		err := createDefaultAwsIngressClass(ctx, ingressClass)
+		if err != nil {
+			return fmt.Errorf("failed to create AWS ingress class: %w", err)
+		}
+	}
+
+	if createAwsStorageClass {
+		err := createDefaultAwsStorageClass(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to create AWS storage class: %w", err)
+		}
 	}
 
 	if err := operator.ApplyCR(ctx, wandbCR); err != nil {
@@ -412,7 +662,7 @@ func deployWandbCR(ctx context.Context) error {
 	return nil
 }
 
-func performCreateCluster(ctx context.Context, clusterName string, workers int) error {
+func performCreateCluster(ctx context.Context, clusterName string, workers int, httpPort int32, httpsPort int32) error {
 	exists, err := kind.ClusterExists(ctx, clusterName)
 	if err != nil {
 		fmt.Println(" ✗")
@@ -420,7 +670,7 @@ func performCreateCluster(ctx context.Context, clusterName string, workers int) 
 	}
 
 	if !exists {
-		if err := kind.CreateCluster(ctx, clusterName, workers); err != nil {
+		if err := kind.CreateCluster(ctx, clusterName, workers, httpPort, httpsPort); err != nil {
 			fmt.Println(" ✗")
 			return err
 		}
@@ -440,7 +690,156 @@ func performCreateCluster(ctx context.Context, clusterName string, workers int) 
 	return nil
 }
 
-func processWandbCR(crFile string, wandbVersion string, wandbName string, license string, licenseFile string, wandbNamespace string) error {
+func createCAIssuer(ctx context.Context, wandbName string, namespace string) error {
+	selfSignedIssuerName := wandbName + "-selfsigned-issuer"
+	rootCertName := wandbName + "-root-cert"
+	caIssuerName := wandbName + "-ca-issuer"
+
+	selfSignedIssuer := certmanagerv1.Issuer{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      selfSignedIssuerName,
+			Namespace: namespace,
+		},
+		Spec: certmanagerv1.IssuerSpec{
+			IssuerConfig: certmanagerv1.IssuerConfig{
+				SelfSigned: &certmanagerv1.SelfSignedIssuer{},
+			},
+		},
+	}
+	rootCert := certmanagerv1.Certificate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      rootCertName,
+			Namespace: namespace,
+		},
+		Spec: certmanagerv1.CertificateSpec{
+			SecretName: rootCertName,
+			IsCA:       true,
+			CommonName: "wandb-ca",
+			Duration:   &metav1.Duration{Duration: 8760 * 24 * time.Hour},
+			IssuerRef: certmanagermetav1.ObjectReference{
+				Name:  selfSignedIssuerName,
+				Kind:  "Issuer",
+				Group: "cert-manager.io",
+			},
+		},
+	}
+	caIssuer := certmanagerv1.Issuer{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      caIssuerName,
+			Namespace: namespace,
+		},
+		Spec: certmanagerv1.IssuerSpec{
+			IssuerConfig: certmanagerv1.IssuerConfig{
+				CA: &certmanagerv1.CAIssuer{
+					SecretName: rootCertName,
+				},
+			},
+		},
+	}
+
+	if err := kubectl.ApplyIssuer(ctx, &selfSignedIssuer); err != nil {
+		return err
+	}
+	if err := kubectl.ApplyCertificate(ctx, &rootCert); err != nil {
+		return err
+	}
+	if err := kubectl.ApplyIssuer(ctx, &caIssuer); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func createDefaultAwsIngressClass(ctx context.Context, ingressClass string) error {
+	awsIngressClassParams := map[string]interface{}{
+		"apiVersion": "eks.amazonaws.com/v1",
+		"kind":       "IngressClassParams",
+		"metadata": map[string]interface{}{
+			"name": ingressClass,
+		},
+		"spec": map[string]interface{}{
+			"scheme": "internet-facing",
+		},
+	}
+	awsIngressClassParamsYaml, err := yaml.Marshal(awsIngressClassParams)
+	if err != nil {
+		return fmt.Errorf("failed to marshal AWS ingress class params YAML: %w", err)
+	}
+
+	awsIngressClass := networkingv1.IngressClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ingressClass,
+			Annotations: map[string]string{
+				"ingressclass.kubernetes.io/is-default-class": "true",
+			},
+		},
+		Spec: networkingv1.IngressClassSpec{
+			Controller: "eks.amazonaws.com/alb",
+			Parameters: &networkingv1.IngressClassParametersReference{
+				APIGroup: ptr.String("eks.amazonaws.com"),
+				Kind:     "IngressClassParams",
+				Name:     ingressClass,
+			},
+		},
+	}
+
+	err = kubectl.ApplyYAML(ctx, awsIngressClassParamsYaml)
+	if err != nil {
+		return fmt.Errorf("failed to apply AWS ingress class params YAML: %w", err)
+	}
+
+	return kubectl.ApplyIngressClass(ctx, awsIngressClass)
+}
+
+func createDefaultAwsStorageClass(ctx context.Context) error {
+	storageClass := storagev1.StorageClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gp3",
+			Annotations: map[string]string{
+				"storageclass.kubernetes.io/is-default-class": "true",
+			},
+		},
+		Provisioner: "ebs.csi.eks.amazonaws.com",
+		Parameters: map[string]string{
+			"type":      "gp3",
+			"encrypted": "true",
+		},
+		ReclaimPolicy:        nil,
+		MountOptions:         nil,
+		AllowVolumeExpansion: ptr.Bool(true),
+		VolumeBindingMode:    nil,
+		AllowedTopologies: []corev1.TopologySelectorTerm{
+			{
+				MatchLabelExpressions: []corev1.TopologySelectorLabelRequirement{
+					{
+						Key:    "eks.amazonaws.com/compute-type",
+						Values: []string{"auto"},
+					},
+				},
+			},
+		},
+	}
+
+	return kubectl.ApplyStorageClass(ctx, &storageClass)
+}
+
+func processWandbCR(
+	crFile string,
+	wandbVersion string,
+	wandbName string,
+	wandbHostname string,
+	gatewayClass string,
+	ingressClass string,
+	issuerName string,
+	addIngressAnnotations bool,
+	license string,
+	licenseFile string,
+	telemetryMode string,
+	wandbNamespace string,
+	createCA bool,
+	size string,
+	retentionPolicy string,
+) error {
 	if crFile != "" {
 		var err error
 		wandbCR, err = readCRFile(crFile)
@@ -451,6 +850,9 @@ func processWandbCR(crFile string, wandbVersion string, wandbName string, licens
 	}
 
 	wandbCR.Name = wandbName
+	wandbCR.Spec.Wandb.Hostname = wandbHostname
+	wandbCR.Spec.Size = v2.Size(size)
+	wandbCR.Spec.RetentionPolicy.OnDelete = v2.OnDeletePolicy(retentionPolicy)
 
 	if wandbCR.Spec.Wandb.Version == "" && wandbVersion == "" {
 		wandbCR.Spec.Wandb.Version = defaultWandbVersion
@@ -464,6 +866,10 @@ func processWandbCR(crFile string, wandbVersion string, wandbName string, licens
 		return fmt.Errorf("cannot specify both license and license file")
 	}
 
+	if gatewayClass != "" && ingressClass != "" {
+		return fmt.Errorf("cannot specify both gatewayClass and ingressClass")
+	}
+
 	if license != "" || licenseFile != "" {
 		if license != "" {
 			wandbCR.Spec.Wandb.License = license
@@ -475,6 +881,67 @@ func processWandbCR(crFile string, wandbVersion string, wandbName string, licens
 				return err
 			}
 			wandbCR.Spec.Wandb.License = strings.TrimSpace(string(licenseData))
+		}
+	}
+
+	if gatewayClass != "" {
+		wandbCR.Spec.Networking.Mode = "gateway"
+		wandbCR.Spec.Networking.GatewayAPI = &v2.GatewayAPIConfig{
+			Gateway: v2.GatewayConfig{
+				Managed:          true,
+				GatewayClassName: &gatewayClass,
+			},
+		}
+	}
+
+	if ingressClass != "" {
+		wandbCR.Spec.Networking.Mode = "ingress"
+		wandbCR.Spec.Networking.Ingress = &v2.IngressConfig{
+			IngressClassName: &ingressClass,
+		}
+	}
+
+	if addIngressAnnotations {
+		wandbCR.Spec.Networking.GatewayAPI.Gateway.InfrastructureAnnotations = map[string]string{
+			"service.beta.kubernetes.io/aws-load-balancer-scheme": "internet-facing",
+		}
+	}
+
+	if strings.HasPrefix(wandbCR.Spec.Wandb.Hostname, "https") {
+		if createCA {
+			wandbCR.Spec.Networking.TLS = &v2.TLSConfig{
+				SecretName: wandbName + "-tls-secret",
+				CertManager: &v2.CertManagerConfig{
+					Issuer: wandbName + "-ca-issuer",
+				},
+			}
+		} else if issuerName != "" {
+			wandbCR.Spec.Networking.TLS = &v2.TLSConfig{
+				SecretName: wandbName + "-tls-secret",
+				CertManager: &v2.CertManagerConfig{
+					Issuer: issuerName,
+				},
+			}
+		} else {
+			return fmt.Errorf("cannot specify TLS without a CA or issuer")
+		}
+	}
+
+	if telemetryMode != "" && telemetryMode != "off" {
+		if wandbCR.Spec.MySQL.ManagedMysql != nil {
+			wandbCR.Spec.MySQL.ManagedMysql.Telemetry.Enabled = true
+		}
+		if wandbCR.Spec.Kafka.ManagedKafka != nil {
+			wandbCR.Spec.Kafka.ManagedKafka.Telemetry.Enabled = true
+		}
+		if wandbCR.Spec.ClickHouse.ManagedClickHouse != nil {
+			wandbCR.Spec.ClickHouse.ManagedClickHouse.Telemetry.Enabled = true
+		}
+		if wandbCR.Spec.Redis.ManagedRedis != nil {
+			wandbCR.Spec.Redis.ManagedRedis.Telemetry.Enabled = true
+		}
+		if wandbCR.Spec.ObjectStore.ManagedObjectStore != nil {
+			wandbCR.Spec.ObjectStore.ManagedObjectStore.Telemetry.Enabled = true
 		}
 	}
 
@@ -513,12 +980,12 @@ func ClusterCmd() *cobra.Command {
 func clusterCreateCmd() *cobra.Command {
 	var clusterName string
 	var workers int
-
+	var httpPort, httpsPort int32
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a new kind cluster",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := performCreateCluster(context.Background(), clusterName, workers); err != nil {
+			if err := performCreateCluster(context.Background(), clusterName, workers, httpPort, httpsPort); err != nil {
 				fmt.Printf("✗ Cluster Create failed: %v\n", err)
 				return err
 			}
@@ -529,6 +996,8 @@ func clusterCreateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&clusterName, "cluster-name", "kind", "Name of the Kind cluster")
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes")
+	cmd.Flags().Int32Var(&httpPort, "http-port", 8080, "HTTP port for Kind cluster ingress")
+	cmd.Flags().Int32Var(&httpsPort, "https-port", 8443, "HTTPS port for Kind cluster ingress")
 
 	return cmd
 }
@@ -637,6 +1106,21 @@ func performCleanup() error {
 		for _, ns := range cmNamespaces {
 			if err := kubectl.DeleteDeploymentMarker(ctx, ns, "cert-manager"); err != nil {
 				fmt.Printf("  ✗ Failed to remove cert-manager marker in %s: %v\n", ns, err)
+			}
+		}
+	}
+
+	// 4. Delete nginx-gateway
+	fmt.Println("→ Deleting nginx-gateway...")
+	if err := operator.DeleteNginxGateway(ctx); err != nil {
+		fmt.Printf("  ✗ Failed to delete nginx-gateway: %v\n", err)
+	}
+
+	ngNamespaces, err := kubectl.FindNamespacesWithMarker(ctx, "nginx-gateway")
+	if err == nil {
+		for _, ns := range ngNamespaces {
+			if err := kubectl.DeleteDeploymentMarker(ctx, ns, "nginx-gateway"); err != nil {
+				fmt.Printf("  ✗ Failed to remove nginx-gateway marker in %s: %v\n", ns, err)
 			}
 		}
 	}

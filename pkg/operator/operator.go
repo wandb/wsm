@@ -23,7 +23,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -54,12 +53,22 @@ func CreateNamespace(ctx context.Context, namespace string) error {
 const (
 	certManagerNamespace      = "cert-manager"
 	certManagerDeploymentName = "cert-manager"
-	certManagerManifestURL    = "https://github.com/cert-manager/cert-manager/releases/download/v1.19.2/cert-manager.yaml"
+	certManagerReleaseName    = "cert-manager"
+	certManagerChartRef       = "oci://quay.io/jetstack/charts/cert-manager"
+	certManagerVersion        = "v1.20.2"
+
+	nginxGatewayNamespace      = "nginx-gateway"
+	nginxGatewayDeploymentName = "nginx-gateway-nginx-gateway-fabric"
+	nginxGatewayReleaseName    = "nginx-gateway"
+	nginxGatewayChartRef       = "oci://ghcr.io/nginx/charts/nginx-gateway-fabric"
+	nginxGatewayVersion        = "2.5.1"
+
+	gatewayApiCRDURL = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml"
 )
 
 // InstallCertManager installs cert-manager.
 // When skipIfPresent is true, installation is skipped if the cert-manager deployment already exists.
-func InstallCertManager(ctx context.Context, skipIfPresent bool) error {
+func InstallCertManager(ctx context.Context, enableGatewayAPI bool, skipIfPresent bool) error {
 	if skipIfPresent {
 		deploymentExists, err := certManagerDeploymentExists(ctx)
 		if err != nil {
@@ -70,35 +79,100 @@ func InstallCertManager(ctx context.Context, skipIfPresent bool) error {
 		}
 	}
 
-	manifest, err := downloadCertManagerManifest()
-	if err != nil {
+	if err := CreateNamespace(ctx, certManagerNamespace); err != nil {
 		return err
 	}
 
-	if err := kubectl.ApplyYAML(ctx, manifest); err != nil {
-		return fmt.Errorf("failed to apply cert-manager manifest: %w", err)
+	// Initialize Helm settings
+	settings := cli.New()
+	settings.SetNamespace(certManagerNamespace)
+	settings.KubeContext = kubectl.GetContext()
+
+	// Initialize action configuration
+	actionConfig, err := initActionConfig(settings)
+	if err != nil {
+		return fmt.Errorf("failed to initialize action config: %w", err)
+	}
+
+	// Create registry client
+	registryClient, err := newRegistryClient(settings, "", "", "", false, false)
+	if err != nil {
+		return fmt.Errorf("failed to create registry client: %w", err)
+	}
+	actionConfig.RegistryClient = registryClient
+
+	// Check if release already exists
+	releaseExists, err := checkReleaseExists(actionConfig, certManagerReleaseName)
+	if err != nil {
+		return fmt.Errorf("failed to check if release exists: %w", err)
+	}
+
+	releaseValues := map[string]interface{}{
+		"crds": map[string]interface{}{
+			"enabled": true,
+		},
+		"config": map[string]interface{}{
+			"enableGatewayAPI": enableGatewayAPI,
+		},
+		"startupapicheck": map[string]interface{}{
+			"enabled": false,
+		},
+	}
+
+	if releaseExists {
+		// Create upgrade action
+		upgradeClient := action.NewUpgrade(actionConfig)
+		upgradeClient.Namespace = certManagerNamespace
+		upgradeClient.Version = certManagerVersion
+		upgradeClient.WaitStrategy = "hookOnly"
+		upgradeClient.ForceConflicts = true
+		//upgradeClient.ResetValues = true
+
+		// Get the chart
+		cp, err := upgradeClient.LocateChart(certManagerChartRef, settings)
+		if err != nil {
+			return fmt.Errorf("failed to locate cert-manager chart: %w", err)
+		}
+
+		// Load the chart
+		chartRequested, err := loader.Load(cp)
+		if err != nil {
+			return fmt.Errorf("failed to load cert-manager chart: %w", err)
+		}
+
+		// Run the upgrade
+		_, err = upgradeClient.RunWithContext(ctx, certManagerReleaseName, chartRequested, releaseValues)
+		if err != nil {
+			return fmt.Errorf("failed to upgrade cert-manager: %w", err)
+		}
+	} else {
+		// Create install action
+		installClient := action.NewInstall(actionConfig)
+		installClient.Namespace = certManagerNamespace
+		installClient.ReleaseName = certManagerReleaseName
+		installClient.Version = certManagerVersion
+		installClient.WaitStrategy = "hookOnly"
+
+		// Get the chart
+		cp, err := installClient.LocateChart(certManagerChartRef, settings)
+		if err != nil {
+			return fmt.Errorf("failed to locate cert-manager chart: %w", err)
+		}
+
+		// Load the chart
+		chartRequested, err := loader.Load(cp)
+		if err != nil {
+			return fmt.Errorf("failed to load cert-manager chart: %w", err)
+		}
+
+		// Run the install
+		_, err = installClient.RunWithContext(ctx, chartRequested, releaseValues)
+		if err != nil {
+			return fmt.Errorf("failed to install cert-manager: %w", err)
+		}
 	}
 
 	return nil
-}
-
-func downloadCertManagerManifest() ([]byte, error) {
-	resp, err := http.Get(certManagerManifestURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download cert-manager manifest: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to download cert-manager manifest: status code %d", resp.StatusCode)
-	}
-
-	manifest, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read cert-manager manifest: %w", err)
-	}
-
-	return manifest, nil
 }
 
 // WaitForCertManager waits for cert-manager to be ready
@@ -143,20 +217,289 @@ func certManagerDeploymentExists(ctx context.Context) (bool, error) {
 
 // DeleteCertManager deletes the cert-manager resources
 func DeleteCertManager(ctx context.Context) error {
-	manifest, err := downloadCertManagerManifest()
+	settings := cli.New()
+	settings.SetNamespace(certManagerNamespace)
+	settings.KubeContext = kubectl.GetContext()
+
+	actionConfig, err := initActionConfig(settings)
 	if err != nil {
-		return fmt.Errorf("failed to prepare cert-manager manifest for deletion: %w", err)
+		return fmt.Errorf("failed to initialize action config: %w", err)
 	}
 
-	// We don't have a DeleteYAML in kubectl, but we can use ApplyYAML with a trick or add DeleteYAML.
-	// For now, let's just use kubectl.DeleteNamespace for cert-manager if we know it.
-	// Actually, the manifest contains many resources.
-	// Let's add DeleteYAML to kubectl.
-	return kubectl.DeleteYAML(ctx, manifest)
+	uninstallClient := action.NewUninstall(actionConfig)
+	uninstallClient.WaitStrategy = "hookOnly"
+	uninstallClient.Timeout = 5 * time.Minute
+
+	_, err = uninstallClient.Run(certManagerReleaseName)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return nil
+		}
+		return fmt.Errorf("failed to uninstall cert-manager: %w", err)
+	}
+
+	return nil
+}
+
+// InstallNginxGateway installs nginx-gateway-fabric.
+// When skipIfPresent is true, installation is skipped if the nginx-gateway-fabric deployment already exists.
+func InstallNginxGateway(ctx context.Context, skipIfPresent bool) error {
+	if skipIfPresent {
+		deploymentExists, err := nginxGatewayDeploymentExists(ctx)
+		if err != nil {
+			return err
+		}
+		if deploymentExists {
+			return nil
+		}
+	}
+
+	exists, err := gatewayApiCRDsExist()
+	if err != nil {
+		return fmt.Errorf("failed to check if gateway api crds exist: %w", err)
+	}
+	if !exists {
+		if err := installGatewayApiCRDs(ctx); err != nil {
+			return fmt.Errorf("failed to install gateway api crds: %w", err)
+		}
+	}
+
+	if err := CreateNamespace(ctx, nginxGatewayNamespace); err != nil {
+		return err
+	}
+
+	// Initialize Helm settings
+	settings := cli.New()
+	settings.SetNamespace(nginxGatewayNamespace)
+	settings.KubeContext = kubectl.GetContext()
+
+	// Initialize action configuration
+	actionConfig, err := initActionConfig(settings)
+	if err != nil {
+		return fmt.Errorf("failed to initialize action config: %w", err)
+	}
+
+	// Create registry client
+	registryClient, err := newRegistryClient(settings, "", "", "", false, false)
+	if err != nil {
+		return fmt.Errorf("failed to create registry client: %w", err)
+	}
+	actionConfig.RegistryClient = registryClient
+
+	// Check if release already exists
+	releaseExists, err := checkReleaseExists(actionConfig, nginxGatewayReleaseName)
+	if err != nil {
+		return fmt.Errorf("failed to check if release exists: %w", err)
+	}
+
+	releaseValues := map[string]any{}
+
+	if strings.HasPrefix(kubectl.GetContext(), "kind-") {
+		releaseValues["nginx"] = map[string]any{
+			"service": map[string]any{
+				"type": "NodePort",
+				"nodePorts": []map[string]any{
+					{"port": 31437, "listenerPort": 8080},
+					{"port": 30478, "listenerPort": 8443},
+				},
+			},
+		}
+	}
+
+	if releaseExists {
+		// Create upgrade action
+		upgradeClient := action.NewUpgrade(actionConfig)
+		upgradeClient.Namespace = nginxGatewayNamespace
+		upgradeClient.Version = nginxGatewayVersion
+		upgradeClient.WaitStrategy = "hookOnly"
+		upgradeClient.ForceConflicts = true
+		upgradeClient.SkipSchemaValidation = true
+
+		// Get the chart
+		cp, err := upgradeClient.LocateChart(nginxGatewayChartRef, settings)
+		if err != nil {
+			return fmt.Errorf("failed to locate nginx-gateway chart: %w", err)
+		}
+
+		// Load the chart
+		chartRequested, err := loader.Load(cp)
+		if err != nil {
+			return fmt.Errorf("failed to load nginx-gateway chart: %w", err)
+		}
+
+		// Run the upgrade
+		_, err = upgradeClient.RunWithContext(ctx, nginxGatewayReleaseName, chartRequested, releaseValues)
+		if err != nil {
+			return fmt.Errorf("failed to upgrade nginx-gateway: %w", err)
+		}
+	} else {
+		// Create install action
+		installClient := action.NewInstall(actionConfig)
+		installClient.Namespace = nginxGatewayNamespace
+		installClient.ReleaseName = nginxGatewayReleaseName
+		installClient.Version = nginxGatewayVersion
+		installClient.WaitStrategy = "hookOnly"
+		installClient.SkipSchemaValidation = true
+
+		// Get the chart
+		cp, err := installClient.LocateChart(nginxGatewayChartRef, settings)
+		if err != nil {
+			return fmt.Errorf("failed to locate nginx-gateway chart: %w", err)
+		}
+
+		// Load the chart
+		chartRequested, err := loader.Load(cp)
+		if err != nil {
+			return fmt.Errorf("failed to load nginx-gateway chart: %w", err)
+		}
+
+		// Run the install
+		_, err = installClient.RunWithContext(ctx, chartRequested, releaseValues)
+		if err != nil {
+			return fmt.Errorf("failed to install nginx-gateway: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// WaitForNginxGateway waits for nginx-gateway-fabric to be ready
+func WaitForNginxGateway(ctx context.Context, timeout time.Duration) error {
+	_, cs, err := kubectl.GetClientset()
+	if err != nil {
+		return err
+	}
+
+	return wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		deploy, err := cs.AppsV1().Deployments(nginxGatewayNamespace).Get(ctx, nginxGatewayDeploymentName, metav1.GetOptions{})
+		if err != nil {
+			return false, nil
+		}
+
+		isAvailable := false
+		for _, cond := range deploy.Status.Conditions {
+			if cond.Type == "Available" && cond.Status == corev1.ConditionTrue {
+				isAvailable = true
+				break
+			}
+		}
+		return isAvailable, nil
+	})
+}
+
+func nginxGatewayDeploymentExists(ctx context.Context) (bool, error) {
+	_, cs, err := kubectl.GetClientset()
+	if err != nil {
+		return false, err
+	}
+
+	_, err = cs.AppsV1().Deployments(nginxGatewayNamespace).Get(ctx, nginxGatewayDeploymentName, metav1.GetOptions{})
+	if err == nil {
+		return true, nil
+	}
+	if errors.IsNotFound(err) {
+		return false, nil
+	}
+	return false, fmt.Errorf("failed to check nginx-gateway deployment %q: %w", nginxGatewayDeploymentName, err)
+}
+
+// DeleteNginxGateway deletes the nginx-gateway-fabric resources
+func DeleteNginxGateway(ctx context.Context) error {
+	settings := cli.New()
+	settings.SetNamespace(nginxGatewayNamespace)
+	settings.KubeContext = kubectl.GetContext()
+
+	actionConfig, err := initActionConfig(settings)
+	if err != nil {
+		return fmt.Errorf("failed to initialize action config: %w", err)
+	}
+
+	uninstallClient := action.NewUninstall(actionConfig)
+	uninstallClient.WaitStrategy = "hookOnly"
+	uninstallClient.Timeout = 5 * time.Minute
+
+	_, err = uninstallClient.Run(nginxGatewayReleaseName)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return nil
+		}
+		return fmt.Errorf("failed to uninstall nginx-gateway: %w", err)
+	}
+
+	return nil
+}
+
+// gatewayApiCRDsExist checks if Gateway API CRDs exist in the cluster
+func gatewayApiCRDsExist() (bool, error) {
+	_, cs, err := kubectl.GetClientset()
+	if err != nil {
+		return false, err
+	}
+	_, resources, err := cs.Discovery().ServerGroupsAndResources()
+	if err != nil && resources == nil {
+		return false, err
+	}
+
+	foundGateways := false
+	foundHTTPRoutes := false
+	foundGRPCRoutes := false
+
+	for _, list := range resources {
+		gv, _ := schema.ParseGroupVersion(list.GroupVersion)
+		if gv.Group != "gateway.networking.k8s.io" {
+			continue
+		}
+		for _, resource := range list.APIResources {
+			switch resource.Name {
+			case "gateways":
+				foundGateways = true
+			case "httproutes":
+				foundHTTPRoutes = true
+			case "grpcroutes":
+				foundGRPCRoutes = true
+			}
+		}
+	}
+
+	if foundGateways && foundHTTPRoutes && foundGRPCRoutes {
+		return true, nil
+	}
+
+	return false, err
+}
+
+// installGatewayApiCRDs installs Gateway API CRDs from the official YAML URL
+func installGatewayApiCRDs(ctx context.Context) error {
+	resp, err := http.Get(gatewayApiCRDURL)
+	if err != nil {
+		return fmt.Errorf("failed to fetch Gateway API CRDs: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to fetch Gateway API CRDs: status %s", resp.Status)
+	}
+
+	yamlContent, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read Gateway API CRDs: %w", err)
+	}
+
+	if err := kubectl.ApplyYAML(ctx, yamlContent); err != nil {
+		return fmt.Errorf("failed to apply Gateway API CRDs: %w", err)
+	}
+
+	return nil
 }
 
 // DeployOperator deploys the W&B operator chart version specified.  The chart is called operator and is available in oci://us-docker.pkg.dev/wandb-production/public/wandb/charts
-func DeployOperator(ctx context.Context, namespace string, version string) error {
+func DeployOperator(
+	ctx context.Context,
+	namespace string,
+	chartVersion string,
+	operatorVersion string,
+	telemetryMode string,
+) error {
 	const repositoryURL = "oci://us-docker.pkg.dev/wandb-production/public/wandb/charts"
 	const chartName = "operator"
 	const chartRef = repositoryURL + "/" + chartName
@@ -165,6 +508,7 @@ func DeployOperator(ctx context.Context, namespace string, version string) error
 	// Initialize Helm settings
 	settings := cli.New()
 	settings.SetNamespace(namespace)
+	settings.KubeContext = kubectl.GetContext()
 
 	// Initialize action configuration
 	actionConfig, err := initActionConfig(settings)
@@ -189,14 +533,23 @@ func DeployOperator(ctx context.Context, namespace string, version string) error
 		"wandb": map[string]interface{}{
 			"install": false,
 		},
+		"wandb-operator": map[string]interface{}{
+			"image": map[string]interface{}{
+				"pullPolicy": "Always",
+			},
+		},
+		"telemetry": map[string]interface{}{
+			"mode": telemetryMode,
+		},
 	}
 
 	if releaseExists {
 		// Create upgrade action
 		upgradeClient := action.NewUpgrade(actionConfig)
 		upgradeClient.Namespace = namespace
-		upgradeClient.Version = version
+		upgradeClient.Version = chartVersion
 		upgradeClient.WaitStrategy = "hookOnly"
+		upgradeClient.ForceConflicts = true
 
 		// Get the chart
 		cp, err := upgradeClient.LocateChart(chartRef, settings)
@@ -220,7 +573,7 @@ func DeployOperator(ctx context.Context, namespace string, version string) error
 		installClient := action.NewInstall(actionConfig)
 		installClient.Namespace = namespace
 		installClient.ReleaseName = releaseName
-		installClient.Version = version
+		installClient.Version = chartVersion
 		installClient.WaitStrategy = "hookOnly"
 
 		// Get the chart
@@ -325,6 +678,7 @@ func DeleteOperator(ctx context.Context, namespace string) error {
 
 	settings := cli.New()
 	settings.SetNamespace(namespace)
+	settings.KubeContext = kubectl.GetContext()
 
 	actionConfig, err := initActionConfig(settings)
 	if err != nil {
@@ -441,29 +795,7 @@ func newRegistryClient(settings *cli.EnvSettings, certFile, keyFile, caFile stri
 
 // ApplyCR applies a WeightsAndBiases CR to the cluster (idempotent)
 func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases) error {
-	_, dyn, err := kubectl.GetDynamicClientset()
-	if err != nil {
-		return err
-	}
-
-	mapper, err := kubectl.GetRESTMapper()
-	if err != nil {
-		return err
-	}
-
 	gvk := wandbCR.GroupVersionKind()
-	mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-	if err != nil {
-		// If mapping fails, try refreshing the mapper as CRDs might have been just installed
-		if refreshedMapper, refreshErr := kubectl.RefreshRESTMapper(); refreshErr == nil {
-			mapping, err = refreshedMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-		}
-
-		if err != nil {
-			return fmt.Errorf("failed to get mapping for %s: %w", gvk, err)
-		}
-	}
-
 	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(wandbCR)
 	if err != nil {
 		return fmt.Errorf("failed to convert to unstructured: %w", err)
@@ -473,16 +805,7 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases) error {
 	// Ensure GVK is set on the unstructured object
 	obj.SetGroupVersionKind(gvk)
 
-	raw, err := obj.MarshalJSON()
-	if err != nil {
-		return fmt.Errorf("failed to marshal CR: %w", err)
-	}
-
-	dr := dyn.Resource(mapping.Resource).Namespace(wandbCR.Namespace)
-
-	if _, err := dr.Patch(ctx, wandbCR.Name, types.ApplyPatchType, raw, metav1.PatchOptions{
-		FieldManager: "wsm",
-	}); err != nil {
+	if err := kubectl.ApplyUnstructured(ctx, obj); err != nil {
 		return fmt.Errorf("failed to apply CR: %w", err)
 	}
 

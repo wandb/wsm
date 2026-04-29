@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"sync"
 
+	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,6 +40,10 @@ var (
 
 func SetContext(ctx string) {
 	kubeContext = ctx
+}
+
+func GetContext() string {
+	return kubeContext
 }
 
 // ResetClients resets the cached k8s clients so the next call re-initializes
@@ -150,65 +157,22 @@ func IsConnectedToCluster() bool {
 }
 
 func ApplyYAML(ctx context.Context, yamlContent []byte) error {
-	_, dyn, err := GetDynamicClientset()
-	if err != nil {
-		return err
-	}
-
-	mapper, err := GetRESTMapper()
-	if err != nil {
-		return err
-	}
-
 	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(yamlContent), 4096)
 	for {
-		var rawObj runtime.RawExtension
-		if err := decoder.Decode(&rawObj); err != nil {
+		obj := &unstructured.Unstructured{}
+		if err := decoder.Decode(obj); err != nil {
 			if err == io.EOF {
 				break
 			}
 			return fmt.Errorf("failed to decode manifest: %w", err)
 		}
 
-		obj := &unstructured.Unstructured{}
-		if err := obj.UnmarshalJSON(rawObj.Raw); err != nil {
-			return fmt.Errorf("failed to unmarshal manifest object: %w", err)
-		}
-
-		if obj.Object == nil {
+		if len(obj.Object) == 0 {
 			continue
 		}
 
-		gvk := obj.GroupVersionKind()
-		mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-		if err != nil {
-			// If mapping fails, try refreshing the mapper as CRDs might have been just installed
-			if refreshedMapper, refreshErr := RefreshRESTMapper(); refreshErr == nil {
-				mapping, err = refreshedMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-			}
-
-			if err != nil {
-				return fmt.Errorf("failed to get mapping for %s: %w", gvk, err)
-			}
-		}
-
-		var dr dynamic.ResourceInterface
-		if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
-			dr = dyn.Resource(mapping.Resource).Namespace(obj.GetNamespace())
-		} else {
-			dr = dyn.Resource(mapping.Resource)
-		}
-
-		data, err := obj.MarshalJSON()
-		if err != nil {
+		if err := ApplyUnstructured(ctx, obj); err != nil {
 			return err
-		}
-
-		_, err = dr.Patch(ctx, obj.GetName(), types.ApplyPatchType, data, metav1.PatchOptions{
-			FieldManager: "wsm",
-		})
-		if err != nil {
-			return fmt.Errorf("failed to apply object %s %s/%s: %w", gvk, obj.GetNamespace(), obj.GetName(), err)
 		}
 	}
 
@@ -239,27 +203,18 @@ func DeleteYAML(ctx context.Context, yamlContent []byte) error {
 		return err
 	}
 
-	// We should decode in reverse order to delete dependencies correctly?
-	// Actually, just regular order might be fine, but we'll see.
-	// K8s usually handles dependencies via owner references, but here they might not have them.
-
 	var objects []*unstructured.Unstructured
 	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(yamlContent), 4096)
 	for {
-		var rawObj runtime.RawExtension
-		if err := decoder.Decode(&rawObj); err != nil {
+		obj := &unstructured.Unstructured{}
+		if err := decoder.Decode(obj); err != nil {
 			if err == io.EOF {
 				break
 			}
 			return fmt.Errorf("failed to decode manifest: %w", err)
 		}
 
-		obj := &unstructured.Unstructured{}
-		if err := obj.UnmarshalJSON(rawObj.Raw); err != nil {
-			return fmt.Errorf("failed to unmarshal manifest object: %w", err)
-		}
-
-		if obj.Object == nil {
+		if len(obj.Object) == 0 {
 			continue
 		}
 		objects = append(objects, obj)
@@ -328,4 +283,115 @@ func DeleteCR(ctx context.Context, name, namespace string) error {
 	}
 
 	return nil
+}
+
+func ApplyUnstructured(ctx context.Context, obj *unstructured.Unstructured) error {
+	_, dyn, err := GetDynamicClientset()
+	if err != nil {
+		return err
+	}
+
+	mapper, err := GetRESTMapper()
+	if err != nil {
+		return err
+	}
+
+	gvk := obj.GroupVersionKind()
+	mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		// If mapping fails, try refreshing the mapper as CRDs might have been just installed
+		if refreshedMapper, refreshErr := RefreshRESTMapper(); refreshErr == nil {
+			mapping, err = refreshedMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+		}
+
+		if err != nil {
+			return fmt.Errorf("failed to get mapping for %s: %w", gvk, err)
+		}
+	}
+
+	var dr dynamic.ResourceInterface
+	if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
+		dr = dyn.Resource(mapping.Resource).Namespace(obj.GetNamespace())
+	} else {
+		dr = dyn.Resource(mapping.Resource)
+	}
+
+	data, err := obj.MarshalJSON()
+	if err != nil {
+		return err
+	}
+
+	_, err = dr.Patch(ctx, obj.GetName(), types.ApplyPatchType, data, metav1.PatchOptions{
+		FieldManager: "wsm",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to apply object %s %s/%s: %w", gvk, obj.GetNamespace(), obj.GetName(), err)
+	}
+
+	return nil
+}
+
+func ApplyCertificate(ctx context.Context, cert *certmanagerv1.Certificate) error {
+	cert.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "cert-manager.io",
+		Version: "v1",
+		Kind:    "Certificate",
+	})
+	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(cert)
+	if err != nil {
+		return err
+	}
+	return ApplyUnstructured(ctx, &unstructured.Unstructured{Object: data})
+}
+
+func ApplyIssuer(ctx context.Context, issuer *certmanagerv1.Issuer) error {
+	issuer.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "cert-manager.io",
+		Version: "v1",
+		Kind:    "Issuer",
+	})
+	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(issuer)
+	if err != nil {
+		return err
+	}
+	return ApplyUnstructured(ctx, &unstructured.Unstructured{Object: data})
+}
+
+func ApplyClusterIssuer(ctx context.Context, issuer *certmanagerv1.ClusterIssuer) error {
+	issuer.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "cert-manager.io",
+		Version: "v1",
+		Kind:    "ClusterIssuer",
+	})
+	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(issuer)
+	if err != nil {
+		return err
+	}
+	return ApplyUnstructured(ctx, &unstructured.Unstructured{Object: data})
+}
+
+func ApplyIngressClass(ctx context.Context, ingressClass networkingv1.IngressClass) error {
+	ingressClass.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "networking.k8s.io",
+		Version: "v1",
+		Kind:    "IngressClass",
+	})
+	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&ingressClass)
+	if err != nil {
+		return err
+	}
+	return ApplyUnstructured(ctx, &unstructured.Unstructured{Object: data})
+}
+
+func ApplyStorageClass(ctx context.Context, storageClass *storagev1.StorageClass) error {
+	storageClass.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "storage.k8s.io",
+		Version: "v1",
+		Kind:    "StorageClass",
+	})
+	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(storageClass)
+	if err != nil {
+		return err
+	}
+	return ApplyUnstructured(ctx, &unstructured.Unstructured{Object: data})
 }

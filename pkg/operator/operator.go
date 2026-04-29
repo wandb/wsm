@@ -465,7 +465,7 @@ func gatewayApiCRDsExist() (bool, error) {
 		return true, nil
 	}
 
-	return false, err
+	return false, nil
 }
 
 // installGatewayApiCRDs installs Gateway API CRDs from the official YAML URL

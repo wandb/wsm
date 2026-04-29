@@ -117,7 +117,7 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("cr-file", "", "Path to WeightsAndBiases CR YAML (uses built-in default if not provided)")
 	cmd.PersistentFlags().Bool("create-ca", true, "Create a self-signed CA certificate for the W&B instance")
 	cmd.PersistentFlags().Bool("create-aws-ingress-class", false, "Create an AWS Ingress Class for the W&B instance (requires --ingress-class to be set)")
-	cmd.PersistentFlags().Bool("create-aws-storage-class", false, "Create an Storage class for the W&B instance")
+	cmd.PersistentFlags().Bool("create-aws-storage-class", false, "Create a Storage class for the W&B instance")
 	cmd.PersistentFlags().String("ingress-class", "", "Enable Ingress support with the specified ingress class")
 	cmd.PersistentFlags().String("gateway-class", "nginx", "Enable Gateway API support with the specified gateway class")
 	cmd.PersistentFlags().String("issuer-name", "", "TLS issuer name for Gateway API")

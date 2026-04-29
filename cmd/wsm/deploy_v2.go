@@ -31,7 +31,7 @@ func init() {
 }
 
 // TODO once an official release publishes a manifest, we should switch to lookup up the most recent non-dev release and not have a default.
-const defaultWandbVersion = "0.79.2"
+const defaultWandbVersion = "0.80.0"
 
 const (
 	certManagerInstallModeAuto  = "auto"

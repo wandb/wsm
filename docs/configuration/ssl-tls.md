@@ -3,12 +3,12 @@
 WSM supports two TLS modes for terminating SSL at the gateway:
 
 1. **Let's Encrypt** — Automatically provisioned, publicly trusted certificates (recommended for production).
-2. **Internal CA** — WSM-managed self-signed certificate authority (default, ideal for local development, testing, and airgapped environments).
+2. **Internal CA** — WSM-managed self-signed certificate authority (default, ideal for local development and testing).
 
 | Mode | Use Case | Trust Required |
 |------|----------|--------------|
 | Let's Encrypt | Production, public internet | None (automatically trusted) |
-| Internal CA | Development, testing, airgapped | Trust CA on each client |
+| Internal CA | Development, testing | Trust CA on each client |
 
 ## How WSM Handles TLS
 

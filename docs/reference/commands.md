@@ -200,42 +200,8 @@ For deploying the legacy v1 operator. The subcommands are:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-n, --namespace` | `wandb` | Namespace to deploy into |
-| `-a, --airgapped` | `false` | Deploy in airgapped mode |
-| `-b, --bundle` | — | Path to the bundle for airgapped deployment |
 | `-c, --chart` | — | Path to a custom W&B Helm chart |
 | `-v, --values` | — | Path to a values file |
-
----
-
-### `wsm list`
-
-Lists container images required for deployment.
-
-```bash
-wsm list [flags]
-```
-
-#### Flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-p, --platform` | `linux/amd64` | Platform to list images for |
-
----
-
-### `wsm download`
-
-Downloads images and dependencies for airgapped environments.
-
-```bash
-wsm download [flags]
-```
-
-#### Flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-p, --platform` | `linux/amd64` | Platform to download images for |
 
 ---
 

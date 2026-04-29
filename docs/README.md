@@ -8,7 +8,6 @@ WSM is a command-line tool that automates the deployment, upgrade, and managemen
 
 - Deploying the W&B operator and its dependencies
 - Configuring networking (Gateway API) and SSL/TLS
-- Managing airgapped installations
 - Day-to-day operations (status, upgrades, cleanup)
 
 ## Documentation Structure
@@ -16,7 +15,7 @@ WSM is a command-line tool that automates the deployment, upgrade, and managemen
 | Section | Description |
 |---------|-------------|
 | [Getting Started](./getting-started/) | Installation and your first deployment |
-| [Deployment Guides](./deployment/) | Platform-specific instructions for Kind, GKE, EKS, AKS, and airgapped environments |
+| [Deployment Guides](./deployment/) | Platform-specific instructions for Kind, GKE, EKS, and AKS |
 | [Configuration](./configuration/) | SSL/TLS setup, sizing, and customization options |
 | [Operations](./operations/) | Managing, monitoring, and troubleshooting deployments |
 | [Reference](./reference/) | Command flags, CR fields, and sizing details |

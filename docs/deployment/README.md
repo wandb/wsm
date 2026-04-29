@@ -10,7 +10,6 @@ Platform-specific instructions for deploying W&B with WSM.
 | [Google GKE](gke.md) | Cloud | Google Kubernetes Engine |
 | [Amazon EKS](eks.md) | Cloud | Amazon Elastic Kubernetes Service |
 | [Azure AKS](aks.md) | Cloud | Azure Kubernetes Service |
-| [Airgapped](airgapped.md) | Offline | Download images and deploy without internet access |
 
 ## Common Patterns
 
@@ -32,11 +31,10 @@ If you prefer to use traditional **Ingress** or your own **Gateway implementatio
 | A running GKE cluster | [GKE](gke.md) |
 | A running EKS cluster | [EKS](eks.md) |
 | A running AKS cluster | [AKS](aks.md) |
-| No internet access on target | [Airgapped](airgapped.md) |
 
 ## SSL / TLS Everywhere
 
 Before deploying to any cloud platform, decide on your SSL strategy:
 
 - **[Let's Encrypt](../configuration/ssl-tls.md#mode-1-lets-encrypt-recommended)** — Best for production with public DNS
-- **[Internal CA](../configuration/ssl-tls.md#mode-2-internal-ca-default)** — Best for development, testing, or airgapped environments
+- **[Internal CA](../configuration/ssl-tls.md#mode-2-internal-ca-default)** — Best for development and testing

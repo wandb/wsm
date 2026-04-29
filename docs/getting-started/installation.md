@@ -83,9 +83,7 @@ Available Commands:
   console     Open the W&B console
   deploy      Deploy W&B operator and resources (legacy)
   deploy-v2   Deploy v2 operator and resources
-  download    Download images for airgapped deployments
   help        Help about any command
-  list        List images required for deployment
 
 Flags:
   -h, --help   help for wsm

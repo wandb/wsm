@@ -26,6 +26,7 @@ Run the following single command:
 wsm deploy-v2 operator \
   --setup-k8s-cluster \
   --include-cr \
+  --size dev \
   --context kind-wandb
 ```
 
@@ -35,6 +36,7 @@ wsm deploy-v2 operator \
 |------|-------------|
 | `--setup-k8s-cluster` | Creates a new Kind cluster named `kind` before deploying |
 | `--include-cr` | Also deploys the `WeightsAndBiases` custom resource (the actual W&B instance) |
+| `--size dev` | Sets the size of the `WeightsAndBiases` deployment to dev |
 | `--context kind-wandb` | Uses the `kind-wandb` kubectl context (auto-created by Kind) |
 
 ## Monitor the Deployment

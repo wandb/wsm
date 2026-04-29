@@ -1010,6 +1010,7 @@ func clusterDestroyCmd() *cobra.Command {
 		Long:  `Delete the Kind cluster and cleanup resources`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
+			kubectl.SetContext(fmt.Sprintf("kind-%s", clusterName))
 			hasMarker, err := kubectl.HasDeploymentMarker(ctx, "default", "kind-cluster")
 			if err != nil {
 				return err

@@ -20,13 +20,15 @@ brew install go pkg-config gpgme
 
 On Debian/Ubuntu:
 ```bash
-sudo apt-get update
-sudo apt-get install -y go pkg-config libgpgme-dev
+sudo add-apt-repository ppa:longsleep/golang-backports
+sudo apt update
+sudo apt install golang-go
+sudo apt-get install -y pkg-config libgpgme-dev
 ```
 
 On RHEL/CentOS/Fedora:
 ```bash
-sudo dnf install -y go pkgconfig gpgme-devel
+sudo dnf install -y go-toolset pkgconfig gpgme-devel
 ```
 
 ## Building from Source

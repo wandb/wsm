@@ -5,6 +5,7 @@ WSM is currently distributed as source code. A pre-built binary release pipeline
 ## Requirements
 
 - **Operating System**: Linux, macOS, or Windows (with WSL)
+- **git**: to clone this repository
 - **Shell**: Bash or compatible shell
 - **Go**: Version 1.23 or later
 - **pkg-config** and **gpgme**: Required for Go build dependencies
@@ -12,7 +13,7 @@ WSM is currently distributed as source code. A pre-built binary release pipeline
 ### macOS Dependencies
 
 ```bash
-brew install pkg-config gpgme
+brew install go pkg-config gpgme 
 ```
 
 ### Linux Dependencies
@@ -20,12 +21,12 @@ brew install pkg-config gpgme
 On Debian/Ubuntu:
 ```bash
 sudo apt-get update
-sudo apt-get install -y pkg-config libgpgme-dev
+sudo apt-get install -y go pkg-config libgpgme-dev
 ```
 
 On RHEL/CentOS/Fedora:
 ```bash
-sudo dnf install -y pkgconfig gpgme-devel
+sudo dnf install -y go pkgconfig gpgme-devel
 ```
 
 ## Building from Source

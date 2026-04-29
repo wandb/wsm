@@ -61,7 +61,7 @@ func initMapper() {
 	mapperOnce.Do(func() {
 		if clientset != nil {
 			gr, err := restmapper.GetAPIGroupResources(clientset.Discovery())
-			if err != nil {
+			if err != nil && len(gr) == 0 {
 				return
 			}
 			mapper = restmapper.NewDiscoveryRESTMapper(gr)
@@ -140,7 +140,7 @@ func RefreshRESTMapper() (meta.RESTMapper, error) {
 	initConfig()
 	if clientset != nil {
 		gr, err := restmapper.GetAPIGroupResources(clientset.Discovery())
-		if err != nil {
+		if err != nil && len(gr) == 0 {
 			return nil, err
 		}
 		mapper = restmapper.NewDiscoveryRESTMapper(gr)

@@ -199,6 +199,50 @@ func WaitForCertManager(ctx context.Context, timeout time.Duration) error {
 	})
 }
 
+// WaitForAPIServicesReady waits until all APIService resources report Available=True.
+// Aggregated APIs that aren't ready cause in-cluster kubectl to fail OpenAPI validation.
+func WaitForAPIServicesReady(ctx context.Context, timeout time.Duration) error {
+	_, dyn, err := kubectl.GetDynamicClientset()
+	if err != nil {
+		return err
+	}
+
+	apiServiceGVR := schema.GroupVersionResource{
+		Group:    "apiregistration.k8s.io",
+		Version:  "v1",
+		Resource: "apiservices",
+	}
+
+	return wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		list, err := dyn.Resource(apiServiceGVR).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return false, nil
+		}
+
+		for _, item := range list.Items {
+			conditions, found, _ := unstructured.NestedSlice(item.Object, "status", "conditions")
+			if !found {
+				return false, nil
+			}
+			available := false
+			for _, c := range conditions {
+				cond, ok := c.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if cond["type"] == "Available" && cond["status"] == "True" {
+					available = true
+					break
+				}
+			}
+			if !available {
+				return false, nil
+			}
+		}
+		return true, nil
+	})
+}
+
 func certManagerDeploymentExists(ctx context.Context) (bool, error) {
 	_, cs, err := kubectl.GetClientset()
 	if err != nil {

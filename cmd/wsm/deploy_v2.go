@@ -547,6 +547,13 @@ func performDeploy(
 		return err
 	}
 
+	// Ensure all aggregated APIs are healthy before deploying the operator.
+	// Unhealthy APIServices cause in-cluster kubectl OpenAPI validation to fail,
+	// which breaks the operator chart's CRD install hooks.
+	if err := operator.WaitForAPIServicesReady(ctx, 2*time.Minute); err != nil {
+		return fmt.Errorf("APIServices are not all available: %w", err)
+	}
+
 	// Step 4: Deploy W&B operator
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
 	start := time.Now()

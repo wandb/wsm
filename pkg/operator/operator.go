@@ -68,8 +68,8 @@ const (
 )
 
 var (
-	gatewayAPIDiscoveryRetryInterval = 2 * time.Second
-	gatewayAPIDiscoveryRetryTimeout  = 2 * time.Minute
+	apiDiscoveryRetryInterval = 2 * time.Second
+	apiDiscoveryRetryTimeout  = 2 * time.Minute
 )
 
 // InstallCertManager installs cert-manager.
@@ -485,7 +485,7 @@ func discoverServerGroupsAndResourcesWithRetry(
 	var resources []*metav1.APIResourceList
 	var discoveryErr error
 
-	pollErr := wait.PollUntilContextTimeout(ctx, gatewayAPIDiscoveryRetryInterval, gatewayAPIDiscoveryRetryTimeout, true, func(context.Context) (bool, error) {
+	pollErr := wait.PollUntilContextTimeout(ctx, apiDiscoveryRetryInterval, apiDiscoveryRetryTimeout, true, func(context.Context) (bool, error) {
 		resources, discoveryErr = discoverFn()
 		if discoveryErr != nil && resources == nil {
 			if isRetryableServerAPIDiscoveryError(discoveryErr) {

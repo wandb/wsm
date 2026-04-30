@@ -676,6 +676,7 @@ func performCreateCluster(ctx context.Context, clusterName string, workers int, 
 		}
 
 		kind.SetKubectlContext(ctx, clusterName)
+		kubectl.ResetClients()
 
 		if err := kind.InstallMetricsServer(ctx); err != nil {
 			fmt.Println(" ✗")
@@ -685,6 +686,14 @@ func performCreateCluster(ctx context.Context, clusterName string, workers int, 
 		if err := kubectl.CreateDeploymentMarker(ctx, clusterName, "default", "kind-cluster"); err != nil {
 			fmt.Println(" ✗")
 			return err
+		}
+	} else {
+		kind.SetKubectlContext(ctx, clusterName)
+		kubectl.ResetClients()
+
+		if err := kind.WaitForMetricsServer(ctx, 2*time.Minute); err != nil {
+			fmt.Println(" ✗")
+			return fmt.Errorf("metrics-server is not ready: %w", err)
 		}
 	}
 	return nil

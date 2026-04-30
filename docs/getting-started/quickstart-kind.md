@@ -25,6 +25,7 @@ Run the following single command:
 ```bash
 wsm deploy-v2 operator \
   --setup-k8s-cluster \
+  --cluster-name wandb \
   --include-cr \
   --size dev \
   --context kind-wandb

@@ -686,8 +686,79 @@ func performCreateCluster(ctx context.Context, clusterName string, workers int, 
 			fmt.Println(" ✗")
 			return err
 		}
+
+		if err := waitForAllClusterPodsReady(ctx, 5*time.Minute); err != nil {
+			fmt.Println(" ✗")
+			return err
+		}
 	}
 	return nil
+}
+
+func waitForAllClusterPodsReady(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		allReady, _, err := clusterPodsReady(ctx)
+		if err == nil && allReady {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+
+	_, notReadyPods, err := clusterPodsReady(ctx)
+	if err != nil {
+		return fmt.Errorf("timed out waiting for all cluster pods to become ready within %s: %w", timeout, err)
+	}
+
+	if len(notReadyPods) == 0 {
+		return fmt.Errorf("timed out waiting for all cluster pods to become ready within %s", timeout)
+	}
+
+	return fmt.Errorf(
+		"timed out waiting for all cluster pods to become ready within %s; not ready pods: %s",
+		timeout,
+		strings.Join(notReadyPods, ", "),
+	)
+}
+
+func clusterPodsReady(ctx context.Context) (bool, []string, error) {
+	_, cs, err := kubectl.GetClientset()
+	if err != nil {
+		return false, nil, err
+	}
+
+	pods, err := cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, nil, err
+	}
+
+	notReadyPods := make([]string, 0)
+	for _, pod := range pods.Items {
+		if pod.DeletionTimestamp != nil || pod.Status.Phase == corev1.PodSucceeded {
+			continue
+		}
+
+		if !isPodReady(pod.Status.Conditions) {
+			notReadyPods = append(notReadyPods, fmt.Sprintf("%s/%s", pod.Namespace, pod.Name))
+		}
+	}
+
+	return len(notReadyPods) == 0, notReadyPods, nil
+}
+
+func isPodReady(conditions []corev1.PodCondition) bool {
+	for _, condition := range conditions {
+		if condition.Type == corev1.PodReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+
+	return false
 }
 
 func createCAIssuer(ctx context.Context, wandbName string, namespace string) error {
@@ -972,6 +1043,7 @@ func ClusterCmd() *cobra.Command {
 
 	cmd.AddCommand(clusterCreateCmd())
 	cmd.AddCommand(clusterDestroyCmd())
+	cmd.AddCommand(clusterListCmd())
 	cmd.AddCommand(clusterCleanupCmd())
 
 	return cmd
@@ -1010,6 +1082,8 @@ func clusterDestroyCmd() *cobra.Command {
 		Long:  `Delete the Kind cluster and cleanup resources`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
+			kubectl.SetContext(fmt.Sprintf("kind-%s", clusterName))
+
 			hasMarker, err := kubectl.HasDeploymentMarker(ctx, "default", "kind-cluster")
 			if err != nil {
 				return err
@@ -1036,6 +1110,66 @@ func clusterDestroyCmd() *cobra.Command {
 	cmd.Flags().StringVar(&clusterName, "cluster-name", "kind", "Name of the Kind cluster to delete")
 
 	return cmd
+}
+
+func clusterListCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List wsm-managed Kind clusters",
+		Long:  `List local Kind clusters that contain the wsm deployment marker`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+
+			clusters, err := listWSMManagedKindClusters(ctx)
+			if err != nil {
+				return err
+			}
+
+			if len(clusters) == 0 {
+				fmt.Println("! No wsm-managed Kind clusters found.")
+				return nil
+			}
+
+			fmt.Println("WSM-managed Kind clusters:")
+			for _, clusterName := range clusters {
+				fmt.Printf("  • %s\n", clusterName)
+			}
+
+			return nil
+		},
+	}
+
+	return cmd
+}
+
+func listWSMManagedKindClusters(ctx context.Context) ([]string, error) {
+	kindClusters, err := kind.ListClusters()
+	if err != nil {
+		return nil, err
+	}
+
+	originalContext := kubectl.GetContext()
+	defer func() {
+		kubectl.SetContext(originalContext)
+		kubectl.ResetClients()
+	}()
+
+	clusters := make([]string, 0, len(kindClusters))
+	for _, clusterName := range kindClusters {
+		kubectl.SetContext(fmt.Sprintf("kind-%s", clusterName))
+		kubectl.ResetClients()
+
+		hasMarker, err := kubectl.HasDeploymentMarker(ctx, "default", "kind-cluster")
+		if err != nil {
+			return nil, fmt.Errorf("failed to check deployment marker for cluster %q: %w", clusterName, err)
+		}
+
+		if hasMarker {
+			clusters = append(clusters, clusterName)
+		}
+	}
+
+	return clusters, nil
 }
 
 func performCleanup() error {

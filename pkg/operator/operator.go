@@ -63,7 +63,13 @@ const (
 	nginxGatewayChartRef       = "oci://ghcr.io/nginx/charts/nginx-gateway-fabric"
 	nginxGatewayVersion        = "2.5.1"
 
-	gatewayApiCRDURL = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml"
+	gatewayApiCRDURL                     = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml"
+	completeServerAPIsDiscoveryErrSubstr = "unable to retrieve the complete list of server APIs"
+)
+
+var (
+	apiDiscoveryRetryInterval = 2 * time.Second
+	apiDiscoveryRetryTimeout  = 2 * time.Minute
 )
 
 // InstallCertManager installs cert-manager.
@@ -254,7 +260,7 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool) error {
 		}
 	}
 
-	exists, err := gatewayApiCRDsExist()
+	exists, err := gatewayApiCRDsExist(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to check if gateway api crds exist: %w", err)
 	}
@@ -430,12 +436,16 @@ func DeleteNginxGateway(ctx context.Context) error {
 }
 
 // gatewayApiCRDsExist checks if Gateway API CRDs exist in the cluster
-func gatewayApiCRDsExist() (bool, error) {
+func gatewayApiCRDsExist(ctx context.Context) (bool, error) {
 	_, cs, err := kubectl.GetClientset()
 	if err != nil {
 		return false, err
 	}
-	_, resources, err := cs.Discovery().ServerGroupsAndResources()
+
+	resources, err := discoverServerGroupsAndResourcesWithRetry(ctx, func() ([]*metav1.APIResourceList, error) {
+		_, resourceLists, discoveryErr := cs.Discovery().ServerGroupsAndResources()
+		return resourceLists, discoveryErr
+	})
 	if err != nil && resources == nil {
 		return false, err
 	}
@@ -466,6 +476,35 @@ func gatewayApiCRDsExist() (bool, error) {
 	}
 
 	return false, err
+}
+
+func discoverServerGroupsAndResourcesWithRetry(
+	ctx context.Context,
+	discoverFn func() ([]*metav1.APIResourceList, error),
+) ([]*metav1.APIResourceList, error) {
+	var resources []*metav1.APIResourceList
+	var discoveryErr error
+
+	pollErr := wait.PollUntilContextTimeout(ctx, apiDiscoveryRetryInterval, apiDiscoveryRetryTimeout, true, func(context.Context) (bool, error) {
+		resources, discoveryErr = discoverFn()
+		if discoveryErr != nil && resources == nil {
+			if isRetryableServerAPIDiscoveryError(discoveryErr) {
+				return false, nil
+			}
+			return false, discoveryErr
+		}
+
+		return true, nil
+	})
+	if pollErr != nil {
+		return nil, pollErr
+	}
+
+	return resources, discoveryErr
+}
+
+func isRetryableServerAPIDiscoveryError(err error) bool {
+	return strings.Contains(err.Error(), completeServerAPIsDiscoveryErrSubstr)
 }
 
 // installGatewayApiCRDs installs Gateway API CRDs from the official YAML URL

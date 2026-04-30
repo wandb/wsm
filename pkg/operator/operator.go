@@ -18,6 +18,7 @@ import (
 	"helm.sh/helm/v4/pkg/registry"
 	v1 "helm.sh/helm/v4/pkg/release/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -536,6 +537,72 @@ func installGatewayApiCRDs(ctx context.Context) error {
 	return nil
 }
 
+// ensureCRDInstallRBAC creates the ServiceAccount, ClusterRole, and ClusterRoleBinding
+// needed by the operator chart's ClickHouse CRD install hook job. The upstream chart
+// does not create sufficient RBAC for the job, causing kubectl validation to fail with
+// 401 errors when downloading OpenAPI specs.
+func ensureCRDInstallRBAC(ctx context.Context, namespace string) error {
+	_, cs, err := kubectl.GetClientset()
+	if err != nil {
+		return err
+	}
+
+	const saName = "wandb-operator-altinity-clickhouse-operator-crd-install"
+
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      saName,
+			Namespace: namespace,
+		},
+	}
+	if _, err := cs.CoreV1().ServiceAccounts(namespace).Create(ctx, sa, metav1.CreateOptions{}); err != nil && !errors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create CRD install service account: %w", err)
+	}
+
+	cr := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: saName,
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{"apiextensions.k8s.io"},
+				Resources: []string{"customresourcedefinitions"},
+				Verbs:     []string{"get", "list", "create", "update", "patch"},
+			},
+			{
+				NonResourceURLs: []string{"/openapi/v2", "/openapi/v3", "/openapi/v3/*"},
+				Verbs:           []string{"get"},
+			},
+		},
+	}
+	if _, err := cs.RbacV1().ClusterRoles().Create(ctx, cr, metav1.CreateOptions{}); err != nil && !errors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create CRD install cluster role: %w", err)
+	}
+
+	crb := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: saName,
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      saName,
+				Namespace: namespace,
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     saName,
+		},
+	}
+	if _, err := cs.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{}); err != nil && !errors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create CRD install cluster role binding: %w", err)
+	}
+
+	return nil
+}
+
 // DeployOperator deploys the W&B operator chart version specified.  The chart is called operator and is available in oci://us-docker.pkg.dev/wandb-production/public/wandb/charts
 func DeployOperator(
 	ctx context.Context,
@@ -548,6 +615,10 @@ func DeployOperator(
 	const chartName = "operator"
 	const chartRef = repositoryURL + "/" + chartName
 	const releaseName = "wandb-operator"
+
+	if err := ensureCRDInstallRBAC(ctx, namespace); err != nil {
+		return fmt.Errorf("failed to setup CRD install RBAC: %w", err)
+	}
 
 	// Initialize Helm settings
 	settings := cli.New()

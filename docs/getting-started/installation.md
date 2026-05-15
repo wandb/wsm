@@ -7,7 +7,7 @@ WSM is currently distributed as source code. A pre-built binary release pipeline
 - **Operating System**: Linux, macOS, or Windows (with WSL)
 - **git**: to clone this repository
 - **Shell**: Bash or compatible shell
-- **Go**: Version 1.23 or later
+- **Go**: Version 1.26 or later
 - **pkg-config** and **gpgme**: Required for Go build dependencies
 
 ### macOS Dependencies
@@ -22,13 +22,28 @@ On Debian/Ubuntu:
 ```bash
 sudo add-apt-repository ppa:longsleep/golang-backports
 sudo apt update
-sudo apt install golang-go
-sudo apt-get install -y pkg-config libgpgme-dev
+sudo apt install -y golang-go pkg-config libgpgme-dev
 ```
 
-On RHEL/CentOS/Fedora:
+On RHEL/CentOS 9:
 ```bash
-sudo dnf install -y go-toolset pkgconfig gpgme-devel
+# Enable CodeReady Builder repo (required for gpgme-devel)
+sudo dnf config-manager --enable codeready-builder-for-rhel-9-rhui-rpms  # AWS RHUI
+# Or for non-cloud RHEL: sudo dnf config-manager --enable crb
+
+sudo dnf install -y pkgconfig gpgme-devel
+
+# go-toolset from RHEL repos is too old; install Go from the official release
+curl -LO https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go
+sudo tar -C /usr/local -xzf go1.26.0.linux-amd64.tar.gz
+echo 'export PATH=/usr/local/go/bin:$PATH' >> ~/.bashrc
+export PATH=/usr/local/go/bin:$PATH
+```
+
+On Fedora:
+```bash
+sudo dnf install -y golang pkgconfig gpgme-devel
 ```
 
 ## Building from Source

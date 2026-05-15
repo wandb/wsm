@@ -589,6 +589,7 @@ func DeployOperator(
 		upgradeClient.Version = chartVersion
 		upgradeClient.WaitStrategy = "hookOnly"
 		upgradeClient.ForceConflicts = true
+		upgradeClient.Timeout = 10 * time.Minute
 
 		// Get the chart
 		cp, err := upgradeClient.LocateChart(chartRef, settings)
@@ -614,6 +615,7 @@ func DeployOperator(
 		installClient.ReleaseName = releaseName
 		installClient.Version = chartVersion
 		installClient.WaitStrategy = "hookOnly"
+		installClient.Timeout = 10 * time.Minute
 
 		// Get the chart
 		cp, err := installClient.LocateChart(chartRef, settings)

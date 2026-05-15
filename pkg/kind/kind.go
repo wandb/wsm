@@ -164,7 +164,7 @@ func LoadImageToCluster(ctx context.Context, imageName, clusterName string) erro
 //   - extraPortMappings: host:httpPort → container:httpPort, host:httpsPort → container:httpsPort
 //   - ingress-ready node label so nginx-ingress can bind to those ports
 func generateClusterConfig(workers int, httpPort int32, httpsPort int32) config.Cluster {
-	const nodeImage = "kindest/node:v1.35.1@sha256:05d7bcdefbda08b4e038f644c4df690cdac3fba8b06f8289f30e10026720a1ab"
+	const nodeImage = "kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1592d7752b164530a36f855cb0f2bdcbadd48"
 
 	controlPlane := config.Node{
 		Role:  config.ControlPlaneRole,

@@ -41,6 +41,33 @@ echo 'export PATH=/usr/local/go/bin:$PATH' >> ~/.bashrc
 export PATH=/usr/local/go/bin:$PATH
 ```
 
+On RHEL/CentOS 8:
+```bash
+# Enable CodeReady Builder repo (required for gpgme-devel)
+sudo dnf config-manager --enable codeready-builder-for-rhel-8-rhui-rpms  # AWS RHUI
+# Or for non-cloud RHEL: sudo dnf config-manager --enable powertools
+
+sudo dnf install -y pkgconfig gpgme-devel
+
+# go-toolset from RHEL repos is too old; install Go from the official release
+curl -LO https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go
+sudo tar -C /usr/local -xzf go1.26.0.linux-amd64.tar.gz
+echo 'export PATH=/usr/local/go/bin:$PATH' >> ~/.bashrc
+export PATH=/usr/local/go/bin:$PATH
+
+# RHEL 8 ships podman aliased as docker; Kind requires Docker CE
+sudo dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+sudo dnf install -y docker-ce docker-ce-cli containerd.io --allowerasing
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER
+
+# RHEL 8 defaults to cgroup v1; Kind requires cgroup v2
+sudo grubby --update-kernel=ALL --args="systemd.unified_cgroup_hierarchy=1"
+sudo reboot
+# After reboot, verify: stat -fc %T /sys/fs/cgroup/  (should print "cgroup2fs")
+```
+
 On Fedora:
 ```bash
 sudo dnf install -y golang pkgconfig gpgme-devel

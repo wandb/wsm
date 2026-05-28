@@ -574,7 +574,7 @@ func DeployOperator(
 		},
 		"wandb-operator": map[string]interface{}{
 			"image": map[string]interface{}{
-				"pullPolicy": "Always",
+				"pullPolicy": "IfNotPresent", // todo - reminder: put back, local testing
 			},
 		},
 		"telemetry": map[string]interface{}{
@@ -901,6 +901,33 @@ func ListCRs(ctx context.Context, namespace string) ([]string, error) {
 		names = append(names, item.GetName())
 	}
 	return names, nil
+}
+
+func GetCR(ctx context.Context, name, namespace string) (*v2.WeightsAndBiases, error) {
+	_, dyn, err := kubectl.GetDynamicClientset()
+	if err != nil {
+		return nil, err
+	}
+
+	gvr := schema.GroupVersionResource{
+		Group:    "apps.wandb.com",
+		Version:  "v2",
+		Resource: "weightsandbiases",
+	}
+
+	obj, err := dyn.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil, fmt.Errorf("WeightsAndBiases %s/%s not found", namespace, name)
+		}
+		return nil, fmt.Errorf("failed to get WeightsAndBiases %s/%s: %w", namespace, name, err)
+	}
+
+	cr := &v2.WeightsAndBiases{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, cr); err != nil {
+		return nil, fmt.Errorf("failed to decode WeightsAndBiases: %w", err)
+	}
+	return cr, nil
 }
 
 // WaitForCR waits for WeightsAndBiases CR to be ready

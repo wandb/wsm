@@ -31,7 +31,7 @@ On RHEL/CentOS 9:
 sudo dnf config-manager --enable codeready-builder-for-rhel-9-rhui-rpms  # AWS RHUI
 # Or for non-cloud RHEL: sudo dnf config-manager --enable crb
 
-sudo dnf install -y pkgconfig gpgme-devel
+sudo dnf install -y pkgconfig gpgme-devel gcc
 
 # go-toolset from RHEL repos is too old; install Go from the official release
 curl -LO https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
@@ -47,7 +47,7 @@ On RHEL/CentOS 8:
 sudo dnf config-manager --enable codeready-builder-for-rhel-8-rhui-rpms  # AWS RHUI
 # Or for non-cloud RHEL: sudo dnf config-manager --enable powertools
 
-sudo dnf install -y pkgconfig gpgme-devel
+sudo dnf install -y pkgconfig gpgme-devel gcc
 
 # go-toolset from RHEL repos is too old; install Go from the official release
 curl -LO https://go.dev/dl/go1.26.0.linux-amd64.tar.gz

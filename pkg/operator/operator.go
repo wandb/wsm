@@ -513,7 +513,7 @@ func installGatewayApiCRDs(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to fetch Gateway API CRDs: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("failed to fetch Gateway API CRDs: status %s", resp.Status)
@@ -901,6 +901,33 @@ func ListCRs(ctx context.Context, namespace string) ([]string, error) {
 		names = append(names, item.GetName())
 	}
 	return names, nil
+}
+
+func GetCR(ctx context.Context, name, namespace string) (*v2.WeightsAndBiases, error) {
+	_, dyn, err := kubectl.GetDynamicClientset()
+	if err != nil {
+		return nil, err
+	}
+
+	gvr := schema.GroupVersionResource{
+		Group:    "apps.wandb.com",
+		Version:  "v2",
+		Resource: "weightsandbiases",
+	}
+
+	obj, err := dyn.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil, fmt.Errorf("WeightsAndBiases %s/%s not found", namespace, name)
+		}
+		return nil, fmt.Errorf("failed to get WeightsAndBiases %s/%s: %w", namespace, name, err)
+	}
+
+	cr := &v2.WeightsAndBiases{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, cr); err != nil {
+		return nil, fmt.Errorf("failed to decode WeightsAndBiases: %w", err)
+	}
+	return cr, nil
 }
 
 // WaitForCR waits for WeightsAndBiases CR to be ready

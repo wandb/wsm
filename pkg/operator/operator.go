@@ -513,12 +513,7 @@ func installGatewayApiCRDs(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to fetch Gateway API CRDs: %w", err)
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-
-		}
-	}(resp.Body)
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("failed to fetch Gateway API CRDs: status %s", resp.Status)

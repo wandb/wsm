@@ -787,7 +787,7 @@ func createCAIssuer(ctx context.Context, wandbName string, namespace string) err
 			IsCA:       true,
 			CommonName: "wandb-ca",
 			Duration:   &metav1.Duration{Duration: 8760 * 24 * time.Hour},
-			IssuerRef: certmanagermetav1.ObjectReference{
+			IssuerRef: certmanagermetav1.IssuerReference{
 				Name:  selfSignedIssuerName,
 				Kind:  "Issuer",
 				Group: "cert-manager.io",

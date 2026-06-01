@@ -579,7 +579,7 @@ func DeployOperator(
 		},
 		"wandb-operator": map[string]interface{}{
 			"image": map[string]interface{}{
-				"pullPolicy": "IfNotPresent", // todo - reminder: put back, local testing
+				"pullPolicy": "Always",
 			},
 		},
 		"telemetry": map[string]interface{}{

@@ -34,6 +34,9 @@ test-wsm/
 .k8s-images
 license.key
 
+# Per-session output of the audit-operator-diff skill
+.claude/audit-report.md
+
 
 # Terraform
 **/.terraform/

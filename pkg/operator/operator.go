@@ -538,6 +538,8 @@ func DeployOperator(
 	chartVersion string,
 	operatorVersion string,
 	telemetryMode string,
+	telemetryForwardEndpoint string,
+	wandbNamespace string,
 ) error {
 	const repositoryURL = "oci://us-docker.pkg.dev/wandb-production/public/wandb/charts"
 	const chartName = "operator"
@@ -568,6 +570,9 @@ func DeployOperator(
 		return fmt.Errorf("failed to check if release exists: %w", err)
 	}
 
+	telemetryValues := map[string]interface{}{
+		"mode": telemetryMode,
+	}
 	releaseValues := map[string]interface{}{
 		"wandb": map[string]interface{}{
 			"install": false,
@@ -577,9 +582,36 @@ func DeployOperator(
 				"pullPolicy": "Always",
 			},
 		},
-		"telemetry": map[string]interface{}{
-			"mode": telemetryMode,
-		},
+		"telemetry": telemetryValues,
+	}
+
+	// The operator chart's telemetry-validation requires the caller to opt the
+	// victoria-metrics-operator and grafana-operator dependencies in when
+	// telemetry is enabled — their chart defaults are false (helm dependency
+	// conditions are boolean-only). "full" runs the in-cluster Victoria stack
+	// plus local Grafana; "forward" runs the Victoria stack and forwards OTLP
+	// data to telemetry.forwarding.otlp.endpoint.
+	if telemetryMode == "full" || telemetryMode == "forward" {
+		// The telemetry subchart deploys into the telemetry namespace (the W&B
+		// namespace), not the operator's release namespace. It must already
+		// exist — the chart does not create it — so ensure it here and pin
+		// telemetry.namespace to match the CR's namespace.
+		telemetryValues["namespace"] = wandbNamespace
+		if err := CreateNamespace(ctx, wandbNamespace); err != nil {
+			return fmt.Errorf("failed to ensure telemetry namespace %q: %w", wandbNamespace, err)
+		}
+	}
+	switch telemetryMode {
+	case "full":
+		releaseValues["victoria-metrics-operator"] = map[string]interface{}{"enabled": true}
+		releaseValues["grafana-operator"] = map[string]interface{}{"enabled": true}
+	case "forward":
+		releaseValues["victoria-metrics-operator"] = map[string]interface{}{"enabled": true}
+		telemetryValues["forwarding"] = map[string]interface{}{
+			"otlp": map[string]interface{}{
+				"endpoint": telemetryForwardEndpoint,
+			},
+		}
 	}
 
 	if releaseExists {

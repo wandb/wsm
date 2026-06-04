@@ -832,7 +832,6 @@ func newRegistryClient(settings *cli.EnvSettings, certFile, keyFile, caFile stri
 	return registryClient, nil
 }
 
-// ApplyCR applies a WeightsAndBiases CR to the cluster (idempotent)
 func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases) error {
 	gvk := wandbCR.GroupVersionKind()
 	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(wandbCR)
@@ -841,14 +840,40 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases) error {
 	}
 	obj := &unstructured.Unstructured{Object: data}
 
-	// Ensure GVK is set on the unstructured object
 	obj.SetGroupVersionKind(gvk)
+	obj.SetManagedFields(nil)
+	obj.SetResourceVersion("")
+
+	stripFieldsNotInCRDSchema(obj)
 
 	if err := kubectl.ApplyUnstructured(ctx, obj); err != nil {
 		return fmt.Errorf("failed to apply CR: %w", err)
 	}
 
 	return nil
+}
+
+// stripFieldsNotInCRDSchema removes fields the Go API types include but the
+// currently-deployed CRD schema doesn't declare. Keep this list narrow — every
+// entry is technically a chart/types version-skew workaround. When the operator
+// chart catches up (or wsm pins an older API), the corresponding line can go.
+func stripFieldsNotInCRDSchema(obj *unstructured.Unstructured) {
+	// .status is always operator-owned; never SSA from the client side.
+	unstructured.RemoveNestedField(obj.Object, "status")
+
+	// Spec fields the Go v2 API types include but the deployed operator
+	// chart's CRD schema doesn't declare. Each entry is a chart/types
+	// version-skew workaround — delete the line when the corresponding
+	// field lands in the chart you're running.
+	for _, path := range [][]string{
+		{"spec", "clickhouse", "managedClickhouse"},
+		{"spec", "mysql", "managedMysql"},
+		{"spec", "kafka", "managedKafka"},
+		{"spec", "objectStore"},
+		{"spec", "networking"},
+	} {
+		unstructured.RemoveNestedField(obj.Object, path...)
+	}
 }
 
 // DeleteCR deletes a WeightsAndBiases CR from the cluster

@@ -17,8 +17,13 @@ import (
 	"sigs.k8s.io/kind/pkg/cluster"
 )
 
-// CreateCluster creates a Kind cluster with specified name and number of worker nodes
-func CreateCluster(ctx context.Context, name string, workers int, httpPort int32, httpsPort int32) error {
+// DefaultNodeImage is the kind/node image used when none is supplied.
+// Pinned by digest so a mirrored copy must match this exact manifest.
+const DefaultNodeImage = "kindest/node:v1.35.1@sha256:05d7bcdefbda08b4e038f644c4df690cdac3fba8b06f8289f30e10026720a1ab"
+
+// CreateCluster creates a Kind cluster with specified name and number of worker nodes.
+// If nodeImage is empty, DefaultNodeImage is used.
+func CreateCluster(ctx context.Context, name string, workers int, httpPort int32, httpsPort int32, nodeImage string) error {
 	provider := cluster.NewProvider()
 
 	// Check if cluster already exists
@@ -31,7 +36,7 @@ func CreateCluster(ctx context.Context, name string, workers int, httpPort int32
 	}
 
 	// Generate Kind cluster config
-	kindConfig := generateClusterConfig(workers, httpPort, httpsPort)
+	kindConfig := generateClusterConfig(workers, httpPort, httpsPort, nodeImage)
 	// Create cluster using kind library
 	if err := provider.Create(
 		name,
@@ -163,8 +168,10 @@ func LoadImageToCluster(ctx context.Context, imageName, clusterName string) erro
 // The control-plane node is always configured with:
 //   - extraPortMappings: host:httpPort → container:httpPort, host:httpsPort → container:httpsPort
 //   - ingress-ready node label so nginx-ingress can bind to those ports
-func generateClusterConfig(workers int, httpPort int32, httpsPort int32) config.Cluster {
-	const nodeImage = "kindest/node:v1.35.1@sha256:05d7bcdefbda08b4e038f644c4df690cdac3fba8b06f8289f30e10026720a1ab"
+func generateClusterConfig(workers int, httpPort int32, httpsPort int32, nodeImage string) config.Cluster {
+	if nodeImage == "" {
+		nodeImage = DefaultNodeImage
+	}
 
 	controlPlane := config.Node{
 		Role:  config.ControlPlaneRole,

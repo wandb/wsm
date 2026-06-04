@@ -52,7 +52,7 @@ wsm deploy-v2 operator \
 ```bash
 wsm deploy-v2 wandb deploy \
   --context <ctx> \
-  --wandb-version 0.80.0 \
+  --wandb-version 0.81.0 \
   --wandb-name wandb \
   --wandb-namespace wandb
 ```

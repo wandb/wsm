@@ -85,7 +85,7 @@ Available Commands:
   completion  Generate the autocompletion script for the specified shell
   console     Open the W&B console
   deploy      Deploy W&B operator and resources (legacy)
-  deploy-v2   Deploy v2 operator and resources
+  deploy-v2   Deploy v2 operator and resources (recommended)
   help        Help about any command
 
 Flags:

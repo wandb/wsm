@@ -331,6 +331,7 @@ func operatorDeployCmd() *cobra.Command {
 	var includeCR bool
 	var clusterName string
 	var workers int
+	var kindNodeImage string
 	var operatorVersion string
 	var operatorChartVersion string
 	var operatorNamespace string
@@ -414,6 +415,7 @@ func operatorDeployCmd() *cobra.Command {
 				createAwsStorageClass,
 				createAwsIngressClass,
 				ingressClass,
+				kindNodeImage,
 			); err != nil {
 				fmt.Printf("\n✗ Deployment failed: %v\n", err)
 				return err
@@ -439,6 +441,7 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&setupCluster, "setup-k8s-cluster", false, "Setup a Kind cluster before deploying")
 	cmd.Flags().StringVar(&clusterName, "cluster-name", "kind", "Name of the Kind cluster (only used with --setup-k8s-cluster)")
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
+	cmd.Flags().StringVar(&kindNodeImage, "kind-node-image", "", "Kind node image to use, e.g. myreg.example.com/kindest/node:v1.35.1@sha256:... (defaults to the upstream pinned image; only used with --setup-k8s-cluster)")
 
 	//TODO Decide whether to expose this or have it depend on the chart version
 	cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator image version (e.g., v2.0.0) - defaults to value in the chart")
@@ -471,6 +474,7 @@ func performDeploy(
 	createAwsStorageClass bool,
 	createAwsIngressClass bool,
 	ingressClass string,
+	kindNodeImage string,
 ) error {
 	ctx := context.Background()
 	installNginxGatewayMode = strings.ToLower(strings.TrimSpace(installNginxGatewayMode))
@@ -497,7 +501,7 @@ func performDeploy(
 		fmt.Printf("[%d/%d] Setting up cluster (%d workers)...", currentStep, totalSteps, workers)
 		start := time.Now()
 
-		err := performCreateCluster(ctx, clusterName, workers, 8080, 8443)
+		err := performCreateCluster(ctx, clusterName, workers, 8080, 8443, kindNodeImage)
 		if err != nil {
 			return err
 		}
@@ -690,7 +694,7 @@ func deployWandbCR(ctx context.Context, createCA bool, createAwsStorageClass, cr
 	return nil
 }
 
-func performCreateCluster(ctx context.Context, clusterName string, workers int, httpPort int32, httpsPort int32) error {
+func performCreateCluster(ctx context.Context, clusterName string, workers int, httpPort int32, httpsPort int32, nodeImage string) error {
 	exists, err := kind.ClusterExists(ctx, clusterName)
 	if err != nil {
 		fmt.Println(" ✗")
@@ -698,7 +702,7 @@ func performCreateCluster(ctx context.Context, clusterName string, workers int, 
 	}
 
 	if !exists {
-		if err := kind.CreateCluster(ctx, clusterName, workers, httpPort, httpsPort); err != nil {
+		if err := kind.CreateCluster(ctx, clusterName, workers, httpPort, httpsPort, nodeImage); err != nil {
 			fmt.Println(" ✗")
 			return err
 		}
@@ -1087,11 +1091,12 @@ func clusterCreateCmd() *cobra.Command {
 	var clusterName string
 	var workers int
 	var httpPort, httpsPort int32
+	var kindNodeImage string
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a new kind cluster",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := performCreateCluster(context.Background(), clusterName, workers, httpPort, httpsPort); err != nil {
+			if err := performCreateCluster(context.Background(), clusterName, workers, httpPort, httpsPort, kindNodeImage); err != nil {
 				fmt.Printf("✗ Cluster Create failed: %v\n", err)
 				return err
 			}
@@ -1104,6 +1109,7 @@ func clusterCreateCmd() *cobra.Command {
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes")
 	cmd.Flags().Int32Var(&httpPort, "http-port", 8080, "HTTP port for Kind cluster ingress")
 	cmd.Flags().Int32Var(&httpsPort, "https-port", 8443, "HTTPS port for Kind cluster ingress")
+	cmd.Flags().StringVar(&kindNodeImage, "kind-node-image", "", "Kind node image to use, e.g. myreg.example.com/kindest/node:v1.35.1@sha256:... (defaults to the upstream pinned image)")
 
 	return cmd
 }

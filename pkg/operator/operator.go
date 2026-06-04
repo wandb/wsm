@@ -879,7 +879,6 @@ func newRegistryClient(settings *cli.EnvSettings, certFile, keyFile, caFile stri
 	return registryClient, nil
 }
 
-// ApplyCR applies a WeightsAndBiases CR to the cluster (idempotent)
 func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases) error {
 	gvk := wandbCR.GroupVersionKind()
 	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(wandbCR)
@@ -888,14 +887,33 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases) error {
 	}
 	obj := &unstructured.Unstructured{Object: data}
 
-	// Ensure GVK is set on the unstructured object
 	obj.SetGroupVersionKind(gvk)
+	obj.SetManagedFields(nil)
+	obj.SetResourceVersion("")
+
+	stripFieldsNotInCRDSchema(obj)
 
 	if err := kubectl.ApplyUnstructured(ctx, obj); err != nil {
 		return fmt.Errorf("failed to apply CR: %w", err)
 	}
 
 	return nil
+}
+
+// stripFieldsNotInCRDSchema removes fields the Go API types include but the
+// currently-deployed CRD schema doesn't declare. Keep this list narrow — every
+// entry is technically a chart/types version-skew workaround. When the operator
+// chart catches up (or wsm pins an older API), the corresponding line can go.
+func stripFieldsNotInCRDSchema(obj *unstructured.Unstructured) {
+	// .status is always operator-owned; never SSA from the client side.
+	unstructured.RemoveNestedField(obj.Object, "status")
+
+	// OidcSpec is a by-value struct in the v2 Go API, so Go's `omitempty`
+	// does not drop a zero value — wsm would emit oidc.{clientId,clientSecret,
+	// issuerUrl,authMethod}: {"key": ""} on every apply even when no OIDC is
+	// configured. Drop the whole oidc block; wsm has no flag for it, so a
+	// user with OIDC needs --cr-file regardless.
+	unstructured.RemoveNestedField(obj.Object, "spec", "wandb", "oidc")
 }
 
 // DeleteCR deletes a WeightsAndBiases CR from the cluster

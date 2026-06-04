@@ -40,7 +40,7 @@ wsm deploy-v2 wandb deploy \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--wandb-hostname` | `http://localhost:8080` | External URL for accessing W&B |
-| `--wandb-version` | `0.79.2` | Server manifest version to deploy |
+| `--wandb-version` | `0.81.0` | Server manifest version to deploy |
 
 ### Networking
 
@@ -56,7 +56,7 @@ wsm deploy-v2 wandb deploy \
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--observability-mode` | `off` | Enable telemetry for managed MySQL, Redis, Kafka, etc. (`off` or `on`) |
+| `--observability-mode` | `off` | Telemetry mode for managed MySQL, Redis, Kafka, etc.: `off`, `full` (in-cluster Victoria + Grafana), or `forward` (Victoria stack + external OTLP forwarding) |
 | `--retention-policy` | `detach` | Behavior when deleting the CR: `detach` (leave infrastructure running) or `purge` (delete all managed resources and PVCs) |
 
 ## Using a Custom CR File
@@ -157,7 +157,7 @@ Enable telemetry for all managed data stores:
 ```bash
 wsm deploy-v2 wandb deploy \
   --context <ctx> \
-  --observability-mode on
+  --observability-mode full
 ```
 
 This sets `telemetry.enabled: true` for MySQL, Redis, Kafka, Object Store, and ClickHouse.
@@ -184,7 +184,7 @@ When running `wsm deploy-v2 operator`, you can control infrastructure installati
 | `--install-cert-manager` | `auto` | `auto` (detect/reuse), `true` (force install), `false` (skip) |
 | `--install-nginx-gateway` | `auto` | `auto` (detect/reuse), `true` (force install), `false` (skip) |
 | `--enable-gateway-api` | `true` | Enable Gateway API support in cert-manager |
-| `--operator-chart-version` | `2.0.0-alpha.1` | Operator Helm chart version |
+| `--operator-chart-version` | `2.0.0-alpha.2` | Operator Helm chart version |
 | `--operator-namespace` | `wandb-operators` | Namespace for the operator |
 
 ### Example: Use Existing cert-manager

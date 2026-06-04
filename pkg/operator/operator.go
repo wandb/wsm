@@ -861,19 +861,12 @@ func stripFieldsNotInCRDSchema(obj *unstructured.Unstructured) {
 	// .status is always operator-owned; never SSA from the client side.
 	unstructured.RemoveNestedField(obj.Object, "status")
 
-	// Spec fields the Go v2 API types include but the deployed operator
-	// chart's CRD schema doesn't declare. Each entry is a chart/types
-	// version-skew workaround — delete the line when the corresponding
-	// field lands in the chart you're running.
-	for _, path := range [][]string{
-		{"spec", "clickhouse", "managedClickhouse"},
-		{"spec", "mysql", "managedMysql"},
-		{"spec", "kafka", "managedKafka"},
-		{"spec", "objectStore"},
-		{"spec", "networking"},
-	} {
-		unstructured.RemoveNestedField(obj.Object, path...)
-	}
+	// OidcSpec is a by-value struct in the v2 Go API, so Go's `omitempty`
+	// does not drop a zero value — wsm would emit oidc.{clientId,clientSecret,
+	// issuerUrl,authMethod}: {"key": ""} on every apply even when no OIDC is
+	// configured. Drop the whole oidc block; wsm has no flag for it, so a
+	// user with OIDC needs --cr-file regardless.
+	unstructured.RemoveNestedField(obj.Object, "spec", "wandb", "oidc")
 }
 
 // DeleteCR deletes a WeightsAndBiases CR from the cluster

@@ -30,7 +30,7 @@ wsm deploy-v2 operator [flags]
 | `--setup-k8s-cluster` | `false` | Create a Kind cluster before deploying |
 | `--cluster-name` | `kind` | Name of the Kind cluster (used with `--setup-k8s-cluster`) |
 | `--workers` | `0` | Number of Kind worker nodes |
-| `--operator-chart-version` | `2.0.0-alpha.1` | Operator Helm chart version |
+| `--operator-chart-version` | `2.0.0-alpha.2` | Operator Helm chart version |
 | `--operator-version` | — | Operator image version (defaults to chart value) |
 | `--operator-namespace` | `wandb-operators` | Namespace for the operator |
 | `--install-cert-manager` | `auto` | Cert-manager install mode: `auto`, `true`, `false` |
@@ -72,7 +72,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--create-aws-ingress-class` | `false` | Create an AWS ALB IngressClass (requires `--ingress-class`) |
 | `--create-aws-storage-class` | `false` | Create a default AWS `gp3` StorageClass |
 | `--add-ingress-annotations` | `false` | Add AWS load-balancer annotations |
-| `--observability-mode` | `off` | Enable telemetry for managed services: `off` or `on` |
+| `--observability-mode` | `off` | Telemetry mode for managed services: `off`, `full` (in-cluster Victoria + Grafana), or `forward` (Victoria stack + external OTLP forwarding) |
 | `--retention-policy` | `detach` | Behavior on CR deletion: `detach` (leave infrastructure running) or `purge` (delete all managed resources and PVCs) |
 | `--wait` | `false` | Wait for the W&B instance to report Ready |
 

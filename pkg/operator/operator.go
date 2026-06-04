@@ -67,6 +67,21 @@ const (
 	completeServerAPIsDiscoveryErrSubstr = "unable to retrieve the complete list of server APIs"
 )
 
+const (
+	TelemetryModeOff     = "off"
+	TelemetryModeFull    = "full"
+	TelemetryModeForward = "forward"
+)
+
+func ValidTelemetryMode(mode string) bool {
+	switch mode {
+	case TelemetryModeOff, TelemetryModeFull, TelemetryModeForward:
+		return true
+	default:
+		return false
+	}
+}
+
 var (
 	apiDiscoveryRetryInterval = 2 * time.Second
 	apiDiscoveryRetryTimeout  = 2 * time.Minute
@@ -591,7 +606,7 @@ func DeployOperator(
 	// conditions are boolean-only). "full" runs the in-cluster Victoria stack
 	// plus local Grafana; "forward" runs the Victoria stack and forwards OTLP
 	// data to telemetry.forwarding.otlp.endpoint.
-	if telemetryMode == "full" || telemetryMode == "forward" {
+	if telemetryMode == TelemetryModeFull || telemetryMode == TelemetryModeForward {
 		// The telemetry subchart deploys into the telemetry namespace (the W&B
 		// namespace), not the operator's release namespace. It must already
 		// exist — the chart does not create it — so ensure it here and pin
@@ -602,10 +617,10 @@ func DeployOperator(
 		}
 	}
 	switch telemetryMode {
-	case "full":
+	case TelemetryModeFull:
 		releaseValues["victoria-metrics-operator"] = map[string]interface{}{"enabled": true}
 		releaseValues["grafana-operator"] = map[string]interface{}{"enabled": true}
-	case "forward":
+	case TelemetryModeForward:
 		releaseValues["victoria-metrics-operator"] = map[string]interface{}{"enabled": true}
 		telemetryValues["forwarding"] = map[string]interface{}{
 			"otlp": map[string]interface{}{

@@ -270,8 +270,11 @@ func wandbCreateCmd() *cobra.Command {
 			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
 			wait, _ := cmd.Flags().GetBool("wait")
 
-			if cmd.Flags().Changed("gateway-class") && cmd.Flags().Changed("ingress-class") {
-				return fmt.Errorf("--gateway-class and --ingress-class are mutually exclusive")
+			if err := validateObservabilityMode(telemetryMode); err != nil {
+				return err
+			}
+			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), gatewayClass, ingressClass); err != nil {
+				return err
 			}
 
 			ctx := context.Background()
@@ -358,12 +361,14 @@ func operatorDeployCmd() *cobra.Command {
 			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
 			wait, _ := cmd.Flags().GetBool("wait")
 
-			if telemetryMode == "forward" && telemetryForwardEndpoint == "" {
+			if err := validateObservabilityMode(telemetryMode); err != nil {
+				return err
+			}
+			if telemetryMode == operator.TelemetryModeForward && telemetryForwardEndpoint == "" {
 				return fmt.Errorf("--observability-mode=forward requires --observability-forward-endpoint")
 			}
-
-			if cmd.Flags().Changed("gateway-class") && cmd.Flags().Changed("ingress-class") {
-				return fmt.Errorf("--gateway-class and --ingress-class are mutually exclusive")
+			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), gatewayClass, ingressClass); err != nil {
+				return err
 			}
 
 			err := processWandbCR(
@@ -977,17 +982,15 @@ func processWandbCR(
 
 	// --ingress-class and --gateway-class select mutually exclusive networking
 	// modes. --gateway-class has a non-empty default ("nginx"), so an explicit
-	// --ingress-class must take precedence and suppress the Gateway API config:
-	// otherwise the operator's validating webhook rejects the CR with
-	// "gatewayAPI must not be set when mode is Ingress".
+	// --ingress-class must take precedence and suppress the Gateway API config.
 	if ingressClass != "" {
-		wandbCR.Spec.Networking.Mode = "ingress"
+		wandbCR.Spec.Networking.Mode = v2.NetworkingModeIngress
 		wandbCR.Spec.Networking.Ingress = &v2.IngressConfig{
 			IngressClassName: &ingressClass,
 			Name:             ingressName,
 		}
 	} else if gatewayClass != "" {
-		wandbCR.Spec.Networking.Mode = "gateway"
+		wandbCR.Spec.Networking.Mode = v2.NetworkingModeGatewayAPI
 		wandbCR.Spec.Networking.GatewayAPI = &v2.GatewayAPIConfig{
 			Gateway: v2.GatewayConfig{
 				Managed:          true,
@@ -1029,7 +1032,7 @@ func processWandbCR(
 		}
 	}
 
-	if telemetryMode != "" && telemetryMode != "off" {
+	if telemetryMode != "" && telemetryMode != operator.TelemetryModeOff {
 		if wandbCR.Spec.MySQL.ManagedMysql != nil {
 			wandbCR.Spec.MySQL.ManagedMysql.Telemetry.Enabled = true
 		}

@@ -225,6 +225,8 @@ This command port-forwards the `wandb-console` service on `localhost:8082` and o
 
 View the in-cluster telemetry UIs deployed by the v2 operator. The telemetry stack is deployed when the operator is installed with `--observability-mode=full` (Grafana + Victoria stack) or `forward` (Victoria stack only). The services are ClusterIP-only, so each subcommand port-forwards to a service and opens it in your browser.
 
+> **Requires `kubectl` on your PATH.** Unlike the other v2 commands (which talk to the cluster via client-go), `wsm telemetry` shells out to `kubectl port-forward` so kubectl handles Service→Pod resolution and stream negotiation. If kubectl isn't installed, the command errors with the equivalent `kubectl port-forward` invocation you can run manually.
+
 ```bash
 wsm telemetry grafana  --context <kubeconfig-context>   # Grafana dashboards (localhost:3000)
 wsm telemetry victoria --context <kubeconfig-context>   # VictoriaMetrics VMUI (localhost:8428/vmui/)

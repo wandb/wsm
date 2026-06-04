@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os/exec"
 
 	"github.com/spf13/cobra"
 )
@@ -24,6 +25,13 @@ The telemetry stack is deployed when the operator is installed with
 --observability-mode=full (Grafana + Victoria stack) or forward (Victoria
 stack only). Its services are ClusterIP-only, so these subcommands port-forward
 to a service and open it in a browser; press Ctrl+C to stop.`,
+		// Fail fast if kubectl isn't available.
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if _, err := exec.LookPath("kubectl"); err != nil {
+				return fmt.Errorf("kubectl not found on PATH: `wsm telemetry` requires kubectl for port-forwarding: %w", err)
+			}
+			return nil
+		},
 	}
 
 	// Shared across every UI subcommand.

@@ -37,6 +37,8 @@ wsm deploy-v2 operator [flags]
 | `--install-nginx-gateway` | `auto` | Nginx-gateway-fabric install mode: `auto`, `true`, `false` |
 | `--enable-gateway-api` | `true` | Enable Gateway API support in cert-manager |
 | `--include-cr` | `false` | Also deploy the W&B CR in the same command |
+| `--mirror-registry` | — | Pull every chart and image from this registry (e.g. `harbor.corp:5443`). Populate it first with `wsm registry mirror --to <same-host>`. See [On-Prem Deployment](../deployment/on-prem.md). |
+| `--insecure-registry` | `false` | Use plain HTTP / skip TLS verification when fetching from `--mirror-registry`. Required for plain-HTTP `registry:2`; **never** in production. |
 
 #### Inherited Flags (when `--include-cr` is used)
 
@@ -137,6 +139,8 @@ wsm cluster create [flags]
 | `--workers` | `0` | Number of worker nodes |
 | `--http-port` | `8080` | Host port mapped to HTTP ingress |
 | `--https-port` | `8443` | Host port mapped to HTTPS ingress |
+| `--kind-node-image` | — | Override the Kind node image (e.g. point at a mirrored `kindest/node` for offline cluster bootstrap) |
+| `--insecure-registry-host` | — | Configure containerd to pull from this host over plain HTTP (e.g. `host.docker.internal:5000`). Pairs with `wsm registry mirror --insecure` for local-laptop testing against a plain-HTTP `registry:2`. See [On-Prem Deployment](../deployment/on-prem.md). |
 
 ---
 
@@ -180,6 +184,59 @@ This removes:
 - WSM deployment markers
 
 > Resources without WSM markers are not deleted.
+
+---
+
+## `wsm registry`
+
+Tools for mirroring W&B's install artifacts to a customer-controlled container registry. Pair with `wsm deploy-v2 operator --mirror-registry <host>` for on-prem / air-gapped installs.
+
+See [On-Prem Deployment](../deployment/on-prem.md) for the end-to-end walkthrough.
+
+### `wsm registry mirror`
+
+Pulls every chart and image required by `wsm deploy-v2 operator` from its upstream source and pushes a copy to the customer's mirror.
+
+```bash
+wsm registry mirror --to <host> [flags]
+```
+
+Scope today: the operator OCI chart + binary image, cert-manager OCI chart + 5 component images, nginx-gateway-fabric OCI chart + 2 images (control plane + data plane). W&B server manifest, application images, and subchart controller images are upcoming iterations.
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--to` | — | **Required.** Hostname of your mirror, e.g. `harbor.example.com` or `localhost:5000`. |
+| `--insecure` | `false` | Skip TLS verification when pushing to the mirror. Use for plain-HTTP registries like a local `registry:2`. **Never** in production. |
+| `--dry-run` | `false` | Print the source → target mirroring plan without pushing. |
+| `--operator-chart-version` | `2.0.0-alpha.2` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
+
+Auth is read from your Docker config (`~/.docker/config.json`). Run `docker login <mirror-host>` before this command for any registry that requires credentials.
+
+### `wsm registry check`
+
+Verifies that every required image is present in your mirror.
+
+```bash
+wsm registry check --registry <host> [flags]
+```
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--registry` | — | **Required.** Hostname of your mirror to check against. |
+| `--insecure` | `false` | Skip TLS verification when contacting the registry. |
+| `--fail-on-missing` | `false` | Exit non-zero if any image is missing. |
+
+### `wsm registry values`
+
+Emits a `values.yaml` fragment that overrides each image reference to use your mirror instead of the upstream source. Used by the legacy v1 install flow; not required for the v2 `--mirror-registry` path.
+
+```bash
+wsm registry values --registry <host> [-o overrides.yaml]
+```
 
 ---
 

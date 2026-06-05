@@ -34,7 +34,8 @@ WSM provides several commands for managing W&B deployments:
 - [`wsm list`](#wsm-list): List images required for deployment.
 - [`wsm download`](#wsm-download): Download images and dependencies for airgapped environments.
 - [`wsm deploy`](#wsm-deploy): Deploy W&B operator and resources.
-- [`wsm deploy-v2`](#wsm-deploy-v2): Deploy v2 W&B operator and resources.
+- [`wsm deploy-v2`](#wsm-deploy-v2): Deploy v2 W&B operator and resources (supports on-prem `--mirror-registry`).
+- [`wsm registry`](#wsm-registry): Mirror W&B install artifacts to a private container registry.
 - [`wsm cluster`](#wsm-cluster): Manage Kubernetes clusters for local testing.
 - [`wsm console`](#wsm-console): Open the W&B console.
 
@@ -111,6 +112,8 @@ wsm deploy-v2 [command] [flags]
   - `--setup-k8s-cluster`: Setup a Kind cluster before deploying.
   - `--cluster-name string`: Name of the Kind cluster (only used with `--setup-k8s-cluster`) (default "kind").
   - `--workers int`: Number of worker nodes (only used with `--setup-k8s-cluster`).
+  - `--mirror-registry string`: Pull every chart and image from this registry (e.g. `harbor.corp:5443`). Populate it first with `wsm registry mirror --to <same-host>`. See the [on-prem deployment guide](./docs/deployment/on-prem.md).
+  - `--insecure-registry`: Use plain HTTP / skip TLS verification when fetching from `--mirror-registry`. For local-laptop testing only.
   - *Accepts all flags listed under `wandb deploy` below (Used with `--include-cr`).*
 - `wandb`: Manage Weights & Biases instances.
   - `deploy`: Deploy a W&B instance.
@@ -142,10 +145,39 @@ wsm cluster [command] [flags]
 - `create`: Create a new Kind cluster.
   - `--cluster-name string`: Name of the Kind cluster (default "kind").
   - `--workers int`: Number of worker nodes.
+  - `--http-port int32`: Host port mapped to HTTP ingress (default 8080).
+  - `--https-port int32`: Host port mapped to HTTPS ingress (default 8443).
+  - `--kind-node-image string`: Override the Kind node image (e.g. point at a mirrored `kindest/node` for offline cluster bootstrap).
+  - `--insecure-registry-host string`: Configure containerd to pull from this host over plain HTTP (e.g. `host.docker.internal:5000`). For local on-prem testing against a plain-HTTP `registry:2`.
 - `destroy`: Destroy the Kind cluster and cleanup resources.
   - `--cluster-name string`: Name of the Kind cluster to delete (default "kind").
 - `cleanup`: Delete all resources deployed by wsm.
   - `--context string`: Name of the kubeconfig context to use (Required).
+
+---
+
+### `wsm registry`
+
+Mirror W&B's install artifacts to a customer-controlled container registry. Pair with `wsm deploy-v2 operator --mirror-registry <host>` for on-prem / air-gapped installs. See the [on-prem deployment guide](./docs/deployment/on-prem.md) for the full walkthrough.
+
+**Usage:**
+```bash
+wsm registry [command] [flags]
+```
+
+**Subcommands:**
+- `mirror`: Pull every chart and image needed by `wsm deploy-v2 operator` from its upstream source and re-push to your mirror.
+  - `--to string`: **Required.** Hostname of your mirror (e.g. `harbor.example.com` or `localhost:5000`).
+  - `--insecure`: Skip TLS verification when pushing to the mirror. For local-laptop testing only.
+  - `--dry-run`: Print the source → target mirroring plan without pushing.
+  - `--operator-chart-version string`: Operator chart version; also used as the tag for the operator binary image (default "2.0.0-alpha.2").
+- `check`: Verify that all required images exist in your mirror.
+  - `--registry string`: **Required.** Hostname of your mirror.
+  - `--insecure`: Skip TLS verification.
+  - `--fail-on-missing`: Exit non-zero if any image is missing.
+- `values`: Emit a `values.yaml` fragment that re-points images at your mirror (legacy v1 flow).
+  - `--registry string`: **Required.** Hostname of your mirror.
+  - `-o, --output string`: Output file path (default stdout).
 
 ---
 
@@ -174,13 +206,51 @@ wsm deploy-v2 operator --context kind-wandb-cluster
 wsm deploy-v2 wandb deploy --context kind-wandb-cluster
 ```
 
-**Airgapped Deployment Preparation:**
+**Airgapped Deployment Preparation (v1 — legacy):**
 ```bash
 # List all required images
 wsm list
 
 # Download images for a specific platform
 wsm download --platform linux/amd64
+```
+
+**On-Prem / Mirror Registry Setup (v2):**
+
+For customers who need to install W&B from their own container registry (Harbor, Artifactory, ECR, etc.). The full walkthrough — including the laptop test against a local `registry:2` — lives at [`docs/deployment/on-prem.md`](./docs/deployment/on-prem.md). The TL;DR:
+
+```bash
+# 1. Mirror artifacts from upstream to your registry
+wsm registry mirror \
+  --to harbor.corp.internal \
+  --operator-chart-version 2.0.0-alpha.2
+
+# 2. Install pulling only from the mirror
+wsm deploy-v2 operator \
+  --context <cluster> \
+  --mirror-registry harbor.corp.internal \
+  --operator-chart-version 2.0.0-alpha.2
+```
+
+For local laptop testing with a plain-HTTP `registry:2`:
+
+```bash
+# Local mirror container
+docker run -d -p 5000:5000 --name local-registry registry:2
+
+# Kind cluster that trusts the plain-HTTP registry
+wsm cluster create \
+  --cluster-name onprem-test \
+  --http-port 18080 --https-port 18443 \
+  --insecure-registry-host host.docker.internal:5000
+
+# Mirror + install (insecure flags required for plain-HTTP)
+wsm registry mirror --to host.docker.internal:5000 --insecure --operator-chart-version 2.0.0-alpha.2
+wsm deploy-v2 operator \
+  --context kind-onprem-test \
+  --mirror-registry host.docker.internal:5000 \
+  --insecure-registry \
+  --operator-chart-version 2.0.0-alpha.2
 ```
 
 ## Requirements

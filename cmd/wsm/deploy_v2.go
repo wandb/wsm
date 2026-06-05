@@ -119,14 +119,16 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().Bool("create-aws-ingress-class", false, "Create an AWS Ingress Class for the W&B instance (requires --ingress-class to be set)")
 	cmd.PersistentFlags().Bool("create-aws-storage-class", false, "Create a Storage class for the W&B instance")
 	cmd.PersistentFlags().String("ingress-class", "", "Enable Ingress support with the specified ingress class")
+	cmd.PersistentFlags().String("ingress-name", "", "Override the generated Ingress resource name (defaults to the CR name)")
 	cmd.PersistentFlags().String("gateway-class", "nginx", "Enable Gateway API support with the specified gateway class")
 	cmd.PersistentFlags().String("issuer-name", "", "TLS issuer name for Gateway API")
 	cmd.PersistentFlags().Bool("add-ingress-annotations", false, "Add cloud provider annotations to Ingress or Gateway API")
 	cmd.PersistentFlags().String("license", "", "W&B license string (optional, injected into spec.wandb.license)")
 	cmd.PersistentFlags().String("license-file", "", "Path to W&B license file (optional, injected into spec.wandb.license)")
-	cmd.PersistentFlags().String("observability-mode", "off", "Telemetry mode: off, full, forward")
+	cmd.PersistentFlags().String("observability-mode", "off", "Enable observability for applications (off, full, forward)")
+	cmd.PersistentFlags().String("observability-forward-endpoint", "", "OTLP endpoint to forward telemetry to (required when --observability-mode=forward)")
 	cmd.PersistentFlags().String("retention-policy", "detach", "Retention policy for W&B instance (detach, purge) - defaults to detach")
-	cmd.PersistentFlags().String("size", "small", "W&B instance size (dev, micro, small, medium, large, xlarge, 2xlarge, 4xlarge)")
+	cmd.PersistentFlags().String("size", "small", "W&B instance size (dev, micro, small, medium, large, xlarge, xxlarge)")
 	cmd.PersistentFlags().String("wandb-hostname", "http://localhost:8080", "Hostname to use for the W&B instance")
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
 	cmd.PersistentFlags().String("wandb-version", "", "Server manifest version (e.g., 0.76.1)")
@@ -258,6 +260,7 @@ func wandbCreateCmd() *cobra.Command {
 			telemetryMode, _ := cmd.Flags().GetString("observability-mode")
 			gatewayClass, _ := cmd.Flags().GetString("gateway-class")
 			ingressClass, _ := cmd.Flags().GetString("ingress-class")
+			ingressName, _ := cmd.Flags().GetString("ingress-name")
 			issuerName, _ := cmd.Flags().GetString("issuer-name")
 			size, _ := cmd.Flags().GetString("size")
 			retentionPolicy, _ := cmd.Flags().GetString("retention-policy")
@@ -266,6 +269,13 @@ func wandbCreateCmd() *cobra.Command {
 			wandbName, _ := cmd.Flags().GetString("wandb-name")
 			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
 			wait, _ := cmd.Flags().GetBool("wait")
+
+			if err := validateObservabilityMode(telemetryMode); err != nil {
+				return err
+			}
+			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), gatewayClass, ingressClass); err != nil {
+				return err
+			}
 
 			ctx := context.Background()
 
@@ -276,6 +286,7 @@ func wandbCreateCmd() *cobra.Command {
 				wandbHostname,
 				gatewayClass,
 				ingressClass,
+				ingressName,
 				issuerName,
 				addIngressAnnotations,
 				license,
@@ -339,17 +350,29 @@ func operatorDeployCmd() *cobra.Command {
 			addIngressAnnotations, _ := cmd.Flags().GetBool("add-ingress-annotations")
 			gatewayClass, _ := cmd.Flags().GetString("gateway-class")
 			ingressClass, _ := cmd.Flags().GetString("ingress-class")
+			ingressName, _ := cmd.Flags().GetString("ingress-name")
 			issuerName, _ := cmd.Flags().GetString("issuer-name")
 			size, _ := cmd.Flags().GetString("size")
 			retentionPolicy, _ := cmd.Flags().GetString("retention-policy")
 			license, _ := cmd.Flags().GetString("license")
 			licenseFile, _ := cmd.Flags().GetString("license-file")
 			telemetryMode, _ := cmd.Flags().GetString("observability-mode")
+			telemetryForwardEndpoint, _ := cmd.Flags().GetString("observability-forward-endpoint")
 			wandbNamespace, _ := cmd.Flags().GetString("wandb-namespace")
 			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
 			wandbName, _ := cmd.Flags().GetString("wandb-name")
 			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
 			wait, _ := cmd.Flags().GetBool("wait")
+
+			if err := validateObservabilityMode(telemetryMode); err != nil {
+				return err
+			}
+			if telemetryMode == operator.TelemetryModeForward && telemetryForwardEndpoint == "" {
+				return fmt.Errorf("--observability-mode=forward requires --observability-forward-endpoint")
+			}
+			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), gatewayClass, ingressClass); err != nil {
+				return err
+			}
 
 			err := processWandbCR(
 				crFile,
@@ -358,6 +381,7 @@ func operatorDeployCmd() *cobra.Command {
 				wandbHostname,
 				gatewayClass,
 				ingressClass,
+				ingressName,
 				issuerName,
 				addIngressAnnotations,
 				license,
@@ -383,6 +407,8 @@ func operatorDeployCmd() *cobra.Command {
 				wait,
 				clusterName,
 				telemetryMode,
+				telemetryForwardEndpoint,
+				wandbNamespace,
 				workers,
 				operatorChartVersion,
 				operatorVersion,
@@ -444,6 +470,8 @@ func performDeploy(
 	wait bool,
 	clusterName string,
 	telemetryMode string,
+	telemetryForwardEndpoint string,
+	wandbNamespace string,
 	workers int,
 	operatorChartVersion string,
 	operatorVersion string,
@@ -579,7 +607,7 @@ func performDeploy(
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
 	start := time.Now()
 
-	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, operatorVersion, telemetryMode, mirror); err != nil {
+	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, telemetryMode, mirror, telemetryForwardEndpoint, wandbNamespace); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -929,6 +957,7 @@ func processWandbCR(
 	wandbHostname string,
 	gatewayClass string,
 	ingressClass string,
+	ingressName string,
 	issuerName string,
 	addIngressAnnotations bool,
 	license string,
@@ -965,10 +994,6 @@ func processWandbCR(
 		return fmt.Errorf("cannot specify both license and license file")
 	}
 
-	if gatewayClass != "" && ingressClass != "" {
-		return fmt.Errorf("cannot specify both gatewayClass and ingressClass")
-	}
-
 	if license != "" || licenseFile != "" {
 		if license != "" {
 			wandbCR.Spec.Wandb.License = license
@@ -983,8 +1008,17 @@ func processWandbCR(
 		}
 	}
 
-	if gatewayClass != "" {
-		wandbCR.Spec.Networking.Mode = "gateway"
+	// --ingress-class and --gateway-class select mutually exclusive networking
+	// modes. --gateway-class has a non-empty default ("nginx"), so an explicit
+	// --ingress-class must take precedence and suppress the Gateway API config.
+	if ingressClass != "" {
+		wandbCR.Spec.Networking.Mode = v2.NetworkingModeIngress
+		wandbCR.Spec.Networking.Ingress = &v2.IngressConfig{
+			IngressClassName: &ingressClass,
+			Name:             ingressName,
+		}
+	} else if gatewayClass != "" {
+		wandbCR.Spec.Networking.Mode = v2.NetworkingModeGatewayAPI
 		wandbCR.Spec.Networking.GatewayAPI = &v2.GatewayAPIConfig{
 			Gateway: v2.GatewayConfig{
 				Managed:          true,
@@ -993,16 +1027,16 @@ func processWandbCR(
 		}
 	}
 
-	if ingressClass != "" {
-		wandbCR.Spec.Networking.Mode = "ingress"
-		wandbCR.Spec.Networking.Ingress = &v2.IngressConfig{
-			IngressClassName: &ingressClass,
-		}
-	}
-
 	if addIngressAnnotations {
-		wandbCR.Spec.Networking.GatewayAPI.Gateway.InfrastructureAnnotations = map[string]string{
-			"service.beta.kubernetes.io/aws-load-balancer-scheme": "internet-facing",
+		// InfrastructureAnnotations exist only on the managed Gateway; the CR's
+		// IngressConfig has no annotations field. Apply them in Gateway API mode
+		// and no-op otherwise to avoid a nil dereference.
+		if wandbCR.Spec.Networking.GatewayAPI != nil {
+			wandbCR.Spec.Networking.GatewayAPI.Gateway.InfrastructureAnnotations = map[string]string{
+				"service.beta.kubernetes.io/aws-load-balancer-scheme": "internet-facing",
+			}
+		} else {
+			fmt.Println("⚠ --add-ingress-annotations applies only to Gateway API mode; ignoring in Ingress mode")
 		}
 	}
 
@@ -1026,7 +1060,7 @@ func processWandbCR(
 		}
 	}
 
-	if telemetryMode != "" && telemetryMode != "off" {
+	if telemetryMode != "" && telemetryMode != operator.TelemetryModeOff {
 		if wandbCR.Spec.MySQL.ManagedMysql != nil {
 			wandbCR.Spec.MySQL.ManagedMysql.Telemetry.Enabled = true
 		}

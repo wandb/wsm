@@ -226,11 +226,6 @@ nodeRegistration:
 	return kindConfig
 }
 
-// writeInsecureRegistryHostsConfig drops a containerd hosts.toml in the
-// control-plane node so kubelet pulls from insecureRegistryHost over plain
-// HTTP without TLS verification. Pairs with the config_path patch in
-// generateClusterConfig — containerd hot-reads the certs.d tree, no restart
-// required.
 func writeInsecureRegistryHostsConfig(ctx context.Context, clusterName, insecureRegistryHost string) error {
 	nodeName := clusterName + "-control-plane"
 	hostsToml := fmt.Sprintf(`server = "http://%s"

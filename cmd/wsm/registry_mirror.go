@@ -16,10 +16,6 @@ import (
 // upstream registry and pushes a copy to the customer's mirror. Pair this with
 // `wsm deploy-v2 operator --mirror-registry <same-host>` to install entirely
 // from the mirror.
-//
-// Iteration 1 scope: just the infrastructure charts and their images — operator
-// chart + binary, cert-manager chart + 5 images, nginx-gateway chart + 2 images.
-// W&B server manifest, app images, and subchart images are follow-ups.
 func registryMirrorCmd() *cobra.Command {
 	var (
 		targetRegistry       string

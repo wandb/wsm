@@ -62,19 +62,23 @@ wsm deploy-v2 wandb deploy [flags]
 | `--wandb-namespace` | `wandb` | Kubernetes namespace for the CR |
 | `--wandb-hostname` | `http://localhost:8080` | External URL for accessing W&B |
 | `--wandb-version` | — | Server manifest version (defaults to built-in stable version) |
-| `--size` | `small` | Deployment size profile: `dev`, `small`, `medium`, `large`, `xlarge`, `2xlarge`, `4xlarge` |
+| `--size` | `small` | Deployment size profile: `dev`, `micro`, `small`, `medium`, `large`, `xlarge`, `xxlarge` |
 | `--license` | — | W&B license string |
 | `--license-file` | — | Path to a file containing the W&B license |
-| `--gateway-class` | `nginx` | Gateway class name for Gateway API mode |
-| `--ingress-class` | — | Ingress class name (mutually exclusive with `--gateway-class`) |
+| `--gateway-class` | `nginx` | Gateway class name (selects Gateway API mode; the default). Mutually exclusive with `--ingress-class` |
+| `--ingress-class` | — | Ingress class name (selects Ingress mode). Takes precedence over the default `--gateway-class`; setting both explicitly is an error |
+| `--ingress-name` | — | Override the generated Ingress resource name (defaults to the CR name) |
 | `--create-ca` | `true` | Create a self-signed CA issuer for TLS |
 | `--issuer-name` | — | cert-manager Issuer name for TLS (requires `--create-ca=false`) |
 | `--create-aws-ingress-class` | `false` | Create an AWS ALB IngressClass (requires `--ingress-class`) |
 | `--create-aws-storage-class` | `false` | Create a default AWS `gp3` StorageClass |
-| `--add-ingress-annotations` | `false` | Add AWS load-balancer annotations |
-| `--observability-mode` | `off` | Telemetry mode for managed services: `off`, `full` (in-cluster Victoria + Grafana), or `forward` (Victoria stack + external OTLP forwarding) |
+| `--add-ingress-annotations` | `false` | Add AWS load-balancer annotations to the managed Gateway (**Gateway API mode only**; ignored in Ingress mode) |
+| `--observability-mode` | `off` | Telemetry mode: `off`, `full` (in-cluster Victoria Metrics stack **+ local Grafana**), or `forward` (Victoria stack + forward OTLP externally) |
+| `--observability-forward-endpoint` | — | OTLP endpoint to forward telemetry to. **Required** when `--observability-mode=forward` |
 | `--retention-policy` | `detach` | Behavior on CR deletion: `detach` (leave infrastructure running) or `purge` (delete all managed resources and PVCs) |
 | `--wait` | `false` | Wait for the W&B instance to report Ready |
+
+> **Observability.** `--observability-mode` is applied to the operator chart during `wsm deploy-v2 operator` (it enables the `victoria-metrics-operator` and, for `full`, the `grafana-operator` dependencies the chart requires) and also toggles per-service telemetry on the CR. `full` deploys Grafana and the Victoria Metrics/Logs/Traces stack as ClusterIP services in the W&B namespace — view Grafana with [`wsm telemetry grafana`](#wsm-telemetry) and VictoriaMetrics with [`wsm telemetry victoria`](#wsm-telemetry). `forward` ships OTLP data to `--observability-forward-endpoint` and does not run Grafana (VMUI is still available via `wsm telemetry victoria`).
 
 ---
 
@@ -214,6 +218,42 @@ wsm console
 ```
 
 This command port-forwards the `wandb-console` service on `localhost:8082` and opens the login URL.
+
+---
+
+### `wsm telemetry`
+
+View the in-cluster telemetry UIs deployed by the v2 operator. The telemetry stack is deployed when the operator is installed with `--observability-mode=full` (Grafana + Victoria stack) or `forward` (Victoria stack only). The services are ClusterIP-only, so each subcommand port-forwards to a service and opens it in your browser.
+
+> **Requires `kubectl` on your PATH.** Unlike the other v2 commands (which talk to the cluster via client-go), `wsm telemetry` shells out to `kubectl port-forward` so kubectl handles Service→Pod resolution and stream negotiation. If kubectl isn't installed, the command errors with the equivalent `kubectl port-forward` invocation you can run manually.
+
+```bash
+wsm telemetry grafana  --context <kubeconfig-context>   # Grafana dashboards (localhost:3000)
+wsm telemetry victoria --context <kubeconfig-context>   # VictoriaMetrics VMUI (localhost:8428/vmui/)
+```
+
+#### Persistent flags (both subcommands)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | — | Name of the kubeconfig context to use |
+| `--wandb-namespace` | `wandb` | Namespace where the telemetry stack is deployed |
+
+#### `wsm telemetry grafana`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--service` | `grafana-service` | Grafana service name to forward |
+| `--local-port` / `--remote-port` | `3000` | Local / service port |
+| `--no-browser` | `false` | Do not open a browser automatically |
+
+#### `wsm telemetry victoria`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--service` | `vmsingle-victoria-instance` | VictoriaMetrics single service name to forward |
+| `--local-port` / `--remote-port` | `8428` | Local / service port |
+| `--no-browser` | `false` | Do not open a browser automatically |
 
 ---
 

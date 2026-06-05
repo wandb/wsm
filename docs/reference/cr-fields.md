@@ -15,7 +15,7 @@ kind: WeightsAndBiases
 |-------|------|----------|-------------|
 | `metadata.name` | string | Yes | Name of the W&B instance |
 | `metadata.namespace` | string | Yes | Kubernetes namespace |
-| `spec.size` | string | No | Deployment size: `dev`, `small`, `medium`, `large`, `xlarge`, `2xlarge`, `4xlarge` |
+| `spec.size` | string | No | Deployment size: `dev`, `micro`, `small`, `medium`, `large`, `xlarge`, `xxlarge` |
 | `spec.retentionPolicy.onDelete` | string | No | `detach` (leave infrastructure running) or `purge` (delete all managed resources) |
 | `spec.wandb` | object | Yes | Core W&B application configuration |
 | `spec.networking` | object | Yes | Networking and TLS configuration |
@@ -61,6 +61,7 @@ kind: WeightsAndBiases
 | Field | Type | Description |
 |-------|------|-------------|
 | `ingressClassName` | string | Name of the IngressClass to use |
+| `name` | string | Override the generated Ingress resource name (defaults to the CR name) |
 
 ### `spec.networking.tls`
 

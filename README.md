@@ -175,9 +175,6 @@ wsm registry [command] [flags]
   - `--registry string`: **Required.** Hostname of your mirror.
   - `--insecure`: Skip TLS verification.
   - `--fail-on-missing`: Exit non-zero if any image is missing.
-- `values`: Emit a `values.yaml` fragment that re-points images at your mirror (legacy v1 flow).
-  - `--registry string`: **Required.** Hostname of your mirror.
-  - `-o, --output string`: Output file path (default stdout).
 
 ---
 

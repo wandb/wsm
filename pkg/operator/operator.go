@@ -55,13 +55,18 @@ const (
 	certManagerDeploymentName = "cert-manager"
 	certManagerReleaseName    = "cert-manager"
 	certManagerChartRef       = "oci://quay.io/jetstack/charts/cert-manager"
-	certManagerVersion        = "v1.20.2"
+	// CertManagerVersion is the cert-manager chart and image tag wsm installs.
+	// Exported so `wsm registry mirror` can build a mirroring plan that matches
+	// exactly what `wsm deploy-v2 operator` will request.
+	CertManagerVersion = "v1.20.2"
 
 	nginxGatewayNamespace      = "nginx-gateway"
 	nginxGatewayDeploymentName = "nginx-gateway-nginx-gateway-fabric"
 	nginxGatewayReleaseName    = "nginx-gateway"
 	nginxGatewayChartRef       = "oci://ghcr.io/nginx/charts/nginx-gateway-fabric"
-	nginxGatewayVersion        = "2.5.1"
+	// NginxGatewayVersion is the nginx-gateway-fabric chart and image tag wsm
+	// installs. Exported for the same reason as CertManagerVersion.
+	NginxGatewayVersion = "2.5.1"
 
 	gatewayApiCRDURL                     = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml"
 	completeServerAPIsDiscoveryErrSubstr = "unable to retrieve the complete list of server APIs"
@@ -187,7 +192,7 @@ func InstallCertManager(ctx context.Context, enableGatewayAPI bool, skipIfPresen
 		// Create upgrade action
 		upgradeClient := action.NewUpgrade(actionConfig)
 		upgradeClient.Namespace = certManagerNamespace
-		upgradeClient.Version = certManagerVersion
+		upgradeClient.Version = CertManagerVersion
 		upgradeClient.WaitStrategy = "hookOnly"
 		upgradeClient.ForceConflicts = true
 		//upgradeClient.ResetValues = true
@@ -214,7 +219,7 @@ func InstallCertManager(ctx context.Context, enableGatewayAPI bool, skipIfPresen
 		installClient := action.NewInstall(actionConfig)
 		installClient.Namespace = certManagerNamespace
 		installClient.ReleaseName = certManagerReleaseName
-		installClient.Version = certManagerVersion
+		installClient.Version = CertManagerVersion
 		installClient.WaitStrategy = "hookOnly"
 
 		// Get the chart
@@ -389,7 +394,7 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *Mirror
 		// Create upgrade action
 		upgradeClient := action.NewUpgrade(actionConfig)
 		upgradeClient.Namespace = nginxGatewayNamespace
-		upgradeClient.Version = nginxGatewayVersion
+		upgradeClient.Version = NginxGatewayVersion
 		upgradeClient.WaitStrategy = "hookOnly"
 		upgradeClient.ForceConflicts = true
 		upgradeClient.SkipSchemaValidation = true
@@ -416,7 +421,7 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *Mirror
 		installClient := action.NewInstall(actionConfig)
 		installClient.Namespace = nginxGatewayNamespace
 		installClient.ReleaseName = nginxGatewayReleaseName
-		installClient.Version = nginxGatewayVersion
+		installClient.Version = NginxGatewayVersion
 		installClient.WaitStrategy = "hookOnly"
 		installClient.SkipSchemaValidation = true
 

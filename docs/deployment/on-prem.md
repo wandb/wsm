@@ -54,7 +54,7 @@ This is the recipe that proves WSM's on-prem code path end-to-end before you com
 ### Prerequisites
 
 - Docker / OrbStack running
-- WSM built from source (`make build`)
+- WSM installed (`sudo make install`)
 - ~5 GB free disk for mirrored images
 
 ### 1. Bring up a local mirror
@@ -193,3 +193,5 @@ For a productionized **local** test (TLS instead of plain HTTP), the recipe is s
 | Pod `ImagePullBackOff` with `http: server gave HTTP response to HTTPS client` | Cluster was created without `--insecure-registry-host`. Destroy and recreate with the flag. |
 | `kubeadm init … exit status 1` and kubelet logs show `unknown service runtime.v1.RuntimeService` | Stale containerd patch shape in an older wsm build (`mirrors.X.endpoint` form). Pull the latest WSM source. |
 | Pre-install Helm hook Job times out | Subchart pre-install hook image not yet in mirror, or wrong hostname. Check the failing pod's `kubectl describe` for the exact image reference. |
+| ✗ Deployment failed: failed to locate nginx-gateway chart: failed to perform "FetchReference"  
+on source: GET "http://host.docker.internal:5000/v2/nginx/charts/nginx-gateway-fabric/manifests/2.5.1": response status code 403: Forbidden | port 5000 already taken by Apple Airplay. just switch the port number |

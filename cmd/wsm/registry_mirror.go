@@ -10,6 +10,7 @@ import (
 	"github.com/containers/image/v5/signature"
 	"github.com/containers/image/v5/types"
 	"github.com/spf13/cobra"
+	"github.com/wandb/wsm/pkg/operator"
 )
 
 // registryMirrorCmd pulls every artifact wsm needs for a v2 install from its
@@ -110,14 +111,11 @@ type mirrorItem struct {
 }
 
 // buildMirrorPlan returns the static set of artifacts Iteration 1 mirrors.
-// cert-manager and nginx-gateway versions are duplicated from pkg/operator
-// (those constants are private to that package); keeping them in sync is a
-// one-line edit when pkg/operator bumps them.
+// cert-manager and nginx-gateway versions come from pkg/operator so the
+// install side and mirror side stay in lockstep automatically.
 func buildMirrorPlan(target, operatorChartVersion string) []mirrorItem {
-	const (
-		certManagerVersion  = "v1.20.2"
-		nginxGatewayVersion = "2.5.1"
-	)
+	certManagerVersion := operator.CertManagerVersion
+	nginxGatewayVersion := operator.NginxGatewayVersion
 
 	plan := []mirrorItem{
 		// Operator OCI chart + binary image

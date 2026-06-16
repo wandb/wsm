@@ -57,6 +57,13 @@ wsm deploy-v2 wandb deploy \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--observability-mode` | `off` | Telemetry mode for managed MySQL, Redis, Kafka, etc.: `off`, `full` (in-cluster Victoria + Grafana), or `forward` (Victoria stack + external OTLP forwarding) |
+| `--observability-forward-endpoint` | — | OTLP endpoint to forward telemetry to. Required when mode is `forward` |
+| `--observability-otel-secret` | — | OTEL connection secret name (`telemetry.otel.secretName`); chart default `wandb-otel-connection` if unset |
+| `--observability-otel-protocol` | — | OTEL exporter protocol, e.g. `http/protobuf` or `grpc` |
+| `--observability-otel-service-name` | — | OTEL `service.name` resource attribute |
+| `--observability-otel-resource-attributes` | — | Extra OTEL resource attributes, comma-separated `key=value` |
+| `--observability-forward-protocol` | — | OTLP forwarding protocol (forward mode only) |
+| `--observability-forward-headers` | — | OTLP forwarding headers, repeatable `key=value` (forward mode only) |
 | `--retention-policy` | `detach` | Behavior when deleting the CR: `detach` (leave infrastructure running) or `purge` (delete all managed resources and PVCs) |
 
 ## Using a Custom CR File
@@ -161,6 +168,21 @@ wsm deploy-v2 wandb deploy \
 ```
 
 This sets `telemetry.enabled: true` for MySQL, Redis, Kafka, Object Store, and ClickHouse.
+
+To forward OTLP data to an external collector instead of running Grafana locally, use `forward` mode. The OTEL/forwarding knobs below are optional — unset values fall back to the operator chart's defaults (`telemetry.otel.secretName` defaults to `wandb-otel-connection`, which the chart requires to be non-empty for `full`/`forward`):
+
+```bash
+wsm deploy-v2 operator \
+  --context <ctx> \
+  --observability-mode forward \
+  --observability-forward-endpoint otel-collector.example.com:4317 \
+  --observability-forward-protocol grpc \
+  --observability-forward-headers Authorization="Bearer $TOKEN" \
+  --observability-otel-secret my-otel-connection \
+  --observability-otel-service-name wandb-prod
+```
+
+The OTEL/forwarding flags are consumed by `wsm deploy-v2 operator` (they configure the operator chart); `--observability-mode` additionally toggles per-service telemetry on the CR.
 
 ## Retention Policies
 

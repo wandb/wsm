@@ -127,6 +127,12 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("license-file", "", "Path to W&B license file (optional, injected into spec.wandb.license)")
 	cmd.PersistentFlags().String("observability-mode", "off", "Enable observability for applications (off, full, forward)")
 	cmd.PersistentFlags().String("observability-forward-endpoint", "", "OTLP endpoint to forward telemetry to (required when --observability-mode=forward)")
+	cmd.PersistentFlags().String("observability-otel-secret", "", "Name of the OTEL connection secret (telemetry.otel.secretName; defaults to the chart's wandb-otel-connection; applied when --observability-mode=full|forward)")
+	cmd.PersistentFlags().String("observability-otel-protocol", "", "OTEL exporter protocol, e.g. http/protobuf or grpc (telemetry.otel.protocol; chart default if unset)")
+	cmd.PersistentFlags().String("observability-otel-service-name", "", "OTEL service.name resource attribute (telemetry.otel.serviceName; chart default if unset)")
+	cmd.PersistentFlags().String("observability-otel-resource-attributes", "", "Additional OTEL resource attributes, comma-separated key=value (telemetry.otel.resourceAttributes; chart default if unset)")
+	cmd.PersistentFlags().String("observability-forward-protocol", "", "OTLP forwarding protocol, e.g. http/protobuf or grpc (telemetry.forwarding.otlp.protocol; only applied when --observability-mode=forward)")
+	cmd.PersistentFlags().StringToString("observability-forward-headers", nil, "OTLP forwarding headers as key=value pairs, e.g. Authorization=Bearer... (telemetry.forwarding.otlp.headers; only applied when --observability-mode=forward)")
 	cmd.PersistentFlags().String("retention-policy", "detach", "Retention policy for W&B instance (detach, purge) - defaults to detach")
 	cmd.PersistentFlags().String("size", "small", "W&B instance size (dev, micro, small, medium, large, xlarge, xxlarge)")
 	cmd.PersistentFlags().String("wandb-hostname", "http://localhost:8080", "Hostname to use for the W&B instance")
@@ -332,7 +338,6 @@ func operatorDeployCmd() *cobra.Command {
 	var clusterName string
 	var workers int
 	var kindNodeImage string
-	var operatorVersion string
 	var operatorChartVersion string
 	var operatorNamespace string
 	var mirrorRegistry string
@@ -358,6 +363,12 @@ func operatorDeployCmd() *cobra.Command {
 			licenseFile, _ := cmd.Flags().GetString("license-file")
 			telemetryMode, _ := cmd.Flags().GetString("observability-mode")
 			telemetryForwardEndpoint, _ := cmd.Flags().GetString("observability-forward-endpoint")
+			otelSecret, _ := cmd.Flags().GetString("observability-otel-secret")
+			otelProtocol, _ := cmd.Flags().GetString("observability-otel-protocol")
+			otelServiceName, _ := cmd.Flags().GetString("observability-otel-service-name")
+			otelResourceAttrs, _ := cmd.Flags().GetString("observability-otel-resource-attributes")
+			forwardProtocol, _ := cmd.Flags().GetString("observability-forward-protocol")
+			forwardHeaders, _ := cmd.Flags().GetStringToString("observability-forward-headers")
 			wandbNamespace, _ := cmd.Flags().GetString("wandb-namespace")
 			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
 			wandbName, _ := cmd.Flags().GetString("wandb-name")
@@ -372,6 +383,17 @@ func operatorDeployCmd() *cobra.Command {
 			}
 			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), gatewayClass, ingressClass); err != nil {
 				return err
+			}
+
+			telemetry := operator.TelemetryConfig{
+				Mode:              telemetryMode,
+				ForwardEndpoint:   telemetryForwardEndpoint,
+				OtelSecretName:    otelSecret,
+				OtelProtocol:      otelProtocol,
+				OtelServiceName:   otelServiceName,
+				OtelResourceAttrs: otelResourceAttrs,
+				ForwardProtocol:   forwardProtocol,
+				ForwardHeaders:    forwardHeaders,
 			}
 
 			err := processWandbCR(
@@ -406,12 +428,10 @@ func operatorDeployCmd() *cobra.Command {
 				includeCR,
 				wait,
 				clusterName,
-				telemetryMode,
-				telemetryForwardEndpoint,
+				telemetry,
 				wandbNamespace,
 				workers,
 				operatorChartVersion,
-				operatorVersion,
 				operatorNamespace,
 				createCA,
 				createAwsStorageClass,
@@ -447,8 +467,6 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
 	cmd.Flags().StringVar(&kindNodeImage, "kind-node-image", "", "Kind node image to use, e.g. myreg.example.com/kindest/node:v1.35.1@sha256:... (defaults to the upstream pinned image; only used with --setup-k8s-cluster)")
 
-	//TODO Decide whether to expose this or have it depend on the chart version
-	cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator image version (e.g., v2.0.0) - defaults to value in the chart")
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-alpha.2", "Operator Chart version (e.g., v2.0.0)")
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
 	cmd.Flags().StringVar(&installCertManagerMode, "install-cert-manager", certManagerInstallModeAuto, "Cert-manager install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
@@ -469,12 +487,10 @@ func performDeploy(
 	includeCR bool,
 	wait bool,
 	clusterName string,
-	telemetryMode string,
-	telemetryForwardEndpoint string,
+	telemetry operator.TelemetryConfig,
 	wandbNamespace string,
 	workers int,
 	operatorChartVersion string,
-	operatorVersion string,
 	operatorNamespace string,
 	createCA bool,
 	createAwsStorageClass bool,

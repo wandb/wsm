@@ -77,6 +77,12 @@ wsm deploy-v2 wandb deploy [flags]
 | `--add-ingress-annotations` | `false` | Add AWS load-balancer annotations to the managed Gateway (**Gateway API mode only**; ignored in Ingress mode) |
 | `--observability-mode` | `off` | Telemetry mode: `off`, `full` (in-cluster Victoria Metrics stack **+ local Grafana**), or `forward` (Victoria stack + forward OTLP externally) |
 | `--observability-forward-endpoint` | — | OTLP endpoint to forward telemetry to. **Required** when `--observability-mode=forward` |
+| `--observability-otel-secret` | — | Name of the OTEL connection secret (`telemetry.otel.secretName`). Chart default `wandb-otel-connection` if unset. Applied when mode is `full` or `forward` |
+| `--observability-otel-protocol` | — | OTEL exporter protocol, e.g. `http/protobuf` or `grpc` (`telemetry.otel.protocol`). Chart default if unset |
+| `--observability-otel-service-name` | — | OTEL `service.name` resource attribute (`telemetry.otel.serviceName`). Chart default if unset |
+| `--observability-otel-resource-attributes` | — | Additional OTEL resource attributes, comma-separated `key=value` (`telemetry.otel.resourceAttributes`). Chart default if unset |
+| `--observability-forward-protocol` | — | OTLP forwarding protocol, e.g. `http/protobuf` or `grpc` (`telemetry.forwarding.otlp.protocol`). Only applied when `--observability-mode=forward` |
+| `--observability-forward-headers` | — | OTLP forwarding headers as repeatable `key=value` pairs, e.g. `Authorization=Bearer …` (`telemetry.forwarding.otlp.headers`). Only applied when `--observability-mode=forward` |
 | `--retention-policy` | `detach` | Behavior on CR deletion: `detach` (leave infrastructure running) or `purge` (delete all managed resources and PVCs) |
 | `--wait` | `false` | Wait for the W&B instance to report Ready |
 

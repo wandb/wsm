@@ -338,9 +338,10 @@ func operatorDeployCmd() *cobra.Command {
 	var clusterName string
 	var workers int
 	var kindNodeImage string
-	var operatorVersion string
 	var operatorChartVersion string
 	var operatorNamespace string
+	var mirrorRegistry string
+	var insecureRegistry bool
 
 	cmd := &cobra.Command{
 		Use:   "operator",
@@ -431,13 +432,14 @@ func operatorDeployCmd() *cobra.Command {
 				wandbNamespace,
 				workers,
 				operatorChartVersion,
-				operatorVersion,
 				operatorNamespace,
 				createCA,
 				createAwsStorageClass,
 				createAwsIngressClass,
 				ingressClass,
 				kindNodeImage,
+				mirrorRegistry,
+				insecureRegistry,
 			); err != nil {
 				fmt.Printf("\n✗ Deployment failed: %v\n", err)
 				return err
@@ -465,8 +467,6 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
 	cmd.Flags().StringVar(&kindNodeImage, "kind-node-image", "", "Kind node image to use, e.g. myreg.example.com/kindest/node:v1.35.1@sha256:... (defaults to the upstream pinned image; only used with --setup-k8s-cluster)")
 
-	//TODO Decide whether to expose this or have it depend on the chart version
-	cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator image version (e.g., v2.0.0) - defaults to value in the chart")
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-alpha.2", "Operator Chart version (e.g., v2.0.0)")
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
 	cmd.Flags().StringVar(&installCertManagerMode, "install-cert-manager", certManagerInstallModeAuto, "Cert-manager install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
@@ -474,6 +474,8 @@ func operatorDeployCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&enableGatewayAPI, "enable-gateway-api", true, "Disables Gateway API support for cert-manager")
 	cmd.Flags().BoolVar(&includeCR, "include-cr", false, "Include the Wandb CR in the operator deployment")
+	cmd.Flags().StringVar(&mirrorRegistry, "mirror-registry", "", "Pull every chart and image from this registry (e.g. harbor.corp:5443). Populate it first with 'wsm registry mirror --to <same-host>'.")
+	cmd.Flags().BoolVar(&insecureRegistry, "insecure-registry", false, "Use plain HTTP / skip TLS verification when fetching from --mirror-registry")
 	return cmd
 }
 
@@ -489,17 +491,26 @@ func performDeploy(
 	wandbNamespace string,
 	workers int,
 	operatorChartVersion string,
-	operatorVersion string,
 	operatorNamespace string,
 	createCA bool,
 	createAwsStorageClass bool,
 	createAwsIngressClass bool,
 	ingressClass string,
 	kindNodeImage string,
+	mirrorRegistry string,
+	insecureRegistry bool,
 ) error {
 	ctx := context.Background()
 	installNginxGatewayMode = strings.ToLower(strings.TrimSpace(installNginxGatewayMode))
 	installCertManagerMode = strings.ToLower(strings.TrimSpace(installCertManagerMode))
+
+	var mirror *operator.MirrorConfig
+	if mirrorRegistry != "" {
+		mirror = &operator.MirrorConfig{
+			Host:     strings.TrimRight(mirrorRegistry, "/"),
+			Insecure: insecureRegistry,
+		}
+	}
 
 	// Calculate total steps based on flags
 	totalSteps := 2 // Always: ensure cert-manager, deploy operator
@@ -522,7 +533,15 @@ func performDeploy(
 		fmt.Printf("[%d/%d] Setting up cluster (%d workers)...", currentStep, totalSteps, workers)
 		start := time.Now()
 
-		err := performCreateCluster(ctx, clusterName, workers, 8080, 8443, kindNodeImage)
+		// When the user supplied --mirror-registry --insecure-registry on the
+		// combined --setup-k8s-cluster path, treat that host as insecure for
+		// the new Kind node's containerd too — otherwise kubelet would default
+		// to HTTPS and ImagePullBackOff on every chart pod.
+		insecureRegistryHost := ""
+		if mirror != nil && mirror.Insecure {
+			insecureRegistryHost = mirror.Host
+		}
+		err := performCreateCluster(ctx, clusterName, workers, 8080, 8443, kindNodeImage, insecureRegistryHost)
 		if err != nil {
 			return err
 		}
@@ -540,12 +559,12 @@ func performDeploy(
 
 		switch installNginxGatewayMode {
 		case nginxGatewayInstallModeAuto:
-			if err := operator.InstallNginxGateway(ctx, true); err != nil {
+			if err := operator.InstallNginxGateway(ctx, true, mirror); err != nil {
 				fmt.Println(" ✗")
 				return err
 			}
 		case nginxGatewayInstallModeTrue:
-			if err := operator.InstallNginxGateway(ctx, false); err != nil {
+			if err := operator.InstallNginxGateway(ctx, false, mirror); err != nil {
 				fmt.Println(" ✗")
 				return err
 			}
@@ -567,12 +586,12 @@ func performDeploy(
 
 		switch installCertManagerMode {
 		case certManagerInstallModeAuto:
-			if err := operator.InstallCertManager(ctx, enableGatewayAPI, true); err != nil {
+			if err := operator.InstallCertManager(ctx, enableGatewayAPI, true, mirror); err != nil {
 				fmt.Println(" ✗")
 				return err
 			}
 		case certManagerInstallModeTrue:
-			if err := operator.InstallCertManager(ctx, enableGatewayAPI, false); err != nil {
+			if err := operator.InstallCertManager(ctx, enableGatewayAPI, false, mirror); err != nil {
 				fmt.Println(" ✗")
 				return err
 			}
@@ -604,7 +623,7 @@ func performDeploy(
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
 	start := time.Now()
 
-	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, operatorVersion, telemetry, wandbNamespace); err != nil {
+	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, telemetryMode, mirror, telemetryForwardEndpoint, wandbNamespace); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -715,7 +734,7 @@ func deployWandbCR(ctx context.Context, createCA bool, createAwsStorageClass, cr
 	return nil
 }
 
-func performCreateCluster(ctx context.Context, clusterName string, workers int, httpPort int32, httpsPort int32, nodeImage string) error {
+func performCreateCluster(ctx context.Context, clusterName string, workers int, httpPort int32, httpsPort int32, nodeImage string, insecureRegistryHost string) error {
 	exists, err := kind.ClusterExists(ctx, clusterName)
 	if err != nil {
 		fmt.Println(" ✗")
@@ -723,7 +742,7 @@ func performCreateCluster(ctx context.Context, clusterName string, workers int, 
 	}
 
 	if !exists {
-		if err := kind.CreateCluster(ctx, clusterName, workers, httpPort, httpsPort, nodeImage); err != nil {
+		if err := kind.CreateCluster(ctx, clusterName, workers, httpPort, httpsPort, nodeImage, insecureRegistryHost); err != nil {
 			fmt.Println(" ✗")
 			return err
 		}
@@ -1113,11 +1132,12 @@ func clusterCreateCmd() *cobra.Command {
 	var workers int
 	var httpPort, httpsPort int32
 	var kindNodeImage string
+	var insecureRegistryHost string
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a new kind cluster",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := performCreateCluster(context.Background(), clusterName, workers, httpPort, httpsPort, kindNodeImage); err != nil {
+			if err := performCreateCluster(context.Background(), clusterName, workers, httpPort, httpsPort, kindNodeImage, insecureRegistryHost); err != nil {
 				fmt.Printf("✗ Cluster Create failed: %v\n", err)
 				return err
 			}
@@ -1131,6 +1151,7 @@ func clusterCreateCmd() *cobra.Command {
 	cmd.Flags().Int32Var(&httpPort, "http-port", 8080, "HTTP port for Kind cluster ingress")
 	cmd.Flags().Int32Var(&httpsPort, "https-port", 8443, "HTTPS port for Kind cluster ingress")
 	cmd.Flags().StringVar(&kindNodeImage, "kind-node-image", "", "Kind node image to use, e.g. myreg.example.com/kindest/node:v1.35.1@sha256:... (defaults to the upstream pinned image)")
+	cmd.Flags().StringVar(&insecureRegistryHost, "insecure-registry-host", "", "Configure containerd to pull from this host over plain HTTP (e.g. host.docker.internal:5000). Pairs with 'wsm registry mirror --insecure' for local-laptop testing against a plain-HTTP registry:2.")
 
 	return cmd
 }

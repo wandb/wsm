@@ -16,10 +16,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// registryPushCmd walks a bundle produced by `wsm download` and pushes every
-// saved image tarball into the user's mirror registry.
-// for the airgapped workflow: customers no longer have to hand-roll a
-// docker load / docker tag / docker push loop.
 func registryPushCmd() *cobra.Command {
 	var (
 		registry  string
@@ -146,10 +142,6 @@ type tarball struct {
 	source string // original image reference, e.g. quay.io/prometheus/prometheus:v2.47.0
 }
 
-// findImageTarballs walks <bundle>/images/ and reconstructs the original image
-// reference from the directory layout. 'wsm download' writes each image to
-// bundle/images/<full-image-ref>/image.tgz, so we strip the prefix and suffix
-// to recover the ref.
 func findImageTarballs(imagesDir string) ([]tarball, error) {
 	var out []tarball
 	err := filepath.WalkDir(imagesDir, func(path string, d fs.DirEntry, err error) error {
@@ -183,11 +175,6 @@ func isManifestTooLargeErr(err error) bool {
 		strings.Contains(msg, "MaxManifestBodySize")
 }
 
-// printManualPushInstructions emits ready-to-paste commands that let the user
-// finish the push for each oversized image using the docker CLI. We can't do
-// this automatically without taking a hard dependency on docker (or swapping
-// the entire push transport for go-containerregistry), so we make the manual
-// step as cheap as possible.
 func printManualPushInstructions(images []tarball, registry string) {
 	plural := "image"
 	if len(images) > 1 {
@@ -211,10 +198,6 @@ func printManualPushInstructions(images []tarball, registry string) {
 	fmt.Println()
 }
 
-// colonFreeAlias creates a symlink to tarballPath in a fresh temp directory
-// whose path contains no ':'. Returns the symlink path and a cleanup func that
-// removes the temp dir. The library's path validator (newReference in
-// containers/image/v5/docker/archive) rejects colons unconditionally.
 func colonFreeAlias(tarballPath string) (string, func(), error) {
 	absSrc, err := filepath.Abs(tarballPath)
 	if err != nil {

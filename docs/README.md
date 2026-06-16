@@ -15,7 +15,7 @@ WSM is a command-line tool that automates the deployment, upgrade, and managemen
 | Section | Description |
 |---------|-------------|
 | [Getting Started](./getting-started/) | Installation and your first deployment |
-| [Deployment Guides](./deployment/) | Platform-specific instructions for Kind, GKE, EKS, and AKS |
+| [Deployment Guides](./deployment/) | Platform-specific instructions for Kind, on-prem/air-gapped, GKE, EKS, and AKS |
 | [Configuration](./configuration/) | SSL/TLS setup, sizing, and customization options |
 | [Operations](./operations/) | Managing, monitoring, and troubleshooting deployments |
 | [Reference](./reference/) | Command flags, CR fields, and sizing details |
@@ -25,7 +25,7 @@ WSM is a command-line tool that automates the deployment, upgrade, and managemen
 1. [Install WSM](./getting-started/installation.md)
 2. [Quick Start — Local Kind Cluster](./getting-started/quickstart-kind.md)
 3. [SSL / TLS Configuration](./configuration/ssl-tls.md)
-4. [Your Target Platform](./deployment/) (GKE, EKS, AKS, or existing Kind cluster)
+4. [Your Target Platform](./deployment/) (GKE, EKS, AKS, on-prem mirror, or existing Kind cluster)
 5. [Managing the Deployment](./operations/managing.md)
 6. [Troubleshooting](./operations/troubleshooting.md)
 

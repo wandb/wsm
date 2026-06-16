@@ -55,13 +55,18 @@ const (
 	certManagerDeploymentName = "cert-manager"
 	certManagerReleaseName    = "cert-manager"
 	certManagerChartRef       = "oci://quay.io/jetstack/charts/cert-manager"
-	certManagerVersion        = "v1.20.2"
+	// CertManagerVersion is the cert-manager chart and image tag wsm installs.
+	// Exported so `wsm registry mirror` can build a mirroring plan that matches
+	// exactly what `wsm deploy-v2 operator` will request.
+	CertManagerVersion = "v1.20.2"
 
 	nginxGatewayNamespace      = "nginx-gateway"
 	nginxGatewayDeploymentName = "nginx-gateway-nginx-gateway-fabric"
 	nginxGatewayReleaseName    = "nginx-gateway"
 	nginxGatewayChartRef       = "oci://ghcr.io/nginx/charts/nginx-gateway-fabric"
-	nginxGatewayVersion        = "2.5.1"
+	// NginxGatewayVersion is the nginx-gateway-fabric chart and image tag wsm
+	// installs. Exported for the same reason as CertManagerVersion.
+	NginxGatewayVersion = "2.5.1"
 
 	gatewayApiCRDURL                     = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml"
 	completeServerAPIsDiscoveryErrSubstr = "unable to retrieve the complete list of server APIs"
@@ -101,9 +106,37 @@ var (
 	apiDiscoveryRetryTimeout  = 2 * time.Minute
 )
 
+// setNested walks (and creates) a chain of map[string]any keys, then sets the
+// leaf value at `path[len(path)-1]` to `value`. Mirrors apimachinery's nested
+// helpers but works on `map[string]any` (Helm release values) instead of
+// Unstructured objects.
+func setNested(obj map[string]any, value any, path ...string) {
+	m := obj
+	for _, k := range path[:len(path)-1] {
+		next, ok := m[k].(map[string]any)
+		if !ok {
+			next = map[string]any{}
+			m[k] = next
+		}
+		m = next
+	}
+	m[path[len(path)-1]] = value
+}
+
+// MirrorConfig points the install functions at a customer-controlled registry
+// instead of the upstream defaults baked into wsm. When non-nil, every OCI
+// chart reference and container image repository is rewritten to live under
+// Host (using wsm's path conventions; see registry_mirror.go for the matching
+// push targets). Populate the mirror with `wsm registry mirror --to <Host>`
+// before installing.
+type MirrorConfig struct {
+	Host     string // hostname[:port] of the mirror, e.g. "local-registry:5000"
+	Insecure bool   // plain HTTP / self-signed; passed to Helm's OCI client
+}
+
 // InstallCertManager installs cert-manager.
 // When skipIfPresent is true, installation is skipped if the cert-manager deployment already exists.
-func InstallCertManager(ctx context.Context, enableGatewayAPI bool, skipIfPresent bool) error {
+func InstallCertManager(ctx context.Context, enableGatewayAPI bool, skipIfPresent bool, mirror *MirrorConfig) error {
 	if skipIfPresent {
 		deploymentExists, err := certManagerDeploymentExists(ctx)
 		if err != nil {
@@ -129,8 +162,10 @@ func InstallCertManager(ctx context.Context, enableGatewayAPI bool, skipIfPresen
 		return fmt.Errorf("failed to initialize action config: %w", err)
 	}
 
-	// Create registry client
-	registryClient, err := newRegistryClient(settings, "", "", "", false, false)
+	// Create registry client. Plain-HTTP / TLS-skip needed for self-hosted
+	// mirrors that don't have a real cert (e.g. a local registry:2).
+	plainHTTP := mirror != nil && mirror.Insecure
+	registryClient, err := newRegistryClient(settings, "", "", "", plainHTTP, plainHTTP)
 	if err != nil {
 		return fmt.Errorf("failed to create registry client: %w", err)
 	}
@@ -140,6 +175,11 @@ func InstallCertManager(ctx context.Context, enableGatewayAPI bool, skipIfPresen
 	releaseExists, err := checkReleaseExists(actionConfig, certManagerReleaseName)
 	if err != nil {
 		return fmt.Errorf("failed to check if release exists: %w", err)
+	}
+
+	chartRef := certManagerChartRef
+	if mirror != nil {
+		chartRef = "oci://" + mirror.Host + "/jetstack/charts/cert-manager"
 	}
 
 	releaseValues := map[string]interface{}{
@@ -154,17 +194,25 @@ func InstallCertManager(ctx context.Context, enableGatewayAPI bool, skipIfPresen
 		},
 	}
 
+	if mirror != nil {
+		// cert-manager v1.20 composes per-component image refs as
+		// <imageRegistry>/<imageNamespace>/cert-manager-<component>:<tag>.
+		// Setting both makes all 5 component images resolve to the mirror.
+		releaseValues["imageRegistry"] = mirror.Host
+		releaseValues["imageNamespace"] = "jetstack"
+	}
+
 	if releaseExists {
 		// Create upgrade action
 		upgradeClient := action.NewUpgrade(actionConfig)
 		upgradeClient.Namespace = certManagerNamespace
-		upgradeClient.Version = certManagerVersion
+		upgradeClient.Version = CertManagerVersion
 		upgradeClient.WaitStrategy = "hookOnly"
 		upgradeClient.ForceConflicts = true
 		//upgradeClient.ResetValues = true
 
 		// Get the chart
-		cp, err := upgradeClient.LocateChart(certManagerChartRef, settings)
+		cp, err := upgradeClient.LocateChart(chartRef, settings)
 		if err != nil {
 			return fmt.Errorf("failed to locate cert-manager chart: %w", err)
 		}
@@ -185,11 +233,11 @@ func InstallCertManager(ctx context.Context, enableGatewayAPI bool, skipIfPresen
 		installClient := action.NewInstall(actionConfig)
 		installClient.Namespace = certManagerNamespace
 		installClient.ReleaseName = certManagerReleaseName
-		installClient.Version = certManagerVersion
+		installClient.Version = CertManagerVersion
 		installClient.WaitStrategy = "hookOnly"
 
 		// Get the chart
-		cp, err := installClient.LocateChart(certManagerChartRef, settings)
+		cp, err := installClient.LocateChart(chartRef, settings)
 		if err != nil {
 			return fmt.Errorf("failed to locate cert-manager chart: %w", err)
 		}
@@ -278,7 +326,7 @@ func DeleteCertManager(ctx context.Context) error {
 
 // InstallNginxGateway installs nginx-gateway-fabric.
 // When skipIfPresent is true, installation is skipped if the nginx-gateway-fabric deployment already exists.
-func InstallNginxGateway(ctx context.Context, skipIfPresent bool) error {
+func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *MirrorConfig) error {
 	if skipIfPresent {
 		deploymentExists, err := nginxGatewayDeploymentExists(ctx)
 		if err != nil {
@@ -314,8 +362,10 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool) error {
 		return fmt.Errorf("failed to initialize action config: %w", err)
 	}
 
-	// Create registry client
-	registryClient, err := newRegistryClient(settings, "", "", "", false, false)
+	// Create registry client. Plain-HTTP / TLS-skip needed for self-hosted
+	// mirrors that don't have a real cert (e.g. a local registry:2).
+	plainHTTP := mirror != nil && mirror.Insecure
+	registryClient, err := newRegistryClient(settings, "", "", "", plainHTTP, plainHTTP)
 	if err != nil {
 		return fmt.Errorf("failed to create registry client: %w", err)
 	}
@@ -325,6 +375,11 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool) error {
 	releaseExists, err := checkReleaseExists(actionConfig, nginxGatewayReleaseName)
 	if err != nil {
 		return fmt.Errorf("failed to check if release exists: %w", err)
+	}
+
+	chartRef := nginxGatewayChartRef
+	if mirror != nil {
+		chartRef = "oci://" + mirror.Host + "/nginx/charts/nginx-gateway-fabric"
 	}
 
 	releaseValues := map[string]any{}
@@ -341,17 +396,25 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool) error {
 		}
 	}
 
+	if mirror != nil {
+		// nginx-gateway-fabric has no global imageRegistry — each component
+		// repository is set independently. Merge with any existing nginx.*
+		// values (the Kind NodePort block above).
+		setNested(releaseValues, mirror.Host+"/nginx/nginx-gateway-fabric", "nginxGateway", "image", "repository")
+		setNested(releaseValues, mirror.Host+"/nginx/nginx-gateway-fabric/nginx", "nginx", "image", "repository")
+	}
+
 	if releaseExists {
 		// Create upgrade action
 		upgradeClient := action.NewUpgrade(actionConfig)
 		upgradeClient.Namespace = nginxGatewayNamespace
-		upgradeClient.Version = nginxGatewayVersion
+		upgradeClient.Version = NginxGatewayVersion
 		upgradeClient.WaitStrategy = "hookOnly"
 		upgradeClient.ForceConflicts = true
 		upgradeClient.SkipSchemaValidation = true
 
 		// Get the chart
-		cp, err := upgradeClient.LocateChart(nginxGatewayChartRef, settings)
+		cp, err := upgradeClient.LocateChart(chartRef, settings)
 		if err != nil {
 			return fmt.Errorf("failed to locate nginx-gateway chart: %w", err)
 		}
@@ -372,12 +435,12 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool) error {
 		installClient := action.NewInstall(actionConfig)
 		installClient.Namespace = nginxGatewayNamespace
 		installClient.ReleaseName = nginxGatewayReleaseName
-		installClient.Version = nginxGatewayVersion
+		installClient.Version = NginxGatewayVersion
 		installClient.WaitStrategy = "hookOnly"
 		installClient.SkipSchemaValidation = true
 
 		// Get the chart
-		cp, err := installClient.LocateChart(nginxGatewayChartRef, settings)
+		cp, err := installClient.LocateChart(chartRef, settings)
 		if err != nil {
 			return fmt.Errorf("failed to locate nginx-gateway chart: %w", err)
 		}
@@ -565,14 +628,18 @@ func DeployOperator(
 	ctx context.Context,
 	namespace string,
 	chartVersion string,
-	operatorVersion string,
+	mirror *MirrorConfig,
 	telemetry TelemetryConfig,
 	wandbNamespace string,
 ) error {
-	const repositoryURL = "oci://us-docker.pkg.dev/wandb-production/public/wandb/charts"
 	const chartName = "operator"
-	const chartRef = repositoryURL + "/" + chartName
 	const releaseName = "wandb-operator"
+
+	repositoryURL := "oci://us-docker.pkg.dev/wandb-production/public/wandb/charts"
+	if mirror != nil {
+		repositoryURL = "oci://" + mirror.Host + "/wandb/charts"
+	}
+	chartRef := repositoryURL + "/" + chartName
 
 	// Initialize Helm settings
 	settings := cli.New()
@@ -585,8 +652,10 @@ func DeployOperator(
 		return fmt.Errorf("failed to initialize action config: %w", err)
 	}
 
-	// Create registry client
-	registryClient, err := newRegistryClient(settings, "", "", "", false, false)
+	// Create registry client. Plain-HTTP / TLS-skip needed for self-hosted
+	// mirrors that don't have a real cert (e.g. a local registry:2).
+	plainHTTP := mirror != nil && mirror.Insecure
+	registryClient, err := newRegistryClient(settings, "", "", "", plainHTTP, plainHTTP)
 	if err != nil {
 		return fmt.Errorf("failed to create registry client: %w", err)
 	}
@@ -596,6 +665,13 @@ func DeployOperator(
 	releaseExists, err := checkReleaseExists(actionConfig, releaseName)
 	if err != nil {
 		return fmt.Errorf("failed to check if release exists: %w", err)
+	}
+
+	operatorImage := map[string]interface{}{
+		"pullPolicy": "Always",
+	}
+	if mirror != nil {
+		operatorImage["repository"] = mirror.Host + "/wandb/operator"
 	}
 
 	telemetryValues := map[string]interface{}{
@@ -625,9 +701,7 @@ func DeployOperator(
 			"install": false,
 		},
 		"wandb-operator": map[string]interface{}{
-			"image": map[string]interface{}{
-				"pullPolicy": "Always",
-			},
+			"image": operatorImage,
 		},
 		"telemetry": telemetryValues,
 	}

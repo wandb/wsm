@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/wandb/wsm/pkg/kubectl"
@@ -23,7 +24,7 @@ const DefaultNodeImage = "kindest/node:v1.35.1@sha256:05d7bcdefbda08b4e038f644c4
 
 // CreateCluster creates a Kind cluster with specified name and number of worker nodes.
 // If nodeImage is empty, DefaultNodeImage is used.
-func CreateCluster(ctx context.Context, name string, workers int, httpPort int32, httpsPort int32, nodeImage string) error {
+func CreateCluster(ctx context.Context, name string, workers int, httpPort int32, httpsPort int32, nodeImage string, insecureRegistryHost string) error {
 	provider := cluster.NewProvider()
 
 	// Check if cluster already exists
@@ -36,7 +37,7 @@ func CreateCluster(ctx context.Context, name string, workers int, httpPort int32
 	}
 
 	// Generate Kind cluster config
-	kindConfig := generateClusterConfig(workers, httpPort, httpsPort, nodeImage)
+	kindConfig := generateClusterConfig(workers, httpPort, httpsPort, nodeImage, insecureRegistryHost)
 	// Create cluster using kind library
 	if err := provider.Create(
 		name,
@@ -45,6 +46,12 @@ func CreateCluster(ctx context.Context, name string, workers int, httpPort int32
 		cluster.CreateWithDisplaySalutation(true),
 	); err != nil {
 		return fmt.Errorf("failed to create kind cluster: %w", err)
+	}
+
+	if insecureRegistryHost != "" {
+		if err := writeInsecureRegistryHostsConfig(ctx, name, insecureRegistryHost); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -168,7 +175,11 @@ func LoadImageToCluster(ctx context.Context, imageName, clusterName string) erro
 // The control-plane node is always configured with:
 //   - extraPortMappings: host:httpPort → container:httpPort, host:httpsPort → container:httpsPort
 //   - ingress-ready node label so nginx-ingress can bind to those ports
-func generateClusterConfig(workers int, httpPort int32, httpsPort int32, nodeImage string) config.Cluster {
+//
+// When insecureRegistryHost is non-empty, containerd is patched so kubelet pulls
+// from that host over plain HTTP. Pairs with `wsm registry mirror --to <host> --insecure`
+// and `wsm deploy-v2 operator --mirror-registry <host> --insecure-registry`.
+func generateClusterConfig(workers int, httpPort int32, httpsPort int32, nodeImage string, insecureRegistryHost string) config.Cluster {
 	if nodeImage == "" {
 		nodeImage = DefaultNodeImage
 	}
@@ -193,7 +204,49 @@ nodeRegistration:
 	for i := 0; i < workers; i++ {
 		kindConfig.Nodes[i+1] = config.Node{Role: config.WorkerRole, Image: nodeImage}
 	}
+
+	if insecureRegistryHost != "" {
+		// Tell containerd to read per-host config from /etc/containerd/certs.d.
+		// We write hosts.toml there in writeInsecureRegistryHostsConfig after
+		// the cluster comes up.
+		//
+		// We can't put the registry endpoint config directly in the patch:
+		// containerd v2.2 (kindest/node v1.35) chokes on the
+		// `mirrors.X.endpoint` merge — Kind's mergo rewrites the entire CRI
+		// plugin block into a different TOML layout that disables the CRI
+		// gRPC service and kubelet fails with "unknown service
+		// runtime.v1.RuntimeService". The config_path form is well-tested.
+		kindConfig.ContainerdConfigPatches = []string{
+			`[plugins."io.containerd.grpc.v1.cri".registry]
+  config_path = "/etc/containerd/certs.d"
+`,
+		}
+	}
+
 	return kindConfig
+}
+
+func writeInsecureRegistryHostsConfig(ctx context.Context, clusterName, insecureRegistryHost string) error {
+	nodeName := clusterName + "-control-plane"
+	hostsToml := fmt.Sprintf(`server = "http://%s"
+
+[host."http://%s"]
+  capabilities = ["pull", "resolve"]
+  skip_verify = true
+`, insecureRegistryHost, insecureRegistryHost)
+
+	script := fmt.Sprintf(`set -e
+mkdir -p /etc/containerd/certs.d/%s
+cat > /etc/containerd/certs.d/%s/hosts.toml <<'WSM_EOF'
+%sWSM_EOF
+`, insecureRegistryHost, insecureRegistryHost, hostsToml)
+
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", nodeName, "sh", "-c", script)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("configure insecure registry %s on %s: %w (%s)", insecureRegistryHost, nodeName, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // InstallIngressNGINX installs the nginx ingress controller for Kind clusters and waits

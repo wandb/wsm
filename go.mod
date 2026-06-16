@@ -12,7 +12,7 @@ require (
 	github.com/docker/go-connections v0.7.0
 	github.com/pkg/errors v0.9.1
 	github.com/spf13/cobra v1.10.2
-	github.com/wandb/operator v1.21.3-0.20260602214520-47e3cfd954e7
+	github.com/wandb/operator v1.21.3-0.20260611200416-80f51a441d6e
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v3 v3.20.2
 	helm.sh/helm/v4 v4.1.4

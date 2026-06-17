@@ -623,7 +623,7 @@ func performDeploy(
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
 	start := time.Now()
 
-	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, telemetryMode, mirror, telemetryForwardEndpoint, wandbNamespace); err != nil {
+	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetry, wandbNamespace); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}

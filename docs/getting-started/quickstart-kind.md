@@ -100,6 +100,8 @@ kubectl --context kind-wandb delete apiservice v1beta1.metrics.k8s.io
 wsm deploy-v2 operator --include-cr --size dev --context kind-wandb
 ```
 
+> **Temporary workaround.** The underlying issue is fixed in `fix/handle-partial-api-discovery-in-gateway-crd-check` (stops installing metrics-server and tolerates partial API discovery); once that lands, this section can be removed.
+
 ## Next Steps
 
 - Customize the deployment: [SSL / TLS Configuration](../configuration/ssl-tls.md)

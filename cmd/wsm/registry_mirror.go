@@ -183,18 +183,6 @@ func buildMirrorPlan(target, operatorChartVersion string) []mirrorItem {
 	return plan
 }
 
-// buildManagedImagePlan returns the operator subchart-operator images (tier 2)
-// and the data-plane server images the operator spins up at reconcile time
-// (tier 3). Targets are host-stripped via translate() so they match what a
-// containerd registry mirror for docker.io/quay.io/ghcr.io requests
-// (e.g. quay.io/strimzi/kafka → <mirror>/strimzi/kafka).
-//
-// This list is coupled to the operator chart / operator ref, NOT to a wsm
-// constant we can import: tier 3 lives in the operator's internal packages
-// (e.g. internal/controller/infra/managed/clickhouse/altinity/spec.go) which Go
-// won't let us import, and tier 2 comes from the chart's pinned subchart deps.
-// Keep it in lockstep with the operator via the audit-operator-diff skill.
-// Verified against operator chart 2.0.0-alpha.2 / operator ref 80f51a4.
 func buildManagedImagePlan(target string) []mirrorItem {
 	images := []string{
 		// Tier 2 — subchart operator images (default-enabled subcharts).
@@ -207,9 +195,6 @@ func buildManagedImagePlan(target string) []mirrorItem {
 		"quay.io/strimzi/operator:0.50.0",
 
 		// Tier 3 — data-plane server images.
-		// NOTE: the Strimzi Kafka broker image tracks the *strimzi operator*
-		// version (subchart 0.50.0 → kafka:0.50.0-kafka-4.1.0), NOT the wandb
-		// operator's KafkaImage const (0.49.1). Verified against a running pod.
 		"altinity/clickhouse-server:25.8.16.10002.altinitystable",
 		"quay.io/strimzi/kafka:0.50.0-kafka-4.1.0",
 		"ghcr.io/cybozu-go/moco/mysql:8.4.8",
@@ -227,9 +212,6 @@ func buildManagedImagePlan(target string) []mirrorItem {
 	return plan
 }
 
-// mirrorOne copies a single artifact from upstream to mirror using
-// containers/image. Works for both container images and OCI helm charts —
-// they're indistinguishable at the registry transport layer.
 func mirrorOne(
 	ctx context.Context,
 	source, target string,
@@ -245,13 +227,8 @@ func mirrorOne(
 		return fmt.Errorf("parse target %q: %w", target, err)
 	}
 	if _, err := copy.Image(ctx, policyCtx, dstRef, srcRef, &copy.Options{
-		SourceCtx:      srcCtx,
-		DestinationCtx: dstCtx,
-		// Copy every architecture in the manifest list, not just the one
-		// matching the host OS. A customer's k8s nodes are linux/amd64 (or
-		// linux/arm64) and must pull from the mirror; the default
-		// CopySystemImage on a Mac would land only darwin/arm64 (which
-		// often doesn't even exist) and break the install.
+		SourceCtx:          srcCtx,
+		DestinationCtx:     dstCtx,
 		ImageListSelection: copy.CopyAllImages,
 	}); err != nil {
 		return err

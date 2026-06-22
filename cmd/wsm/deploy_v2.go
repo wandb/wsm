@@ -399,6 +399,18 @@ func operatorDeployCmd() *cobra.Command {
 				fmt.Println("⚠ --insecure-registry: the operator stack will install from the mirror, but the W&B instance will NOT reconcile — the operator fetches the server manifest over HTTPS and cannot use a plain-HTTP registry. For a full offline install, serve the mirror over HTTPS and pass --registry-ca-file. See docs/deployment/on-prem.md.")
 			}
 
+			/** --mirror-registry only retargets the tier-1 images (operator,
+			cert-manager, nginx-gateway) via Helm values. The managed-service
+			images (tiers 2/3) are hardcoded by the operator and only resolve
+			from the mirror when each node's containerd redirects their public
+			hosts — which wsm writes automatically only on the
+			--setup-k8s-cluster + --insecure-registry Kind path. Warn (with the
+			manual steps) on every other path so they don't ImagePullBackOff
+			silently in a true air-gap. **/
+			if mirrorRegistry != "" && !(setupCluster && insecureRegistry) {
+				warnManagedImagesNeedNodeMirror(strings.TrimRight(mirrorRegistry, "/"))
+			}
+
 			// When mirroring, default the server-manifest source to the mirror so
 			// the operator pulls it (and the app images it references) offline.
 			// 'wsm registry mirror --wandb-version' pushes it to exactly this path.
@@ -563,6 +575,31 @@ func checkOperatorArch(ctx context.Context, operatorImageTag string, allowUnsupp
 		return nil
 	}
 	return fmt.Errorf("%s\n  Pass --allow-unsupported-arch to override (only if you know your operator image is multi-arch)", msg)
+}
+
+func warnManagedImagesNeedNodeMirror(mirrorHost string) {
+	fmt.Printf(`
+⚠ --mirror-registry only rewrites the operator, cert-manager and nginx-gateway images.
+  The managed-service images (ClickHouse/Kafka/MySQL/Redis/object-store operators and
+  their data-plane pods) are hardcoded by the operator and keep their original
+  docker.io / quay.io / ghcr.io names, so they will ImagePullBackOff in an air-gap
+  unless each node's containerd redirects those hosts to your mirror.
+
+  On every node (including future autoscaled ones), write a hosts.toml per host and
+  restart containerd:
+
+    # /etc/containerd/certs.d/docker.io/hosts.toml   (repeat for quay.io, ghcr.io)
+    server = "https://registry-1.docker.io"          # https://quay.io , https://ghcr.io
+    [host."https://%s"]
+      capabilities = ["pull", "resolve"]
+      # ca = "/etc/containerd/certs.d/%s/ca.crt"      # add for a self-signed / internal-CA mirror
+
+  First make sure 'wsm registry mirror --to %s' has pushed these images (it does by
+  default; --skip-managed-images turns it off), then verify with
+  'wsm registry check --registry %s'. Alternatively, run W&B against external databases
+  so these images aren't needed. Full details: docs/deployment/on-prem.md.
+
+`, mirrorHost, mirrorHost, mirrorHost, mirrorHost)
 }
 
 func performDeploy(

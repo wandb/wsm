@@ -39,6 +39,7 @@ wsm deploy-v2 operator [flags]
 | `--include-cr` | `false` | Also deploy the W&B CR in the same command |
 | `--mirror-registry` | — | Pull every chart and image from this registry (e.g. `harbor.corp:5443`). Populate it first with `wsm registry mirror --to <same-host>`. See [On-Prem Deployment](../deployment/on-prem.md). |
 | `--insecure-registry` | `false` | Use plain HTTP / skip TLS verification when fetching from `--mirror-registry`. Required for plain-HTTP `registry:2`; **never** in production. |
+| `--allow-unsupported-arch` | `false` | Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is amd64-only and crashes under emulation on arm64 (e.g. Kind on Apple Silicon); WSM fails fast on this by default. |
 
 #### Inherited Flags (when `--include-cr` is used)
 
@@ -226,10 +227,12 @@ Auth is read from your Docker config (`~/.docker/config.json`). Run `docker logi
 
 ### `wsm registry check`
 
-Verifies that every required image is present in your mirror.
+Verifies that every artifact `wsm registry mirror` pushes is present in your mirror. It computes the **same destination set** as `mirror` (operator chart + image, cert-manager, nginx-gateway, the managed-service operator/data-plane images, and — with `--wandb-version` — the server manifest plus every application image it references), then does a manifest check for each.
+
+Pass the **same** `--operator-chart-version` / `--wandb-version` / `--skip-managed-images` you mirrored with, or `check` and `mirror` won't agree on the expected set. The server manifest and its application images are read back out of the mirror itself, so `check` works from an air-gapped host with access only to the registry.
 
 ```bash
-wsm registry check --registry <host> [flags]
+wsm registry check --registry <host> --wandb-version <version> [flags]
 ```
 
 #### Flags
@@ -237,8 +240,11 @@ wsm registry check --registry <host> [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--registry` | — | **Required.** Hostname of your mirror to check against. |
+| `--wandb-version` | — | W&B server version that was mirrored; when set, also check the server manifest and every application image it references. |
+| `--operator-chart-version` | `2.0.0-alpha.2` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
+| `--skip-managed-images` | `false` | Don't check the managed-service operator + data-plane images (match the flag you mirrored with). |
 | `--insecure` | `false` | Skip TLS verification when contacting the registry. |
-| `--fail-on-missing` | `false` | Exit non-zero if any image is missing. |
+| `--fail-on-missing` | `false` | Exit non-zero if any artifact is missing. |
 
 ### `wsm registry values`
 

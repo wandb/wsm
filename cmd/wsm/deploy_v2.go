@@ -135,9 +135,11 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().StringToString("observability-forward-headers", nil, "OTLP forwarding headers as key=value pairs, e.g. Authorization=Bearer... (telemetry.forwarding.otlp.headers; only applied when --observability-mode=forward)")
 	cmd.PersistentFlags().String("retention-policy", "detach", "Retention policy for W&B instance (detach, purge) - defaults to detach")
 	cmd.PersistentFlags().String("size", "small", "W&B instance size (dev, micro, small, medium, large, xlarge, xxlarge)")
+	cmd.PersistentFlags().String("object-store-storage-size", "", "Override the managed object store (SeaweedFS) storage size, e.g. 20Gi. Must be < 30Gi: the operator derives SeaweedFS volumeSizeLimitMB from this and the master rejects a limit >= 30000. Leave empty to use the size preset's default.")
 	cmd.PersistentFlags().String("wandb-hostname", "http://localhost:8080", "Hostname to use for the W&B instance")
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
 	cmd.PersistentFlags().String("wandb-version", "", "Server manifest version (e.g., 0.76.1)")
+	cmd.PersistentFlags().String("manifest-repository", "", "OCI repository for the server manifest (e.g. oci://harbor.corp/wandb/server-manifest). Defaults to oci://<mirror>/wandb/server-manifest when --mirror-registry is set, else the operator default.")
 	cmd.PersistentFlags().String("wandb-namespace", "wandb", "Namespace for CR")
 	// TODO readd this when the CR reports ready properly
 	//cmd.Flags().Bool("wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
@@ -274,6 +276,8 @@ func wandbCreateCmd() *cobra.Command {
 			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
 			wandbName, _ := cmd.Flags().GetString("wandb-name")
 			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
+			manifestRepo, _ := cmd.Flags().GetString("manifest-repository")
+			objectStoreStorageSize, _ := cmd.Flags().GetString("object-store-storage-size")
 			wait, _ := cmd.Flags().GetBool("wait")
 
 			if err := validateObservabilityMode(telemetryMode); err != nil {
@@ -302,6 +306,8 @@ func wandbCreateCmd() *cobra.Command {
 				createCA,
 				size,
 				retentionPolicy,
+				manifestRepo,
+				objectStoreStorageSize,
 			)
 			if err != nil {
 				return err
@@ -342,6 +348,10 @@ func operatorDeployCmd() *cobra.Command {
 	var operatorNamespace string
 	var mirrorRegistry string
 	var insecureRegistry bool
+	var registryCAFile string
+	var gatewayCRDURL string
+	var skipGatewayCRDs bool
+	var allowUnsupportedArch bool
 
 	cmd := &cobra.Command{
 		Use:   "operator",
@@ -373,7 +383,28 @@ func operatorDeployCmd() *cobra.Command {
 			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
 			wandbName, _ := cmd.Flags().GetString("wandb-name")
 			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
+			manifestRepo, _ := cmd.Flags().GetString("manifest-repository")
+			objectStoreStorageSize, _ := cmd.Flags().GetString("object-store-storage-size")
 			wait, _ := cmd.Flags().GetBool("wait")
+
+			// A plain-HTTP / TLS-skipped mirror installs the operator stack offline
+			// (operator, cert-manager, nginx-gateway, the managed-service operators),
+			// but it cannot bring up the W&B instance: the operator fetches the
+			// server manifest over HTTPS from inside the cluster (its own client,
+			// with TLS verification, not containerd), so a plain-HTTP mirror can't
+			// serve it. Warn, don't block — this is the supported local-testing path
+			// for the install layer. Use --registry-ca-file with an HTTPS mirror for
+			// a full deploy (see docs/deployment/on-prem.md).
+			if mirrorRegistry != "" && insecureRegistry {
+				fmt.Println("⚠ --insecure-registry: the operator stack will install from the mirror, but the W&B instance will NOT reconcile — the operator fetches the server manifest over HTTPS and cannot use a plain-HTTP registry. For a full offline install, serve the mirror over HTTPS and pass --registry-ca-file. See docs/deployment/on-prem.md.")
+			}
+
+			// When mirroring, default the server-manifest source to the mirror so
+			// the operator pulls it (and the app images it references) offline.
+			// 'wsm registry mirror --wandb-version' pushes it to exactly this path.
+			if manifestRepo == "" && mirrorRegistry != "" {
+				manifestRepo = "oci://" + strings.TrimRight(mirrorRegistry, "/") + "/wandb/server-manifest"
+			}
 
 			if err := validateObservabilityMode(telemetryMode); err != nil {
 				return err
@@ -413,6 +444,8 @@ func operatorDeployCmd() *cobra.Command {
 				createCA,
 				size,
 				retentionPolicy,
+				manifestRepo,
+				objectStoreStorageSize,
 			)
 			if err != nil {
 				return err
@@ -440,6 +473,10 @@ func operatorDeployCmd() *cobra.Command {
 				kindNodeImage,
 				mirrorRegistry,
 				insecureRegistry,
+				registryCAFile,
+				gatewayCRDURL,
+				skipGatewayCRDs,
+				allowUnsupportedArch,
 			); err != nil {
 				fmt.Printf("\n✗ Deployment failed: %v\n", err)
 				return err
@@ -475,8 +512,57 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&enableGatewayAPI, "enable-gateway-api", true, "Disables Gateway API support for cert-manager")
 	cmd.Flags().BoolVar(&includeCR, "include-cr", false, "Include the Wandb CR in the operator deployment")
 	cmd.Flags().StringVar(&mirrorRegistry, "mirror-registry", "", "Pull every chart and image from this registry (e.g. harbor.corp:5443). Populate it first with 'wsm registry mirror --to <same-host>'.")
-	cmd.Flags().BoolVar(&insecureRegistry, "insecure-registry", false, "Use plain HTTP / skip TLS verification when fetching from --mirror-registry")
+	cmd.Flags().BoolVar(&insecureRegistry, "insecure-registry", false, "Use plain HTTP / skip TLS verification when fetching from --mirror-registry (installs the operator stack offline, but the W&B instance needs an HTTPS mirror — see --registry-ca-file)")
+	cmd.Flags().StringVar(&registryCAFile, "registry-ca-file", "", "PEM CA bundle to trust for an HTTPS --mirror-registry with a self-signed / internal-CA cert. wsm uses it for chart pulls and mounts it into the operator so its server-manifest fetch trusts the registry. For an auth'd registry, run 'docker login' and 'helm registry login' first.")
+	cmd.Flags().StringVar(&gatewayCRDURL, "gateway-api-crd-url", "", "Fetch the Gateway API CRDs from this URL instead of the GitHub default (use a mirrored copy for air-gapped installs)")
+	cmd.Flags().BoolVar(&skipGatewayCRDs, "skip-gateway-api-crds", false, "Assume the Gateway API CRDs are already installed; fail instead of fetching them from the internet")
+	cmd.Flags().BoolVar(&allowUnsupportedArch, "allow-unsupported-arch", false, "Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is published amd64-only and will crash under emulation on arm64 (e.g. Kind on Apple Silicon); set this only if you know your operator image is multi-arch.")
 	return cmd
+}
+
+// checkOperatorArch fails fast when the target cluster has nodes the
+// wandb-operator image can't run on. The operator image is published amd64-only
+// today; scheduling it onto an arm64 node (e.g. a Kind cluster on an Apple
+// Silicon Mac) runs the crd-installer under qemu emulation, where it SIGSEGVs
+// and wedges the install with no obvious cause. We inspect the live nodes
+// (rather than the host arch) so the common "arm64 laptop → remote amd64
+// cluster" workflow is not blocked. A probe failure is non-fatal: if we can't
+// read the nodes we let the install proceed rather than guess.
+func checkOperatorArch(ctx context.Context, operatorImageTag string, allowUnsupported bool) error {
+	_, cs, err := kubectl.GetClientset()
+	if err != nil {
+		return nil
+	}
+	nodes, err := cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil || len(nodes.Items) == 0 {
+		return nil
+	}
+
+	var unsupported []string
+	for _, n := range nodes.Items {
+		arch := n.Labels["kubernetes.io/arch"]
+		if arch == "" {
+			arch = n.Status.NodeInfo.Architecture
+		}
+		if arch != "" && arch != "amd64" {
+			unsupported = append(unsupported, fmt.Sprintf("%s (%s)", n.Name, arch))
+		}
+	}
+	if len(unsupported) == 0 {
+		return nil
+	}
+
+	msg := fmt.Sprintf(
+		"the wandb-operator image (%s) is published amd64-only, but the cluster has non-amd64 node(s): %s.\n"+
+			"  On arm64 (e.g. Kind on an Apple Silicon Mac) the operator runs under qemu emulation and crashes (SIGSEGV in crd-installer).\n"+
+			"  Use an amd64 host/cluster, or run against a remote amd64 cluster.",
+		operatorImageTag, strings.Join(unsupported, ", "))
+
+	if allowUnsupported {
+		fmt.Printf("⚠ %s\n  Continuing anyway because --allow-unsupported-arch was set.\n", msg)
+		return nil
+	}
+	return fmt.Errorf("%s\n  Pass --allow-unsupported-arch to override (only if you know your operator image is multi-arch)", msg)
 }
 
 func performDeploy(
@@ -499,6 +585,10 @@ func performDeploy(
 	kindNodeImage string,
 	mirrorRegistry string,
 	insecureRegistry bool,
+	registryCAFile string,
+	gatewayCRDURL string,
+	skipGatewayCRDs bool,
+	allowUnsupportedArch bool,
 ) error {
 	ctx := context.Background()
 	installNginxGatewayMode = strings.ToLower(strings.TrimSpace(installNginxGatewayMode))
@@ -509,6 +599,7 @@ func performDeploy(
 		mirror = &operator.MirrorConfig{
 			Host:     strings.TrimRight(mirrorRegistry, "/"),
 			Insecure: insecureRegistry,
+			CAFile:   registryCAFile,
 		}
 	}
 
@@ -559,12 +650,12 @@ func performDeploy(
 
 		switch installNginxGatewayMode {
 		case nginxGatewayInstallModeAuto:
-			if err := operator.InstallNginxGateway(ctx, true, mirror); err != nil {
+			if err := operator.InstallNginxGateway(ctx, true, mirror, gatewayCRDURL, skipGatewayCRDs); err != nil {
 				fmt.Println(" ✗")
 				return err
 			}
 		case nginxGatewayInstallModeTrue:
-			if err := operator.InstallNginxGateway(ctx, false, mirror); err != nil {
+			if err := operator.InstallNginxGateway(ctx, false, mirror, gatewayCRDURL, skipGatewayCRDs); err != nil {
 				fmt.Println(" ✗")
 				return err
 			}
@@ -619,6 +710,12 @@ func performDeploy(
 		return err
 	}
 
+	// Fail fast on an arch the operator image can't run on, before we start the
+	// (long) operator install only to watch its crd-installer SIGSEGV.
+	if err := checkOperatorArch(ctx, operatorChartVersion, allowUnsupportedArch); err != nil {
+		return err
+	}
+
 	// Step 4: Deploy W&B operator
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
 	start := time.Now()
@@ -626,6 +723,16 @@ func performDeploy(
 	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetry, wandbNamespace); err != nil {
 		fmt.Println(" ✗")
 		return err
+	}
+
+	// For an HTTPS mirror with a self-signed / internal CA, mount that CA into the
+	// operator so its in-cluster server-manifest fetch trusts the registry. Done
+	// before WaitForOperator so the wait observes the rolled (CA-trusting) pod.
+	if mirror != nil && mirror.CAFile != "" {
+		if err := operator.InjectRegistryCAIntoOperator(ctx, operatorNamespace, mirror.CAFile); err != nil {
+			fmt.Println(" ✗")
+			return err
+		}
 	}
 
 	if err := operator.WaitForOperator(ctx, operatorNamespace, 5*time.Minute); err != nil {
@@ -983,6 +1090,8 @@ func processWandbCR(
 	createCA bool,
 	size string,
 	retentionPolicy string,
+	manifestRepo string,
+	objectStoreStorageSize string,
 ) error {
 	if crFile != "" {
 		var err error
@@ -1004,6 +1113,18 @@ func processWandbCR(
 
 	if wandbVersion != "" {
 		wandbCR.Spec.Wandb.Version = wandbVersion
+	}
+
+	if manifestRepo != "" {
+		wandbCR.Spec.Wandb.ManifestRepository = manifestRepo
+	}
+
+	// Override the managed object store storage size when requested. The operator
+	// derives SeaweedFS's master volumeSizeLimitMB from this value (storage / 1MiB)
+	// and the master refuses to start with a limit >= 30000, so the size preset's
+	// default (e.g. 100Gi -> 102400) crashes SeaweedFS. Keep this under 30Gi.
+	if objectStoreStorageSize != "" && wandbCR.Spec.ObjectStore.ManagedObjectStore != nil {
+		wandbCR.Spec.ObjectStore.ManagedObjectStore.StorageSize = objectStoreStorageSize
 	}
 
 	if license != "" && licenseFile != "" {

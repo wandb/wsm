@@ -27,6 +27,33 @@ Every tier is now retargeted explicitly by `--mirror-registry` — no node-level
 
 > **Node CA trust is separate, and still required for a self-signed / internal-CA registry.** `--mirror-registry` and `--registry-ca-file` change *which registry the image refs point at* and make **wsm** + the **operator** trust your CA — but the actual image pulls happen in each node's **containerd**, which has its own trust store. If `$REG` uses a cert your nodes don't already trust, pulls fail with `x509: certificate signed by unknown authority` regardless of the refs. Make the nodes trust the CA — see [Make the nodes trust the CA](#4-make-the-nodes-trust-the-ca-for-image-pulls). (A registry with a publicly/enterprise-trusted cert needs nothing here.)
 
+### How retargeting is implemented (under the hood)
+
+Each tier is retargeted by a different mechanism, all driven by `--mirror-registry` and all landing on `<registry>/<host-stripped path>` (exactly where `wsm registry mirror` pushes):
+
+- **Tier 1 — explicit Helm values + server-manifest rewrite.** wsm points the operator / cert-manager / nginx-gateway chart image values at the mirror, and `wsm registry mirror --wandb-version` rewrites the **server manifest** so every application image ref reads `<registry>/wandb/*`. The operator pulls that rewritten manifest (phase 2 auto-defaults `--manifest-repository` to `oci://<registry>/wandb/server-manifest`).
+- **Tier 2 + Kafka — per-subchart Helm values, at operator install.** The managed-service operators are bundled Helm subcharts, each with its **own** image-value convention (no single `global.imageRegistry`), so wsm sets each one when `--mirror-registry` is given — `moco.image.repository` (+ its `agent`/`fluentbit`/`mysqldExporter` sidecars), `redis-operator.redisOperator.imageName`, `altinity-clickhouse-operator.operator.image.registry` + `metrics.image.registry`, `seaweedfs-operator.image.registry`, and `strimzi-kafka-operator.defaultImageRegistry` (which also retargets the Kafka **broker** images via `STRIMZI_KAFKA_IMAGES`).
+- **Tier 3 — `spec.global.imageRegistry`, an operator CR field.** The data-plane image refs are hardcoded Go constants the operator writes into the vendored CRs at reconcile time, so they need an operator-side knob:
+
+  ```go
+  // api/v2 — github.com/wandb/operator
+  type GlobalSpec struct {
+      ImageRegistry string `json:"imageRegistry,omitempty"`
+  }
+  ```
+
+  When `--mirror-registry` is set on `wsm deploy-v2 wandb deploy`, wsm sets `spec.global.imageRegistry` on the CR. The operator's `ApplyImageRegistry` helper then **replaces the registry host** of each managed data-plane image — ClickHouse, MySQL (incl. the moco-injected sidecars and the `moco-init` job), Redis, and SeaweedFS — preserving the repository path and tag:
+
+  ```
+  quay.io/opstree/redis:v7.0.15        →  <registry>/opstree/redis:v7.0.15
+  altinity/clickhouse-server:25.8.…    →  <registry>/altinity/clickhouse-server:25.8.…
+  ghcr.io/cybozu-go/moco/mysql:8.4.8   →  <registry>/cybozu-go/moco/mysql:8.4.8
+  ```
+
+  **What the field controls:** the registry *host* only — **not** the repository path or image tag (those stay at the operator-validated versions; it's for *mirroring*, not version pinning). **Kafka is deliberately excluded** — the Strimzi operator supplies the broker image, so it's retargeted by the tier-2 `defaultImageRegistry` value above, not by this field.
+
+> **`spec.global.imageRegistry` requires a recent operator** (one whose CRD + reconcile declare it). Select that build with `--operator-chart-version`. Against an older operator, applying the field fails with `.spec.global: field not declared in schema` — until you upgrade, drop `--mirror-registry` from phase 2 and use the [node-redirect fallback](#configuring-the-node-redirect-fallback) for the data plane.
+
 ---
 
 ## Model 1: Managed (online)

@@ -219,3 +219,5 @@ require (
 )
 
 replace sigs.k8s.io/controller-runtime v0.23.1 => sigs.k8s.io/controller-runtime v0.22.4
+
+replace github.com/wandb/operator => /Users/colander/operator

@@ -718,6 +718,51 @@ func DeployOperator(
 		"telemetry": telemetryValues,
 	}
 
+	// Point the bundled managed-service operator subcharts at the mirror. Each
+	// third-party subchart exposes images differently (no single global knob), so
+	// we set each chart's own registry/repository key — all resolving to
+	// <mirror>/<host-stripped path>, matching where `wsm registry mirror` pushes
+	// them (translate() in registry_mirror.go). Helm deep-merges these over the
+	// chart's values.yaml, so image tags and unrelated keys are preserved.
+	// Strimzi's defaultImageRegistry also retargets the Kafka broker images
+	// (STRIMZI_KAFKA_IMAGES), so the Kafka data-plane needs no CR-level override.
+	// Verified by `helm template` against operator chart 2.0.0-alpha.2.
+	if mirror != nil {
+		// moco injects three sidecar images into every MySQLCluster via the
+		// controller's --agent-image / --fluent-bit-image / mysqld_exporter args
+		// (driven by these chart values), so all four must be retargeted — not
+		// just the controller image. Verified by `helm template`.
+		releaseValues["moco"] = map[string]interface{}{
+			"image":          map[string]interface{}{"repository": mirror.Host + "/cybozu-go/moco"},
+			"agent":          map[string]interface{}{"image": map[string]interface{}{"repository": mirror.Host + "/cybozu-go/moco-agent"}},
+			"fluentbit":      map[string]interface{}{"image": map[string]interface{}{"repository": mirror.Host + "/cybozu-go/moco/fluent-bit"}},
+			"mysqldExporter": map[string]interface{}{"image": map[string]interface{}{"repository": mirror.Host + "/cybozu-go/moco/mysqld_exporter"}},
+		}
+		releaseValues["redis-operator"] = map[string]interface{}{
+			"redisOperator": map[string]interface{}{"imageName": mirror.Host + "/opstree/redis-operator"},
+		}
+		releaseValues["strimzi-kafka-operator"] = map[string]interface{}{
+			"defaultImageRegistry": mirror.Host,
+		}
+		releaseValues["seaweedfs-operator"] = map[string]interface{}{
+			"image": map[string]interface{}{
+				"registry":   mirror.Host,
+				"repository": "chrislusf/seaweedfs-operator",
+			},
+		}
+		releaseValues["altinity-clickhouse-operator"] = map[string]interface{}{
+			"operator": map[string]interface{}{
+				"image": map[string]interface{}{"registry": mirror.Host},
+			},
+			"metrics": map[string]interface{}{
+				"image": map[string]interface{}{"registry": mirror.Host},
+			},
+			"crdHook": map[string]interface{}{
+				"image": map[string]interface{}{"repository": mirror.Host + "/alpine/k8s"},
+			},
+		}
+	}
+
 	// The operator chart's telemetry-validation requires the caller to opt the
 	// victoria-metrics-operator and grafana-operator dependencies in when
 	// telemetry is enabled — their chart defaults are false (helm dependency

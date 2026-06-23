@@ -278,6 +278,7 @@ func wandbCreateCmd() *cobra.Command {
 			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
 			manifestRepo, _ := cmd.Flags().GetString("manifest-repository")
 			objectStoreStorageSize, _ := cmd.Flags().GetString("object-store-storage-size")
+			mirrorRegistry, _ := cmd.Flags().GetString("mirror-registry")
 			wait, _ := cmd.Flags().GetBool("wait")
 
 			if err := validateObservabilityMode(telemetryMode); err != nil {
@@ -285,6 +286,14 @@ func wandbCreateCmd() *cobra.Command {
 			}
 			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), gatewayClass, ingressClass); err != nil {
 				return err
+			}
+
+			// When installing from a mirror, default the server-manifest source to
+			// the mirror so the operator pulls the manifest (and every app image it
+			// references) offline. 'wsm registry mirror --wandb-version' pushes it to
+			// exactly this path.
+			if manifestRepo == "" && mirrorRegistry != "" {
+				manifestRepo = "oci://" + strings.TrimRight(mirrorRegistry, "/") + "/wandb/server-manifest"
 			}
 
 			ctx := context.Background()
@@ -313,6 +322,16 @@ func wandbCreateCmd() *cobra.Command {
 				return err
 			}
 
+			// Retarget the managed data-plane images (ClickHouse/MySQL/Redis/object
+			// store) to the mirror. The operator reads spec.global.imageRegistry and
+			// host-replaces each hardcoded image ref, so no node containerd config is
+			// needed for them. (The managed-service operators and the Kafka broker are
+			// already retargeted at operator-install time via Helm values — see
+			// DeployOperator.)
+			if mirrorRegistry != "" {
+				wandbCR.Spec.Global.ImageRegistry = strings.TrimRight(mirrorRegistry, "/")
+			}
+
 			err = deployWandbCR(ctx, createCA, createAwsStorageClass, createAwsIngressClass, ingressClass)
 			if err != nil {
 				return err
@@ -332,6 +351,7 @@ func wandbCreateCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().String("mirror-registry", "", "Install the W&B instance from this mirror registry (e.g. harbor.corp:5443). Defaults --manifest-repository to oci://<mirror>/wandb/server-manifest. Populate it first with 'wsm registry mirror'.")
 	return cmd
 }
 
@@ -340,7 +360,6 @@ func operatorDeployCmd() *cobra.Command {
 	var installCertManagerMode string
 	var installNginxGatewayMode string
 	var enableGatewayAPI bool
-	var includeCR bool
 	var clusterName string
 	var workers int
 	var kindNodeImage string
@@ -358,19 +377,12 @@ func operatorDeployCmd() *cobra.Command {
 		Short: "Deploy the v2 operator",
 		Long:  `Deploy the v2 operator with specified versions and configuration`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			crFile, _ := cmd.Flags().GetString("cr-file")
-			createCA, _ := cmd.Flags().GetBool("create-ca")
-			createAwsIngressClass, _ := cmd.Flags().GetBool("create-aws-ingress-class")
-			createAwsStorageClass, _ := cmd.Flags().GetBool("create-aws-storage-class")
-			addIngressAnnotations, _ := cmd.Flags().GetBool("add-ingress-annotations")
+			// Phase 1 installs only the operator stack (cert-manager,
+			// nginx-gateway, the wandb-operator + the managed-service operators).
+			// The W&B instance itself is a separate phase — `wsm deploy-v2 wandb
+			// deploy` — so none of the CR/app flags are read here.
 			gatewayClass, _ := cmd.Flags().GetString("gateway-class")
 			ingressClass, _ := cmd.Flags().GetString("ingress-class")
-			ingressName, _ := cmd.Flags().GetString("ingress-name")
-			issuerName, _ := cmd.Flags().GetString("issuer-name")
-			size, _ := cmd.Flags().GetString("size")
-			retentionPolicy, _ := cmd.Flags().GetString("retention-policy")
-			license, _ := cmd.Flags().GetString("license")
-			licenseFile, _ := cmd.Flags().GetString("license-file")
 			telemetryMode, _ := cmd.Flags().GetString("observability-mode")
 			telemetryForwardEndpoint, _ := cmd.Flags().GetString("observability-forward-endpoint")
 			otelSecret, _ := cmd.Flags().GetString("observability-otel-secret")
@@ -380,12 +392,6 @@ func operatorDeployCmd() *cobra.Command {
 			forwardProtocol, _ := cmd.Flags().GetString("observability-forward-protocol")
 			forwardHeaders, _ := cmd.Flags().GetStringToString("observability-forward-headers")
 			wandbNamespace, _ := cmd.Flags().GetString("wandb-namespace")
-			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
-			wandbName, _ := cmd.Flags().GetString("wandb-name")
-			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
-			manifestRepo, _ := cmd.Flags().GetString("manifest-repository")
-			objectStoreStorageSize, _ := cmd.Flags().GetString("object-store-storage-size")
-			wait, _ := cmd.Flags().GetBool("wait")
 
 			// A plain-HTTP / TLS-skipped mirror installs the operator stack offline
 			// (operator, cert-manager, nginx-gateway, the managed-service operators),
@@ -397,25 +403,6 @@ func operatorDeployCmd() *cobra.Command {
 			// a full deploy (see docs/deployment/on-prem.md).
 			if mirrorRegistry != "" && insecureRegistry {
 				fmt.Println("⚠ --insecure-registry: the operator stack will install from the mirror, but the W&B instance will NOT reconcile — the operator fetches the server manifest over HTTPS and cannot use a plain-HTTP registry. For a full offline install, serve the mirror over HTTPS and pass --registry-ca-file. See docs/deployment/on-prem.md.")
-			}
-
-			/** --mirror-registry only retargets the tier-1 images (operator,
-			cert-manager, nginx-gateway) via Helm values. The managed-service
-			images (tiers 2/3) are hardcoded by the operator and only resolve
-			from the mirror when each node's containerd redirects their public
-			hosts — which wsm writes automatically only on the
-			--setup-k8s-cluster + --insecure-registry Kind path. Warn (with the
-			manual steps) on every other path so they don't ImagePullBackOff
-			silently in a true air-gap. **/
-			if mirrorRegistry != "" && !(setupCluster && insecureRegistry) {
-				warnManagedImagesNeedNodeMirror(strings.TrimRight(mirrorRegistry, "/"))
-			}
-
-			// When mirroring, default the server-manifest source to the mirror so
-			// the operator pulls it (and the app images it references) offline.
-			// 'wsm registry mirror --wandb-version' pushes it to exactly this path.
-			if manifestRepo == "" && mirrorRegistry != "" {
-				manifestRepo = "oci://" + strings.TrimRight(mirrorRegistry, "/") + "/wandb/server-manifest"
 			}
 
 			if err := validateObservabilityMode(telemetryMode); err != nil {
@@ -439,49 +426,19 @@ func operatorDeployCmd() *cobra.Command {
 				ForwardHeaders:    forwardHeaders,
 			}
 
-			err := processWandbCR(
-				crFile,
-				wandbVersion,
-				wandbName,
-				wandbHostname,
-				gatewayClass,
-				ingressClass,
-				ingressName,
-				issuerName,
-				addIngressAnnotations,
-				license,
-				licenseFile,
-				telemetryMode,
-				wandbNamespace,
-				createCA,
-				size,
-				retentionPolicy,
-				manifestRepo,
-				objectStoreStorageSize,
-			)
-			if err != nil {
-				return err
-			}
-
-			// Perform the deployment
+			// Perform the operator-stack deployment (phase 1 only — no CR).
 			deployStart := time.Now()
 			if err := performDeploy(
 				setupCluster,
 				installCertManagerMode,
 				installNginxGatewayMode,
 				enableGatewayAPI,
-				includeCR,
-				wait,
 				clusterName,
 				telemetry,
 				wandbNamespace,
 				workers,
 				operatorChartVersion,
 				operatorNamespace,
-				createCA,
-				createAwsStorageClass,
-				createAwsIngressClass,
-				ingressClass,
 				kindNodeImage,
 				mirrorRegistry,
 				insecureRegistry,
@@ -490,23 +447,13 @@ func operatorDeployCmd() *cobra.Command {
 				skipGatewayCRDs,
 				allowUnsupportedArch,
 			); err != nil {
-				fmt.Printf("\n✗ Deployment failed: %v\n", err)
+				fmt.Printf("\n✗ Operator install failed: %v\n", err)
 				return err
 			}
 
-			// Success summary
 			totalTime := time.Since(deployStart).Round(time.Second)
-			fmt.Printf("\n✓ Deployment complete! (%s total)\n\n", totalTime)
-
-			if includeCR {
-				fmt.Println("Access your W&B instance:")
-				if setupCluster {
-					fmt.Printf("  • Kubectl context: kind-%s\n", clusterName)
-				}
-				fmt.Printf("  • Namespace: %s\n", wandbNamespace)
-				fmt.Printf("  • Status: kubectl get wandb -n %s\n", wandbNamespace)
-				fmt.Println()
-			}
+			fmt.Printf("\n✓ Operator stack installed! (%s total)\n\n", totalTime)
+			fmt.Println("Next: install the W&B instance with 'wsm deploy-v2 wandb deploy'", "(add --mirror-registry for an air-gapped install).")
 			return nil
 		},
 	}
@@ -522,7 +469,6 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().StringVar(&installNginxGatewayMode, "install-nginx-gateway", nginxGatewayInstallModeAuto, "Nginx-gateway-fabric install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
 
 	cmd.Flags().BoolVar(&enableGatewayAPI, "enable-gateway-api", true, "Disables Gateway API support for cert-manager")
-	cmd.Flags().BoolVar(&includeCR, "include-cr", false, "Include the Wandb CR in the operator deployment")
 	cmd.Flags().StringVar(&mirrorRegistry, "mirror-registry", "", "Pull every chart and image from this registry (e.g. harbor.corp:5443). Populate it first with 'wsm registry mirror --to <same-host>'.")
 	cmd.Flags().BoolVar(&insecureRegistry, "insecure-registry", false, "Use plain HTTP / skip TLS verification when fetching from --mirror-registry (installs the operator stack offline, but the W&B instance needs an HTTPS mirror — see --registry-ca-file)")
 	cmd.Flags().StringVar(&registryCAFile, "registry-ca-file", "", "PEM CA bundle to trust for an HTTPS --mirror-registry with a self-signed / internal-CA cert. wsm uses it for chart pulls and mounts it into the operator so its server-manifest fetch trusts the registry. For an auth'd registry, run 'docker login' and 'helm registry login' first.")
@@ -577,48 +523,17 @@ func checkOperatorArch(ctx context.Context, operatorImageTag string, allowUnsupp
 	return fmt.Errorf("%s\n  Pass --allow-unsupported-arch to override (only if you know your operator image is multi-arch)", msg)
 }
 
-func warnManagedImagesNeedNodeMirror(mirrorHost string) {
-	fmt.Printf(`
-⚠ --mirror-registry only rewrites the operator, cert-manager and nginx-gateway images.
-  The managed-service images (ClickHouse/Kafka/MySQL/Redis/object-store operators and
-  their data-plane pods) are hardcoded by the operator and keep their original
-  docker.io / quay.io / ghcr.io names, so they will ImagePullBackOff in an air-gap
-  unless each node's containerd redirects those hosts to your mirror.
-
-  On every node (including future autoscaled ones), write a hosts.toml per host and
-  restart containerd:
-
-    # /etc/containerd/certs.d/docker.io/hosts.toml   (repeat for quay.io, ghcr.io)
-    server = "https://registry-1.docker.io"          # https://quay.io , https://ghcr.io
-    [host."https://%s"]
-      capabilities = ["pull", "resolve"]
-      # ca = "/etc/containerd/certs.d/%s/ca.crt"      # add for a self-signed / internal-CA mirror
-
-  First make sure 'wsm registry mirror --to %s' has pushed these images (it does by
-  default; --skip-managed-images turns it off), then verify with
-  'wsm registry check --registry %s'. Alternatively, run W&B against external databases
-  so these images aren't needed. Full details: docs/deployment/on-prem.md.
-
-`, mirrorHost, mirrorHost, mirrorHost, mirrorHost)
-}
-
 func performDeploy(
 	setupCluster bool,
 	installCertManagerMode string,
 	installNginxGatewayMode string,
 	enableGatewayAPI bool,
-	includeCR bool,
-	wait bool,
 	clusterName string,
 	telemetry operator.TelemetryConfig,
 	wandbNamespace string,
 	workers int,
 	operatorChartVersion string,
 	operatorNamespace string,
-	createCA bool,
-	createAwsStorageClass bool,
-	createAwsIngressClass bool,
-	ingressClass string,
 	kindNodeImage string,
 	mirrorRegistry string,
 	insecureRegistry bool,
@@ -646,12 +561,6 @@ func performDeploy(
 		totalSteps++
 	}
 	if installNginxGatewayMode != nginxGatewayInstallModeFalse {
-		totalSteps++
-	}
-	if includeCR {
-		totalSteps++
-	}
-	if wait {
 		totalSteps++
 	}
 	currentStep := 1
@@ -787,34 +696,6 @@ func performDeploy(
 	}
 
 	fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
-	currentStep++
-
-	if includeCR {
-		// Step 5: Create W&B instance
-		fmt.Printf("[%d/%d] Creating W&B instance...", currentStep, totalSteps)
-		start = time.Now()
-
-		err := deployWandbCR(ctx, createCA, createAwsStorageClass, createAwsIngressClass, ingressClass)
-		if err != nil {
-			return err
-		}
-
-		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
-		currentStep++
-
-		// Step 6: Wait for CR to be ready (if requested)
-		if wait {
-			fmt.Printf("[%d/%d] Waiting for W&B instance to be ready...", currentStep, totalSteps)
-			start = time.Now()
-
-			if err := operator.WaitForCRReady(ctx, wandbCR.Namespace, wandbCR.Name, 30*time.Minute); err != nil {
-				fmt.Println(" ✗")
-				return err
-			}
-
-			fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
-		}
-	}
 
 	return nil
 }

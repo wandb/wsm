@@ -197,8 +197,14 @@ func buildManagedImagePlan(target string) []mirrorItem {
 		// Tier 3 — data-plane server images.
 		"altinity/clickhouse-server:25.8.16.10002.altinitystable",
 		"quay.io/strimzi/kafka:0.50.0-kafka-4.1.0",
+		// MySQL data plane: the moco operator injects an agent + fluent-bit +
+		// mysqld_exporter sidecar into every MySQLCluster pod (versions pinned by
+		// the moco subchart, currently 0.24.0), alongside the mysql server image.
+		// All four must be mirrored or the pod stalls on Init:ErrImagePull.
 		"ghcr.io/cybozu-go/moco/mysql:8.4.8",
-		"prom/mysqld-exporter:v0.15.1",
+		"ghcr.io/cybozu-go/moco-agent:0.15.0",
+		"ghcr.io/cybozu-go/moco/fluent-bit:4.1.1.1",
+		"ghcr.io/cybozu-go/moco/mysqld_exporter:0.18.0.1",
 		"quay.io/opstree/redis:v7.0.15",
 		"quay.io/opstree/redis-sentinel:v7.0.12",
 		"quay.io/opstree/redis-exporter:v1.44.0",

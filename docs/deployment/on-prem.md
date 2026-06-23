@@ -19,11 +19,13 @@ A complete install pulls from **four** upstreams, in three tiers:
 
 | Tier | What | Upstream | How WSM retargets it to your registry |
 |------|------|----------|----------------------------------------|
-| **1** | operator chart + image, cert-manager, nginx-gateway, the **server manifest** and every **app image** it references (weave, megabinary, frontend, …) | `us-docker.pkg.dev`, `quay.io/jetstack`, `ghcr.io/nginx` | **Explicit** — Helm chart refs + values, and the server manifest is rewritten so app image refs point at `<registry>/wandb/*`. Works on any cluster, no node config. |
-| **2** | managed-service **operators** (moco, strimzi, altinity-clickhouse, opstree redis, seaweedfs, alpine/k8s) | `docker.io`, `quay.io`, `ghcr.io` | **Transparent** — a containerd registry mirror redirects the (hardcoded) refs. |
-| **3** | managed-service **data-plane** pods (ClickHouse, Kafka, MySQL, Redis, SeaweedFS servers) | `docker.io`, `quay.io`, `ghcr.io` | **Transparent** — same containerd mirror. The operator hardcodes these image refs with no override, so a node-level redirect is the only retarget path. |
+| **1** | operator chart + image, cert-manager, nginx-gateway, the **server manifest** and every **app image** it references (weave, megabinary, frontend, …) | `us-docker.pkg.dev`, `quay.io/jetstack`, `ghcr.io/nginx` | **Explicit** — Helm chart refs + values, and the server manifest is rewritten so app image refs point at `<registry>/wandb/*`. Set by `--mirror-registry`. |
+| **2** | managed-service **operators** (moco, strimzi, altinity-clickhouse, opstree redis, seaweedfs, alpine/k8s) **and the Kafka broker** | `docker.io`, `quay.io`, `ghcr.io` | **Explicit** — `--mirror-registry` sets per-subchart Helm image values at operator install (incl. Strimzi `defaultImageRegistry`, which also covers the Kafka broker). |
+| **3** | managed-service **data-plane** pods (ClickHouse, MySQL, Redis, SeaweedFS servers) | `docker.io`, `quay.io`, `ghcr.io` | **Explicit** — `--mirror-registry` sets `spec.global.imageRegistry` on the CR; the operator host-replaces each hardcoded ref. (Requires an operator build with `spec.global.imageRegistry`.) |
 
-The tier-1 refs are rewritten to literally point at your registry, so those pods pull from it directly. Tiers 2/3 keep their original `docker.io`/`quay.io`/`ghcr.io` names, so the **nodes** must be told to mirror those hosts to your registry (WSM does this automatically for WSM-provisioned Kind clusters — see below).
+Every tier is now retargeted explicitly by `--mirror-registry` — no node-level *redirect* is required on a normal install. The images all land at `<registry>/<host-stripped path>` (e.g. `quay.io/strimzi/operator` → `<registry>/strimzi/operator`), exactly where `wsm registry mirror` pushes them. (A node containerd mirror is still a valid fallback — see [below](#configuring-the-node-redirect-fallback) — and is the only option on an operator too old to support `spec.global.imageRegistry`.)
+
+> **Node CA trust is separate, and still required for a self-signed / internal-CA registry.** `--mirror-registry` and `--registry-ca-file` change *which registry the image refs point at* and make **wsm** + the **operator** trust your CA — but the actual image pulls happen in each node's **containerd**, which has its own trust store. If `$REG` uses a cert your nodes don't already trust, pulls fail with `x509: certificate signed by unknown authority` regardless of the refs. Make the nodes trust the CA — see [Make the nodes trust the CA](#4-make-the-nodes-trust-the-ca-for-image-pulls). (A registry with a publicly/enterprise-trusted cert needs nothing here.)
 
 ---
 
@@ -37,7 +39,8 @@ Your cluster reaches the internet; nothing to mirror.
             └─────────────────────────────────┬──────────────────────────────────┘
                                                │  charts + images (tiers 1/2/3)
                                                │  + Gateway API CRDs
-   wsm deploy-v2 operator --include-cr ───────►│
+   wsm deploy-v2 operator   (phase 1) ────────►│
+   wsm deploy-v2 wandb deploy (phase 2) ──────►│
                                                ▼
                                    ┌───────────────────────┐
                                    │      your cluster      │
@@ -45,11 +48,15 @@ Your cluster reaches the internet; nothing to mirror.
                                    └───────────────────────┘
 ```
 
+Installing is **two phases**: phase 1 brings up the operator stack, phase 2 creates
+the W&B instance.
+
 ```bash
-wsm deploy-v2 operator \
-  --context <kube-context> \
-  --wandb-version <version> \
-  --include-cr
+# Phase 1 — operator stack
+wsm deploy-v2 operator --context <kube-context>
+
+# Phase 2 — W&B instance
+wsm deploy-v2 wandb deploy --context <kube-context> --wandb-version <version>
 ```
 
 That's the whole story for an online cluster. Everything below is for the air-gapped case.
@@ -90,12 +97,38 @@ Two phases. **Phase 1 runs once, online** (on a bastion / your laptop / a CI job
 # and, with --wandb-version, the server manifest + all app images (weave, etc.).
 wsm registry mirror \
   --to registry.corp.internal \
+  --operator-chart-version <operator-version> \   # the operator build to install (see note)
   --wandb-version <version>
   # --insecure                for a plain-HTTP / self-signed registry
   # --skip-managed-images     if you run W&B against external databases
 ```
 
 Preview the exact source→target plan first with `--dry-run`.
+
+> **Two version flags, two different things.** `--operator-chart-version` selects the
+> operator **chart + image** (and is where the `spec.global.imageRegistry` capability comes
+> from — see [Phase 2](#phase-2--install-from-the-registry-offline)); `--wandb-version`
+> selects the **server manifest** (the W&B app images). Pass `--operator-chart-version` to
+> both `wsm registry mirror` and `wsm deploy-v2 operator`, and keep them identical. It
+> defaults to the value baked into `wsm`; override it until that default points at a release
+> that includes `spec.global.imageRegistry`.
+
+**Validate the push before you seal the cluster.** `wsm registry check` computes the
+same destination set `wsm registry mirror` pushes and confirms each is present —
+including the server manifest and every app image it references. Run it with the
+**same** `--wandb-version` / `--operator-chart-version` / `--skip-managed-images`
+you mirrored with:
+
+```bash
+wsm registry check \
+  --registry registry.corp.internal \
+  --wandb-version <version> \
+  --fail-on-missing
+  # --insecure   for a self-signed registry
+```
+
+`--fail-on-missing` exits non-zero if anything is absent, so it drops cleanly into a
+CI gate between Phase 1 and Phase 2.
 
 ### Phase 2 — install from the registry (offline)
 
@@ -104,32 +137,41 @@ Preview the exact source→target plan first with `--dry-run`.
                       │   your private registry   │
                       └─────────────┬─────────────┘
                                     ▼
-        wsm deploy-v2 operator --mirror-registry <registry> --include-cr
-                                    │  installs operator + deps (tier 1, explicit refs)
+   phase 1:  wsm deploy-v2 operator   --mirror-registry <registry>
+   phase 2:  wsm deploy-v2 wandb deploy --mirror-registry <registry>
+                                    │  every image ref retargeted to <reg>/...
                                     ▼
               ┌──────────────────────────────────────────────────┐
               │                   your cluster                    │
               │                                                   │
               │   operator (reconciles the CR) creates:           │
               │                                                   │
-              │     app pods (weave, …) ──pull──► <reg>/wandb/*    │   tier 1: ref already
-              │                                                   │   points at the registry
-              │     DB pods (clickhouse, ──pull──► docker.io/...   │   tiers 2/3: node containerd
-              │       kafka, mysql, …)            └─ redirected ─► │   mirror rewrites the host
-              │                                   <reg>/<stripped> │   to the registry
+              │     app pods (weave, …) ──pull──► <reg>/wandb/*    │   tier 1: manifest rewrite
+              │     DB pods (clickhouse, ──pull──► <reg>/<stripped>│   tier 3: spec.global.
+              │       mysql, redis, …)                             │   imageRegistry on the CR
               └──────────────────────────────────────────────────┘
 ```
 
 ```bash
+# Phase 1 — operator stack from the mirror
 wsm deploy-v2 operator \
   --context <kube-context> \
   --mirror-registry registry.corp.internal \
-  --wandb-version <version> \
-  --skip-gateway-api-crds \      # see "What still reaches the internet" below
-  --include-cr
+  --operator-chart-version <operator-version> \   # must match the value you mirrored with
+  --skip-gateway-api-crds        # see "What still reaches the internet" below
+
+# Phase 2 — W&B instance from the mirror
+wsm deploy-v2 wandb deploy \
+  --context <kube-context> \
+  --mirror-registry registry.corp.internal \
+  --wandb-version <version>
 ```
 
-`--mirror-registry` retargets the charts + operator image and **defaults `--manifest-repository` to `oci://<registry>/wandb/server-manifest`**, so the operator pulls the rewritten manifest (and every app image) from your registry.
+On phase 1, `--mirror-registry` retargets the operator/cert-manager/nginx-gateway charts
+and the managed-service operator + Kafka images (per-subchart Helm values). On phase 2 it
+**defaults `--manifest-repository` to `oci://<registry>/wandb/server-manifest`** (so the
+operator pulls the rewritten manifest and every app image from your registry) **and sets
+`spec.global.imageRegistry`** so the managed data-plane pods pull from the mirror too.
 
 > **Your registry must be served over HTTPS.** `--insecure-registry` is rejected together with `--mirror-registry`: the W&B operator fetches the server manifest over HTTPS *from inside the cluster* (its own client, with TLS verification — not containerd), so a plain-HTTP or TLS-skipped registry can never complete a deploy. A self-signed cert is fine — see [TLS requirements](#tls-requirements) below. (`wsm registry mirror` itself may still use `--insecure` for the push.)
 
@@ -140,12 +182,18 @@ wsm deploy-v2 operator \
 | operator chart + image | `wsm registry mirror` → `wsm deploy-v2 operator --mirror-registry` | `<reg>/wandb/charts/operator`, `<reg>/wandb/operator` |
 | cert-manager, nginx-gateway | same | `<reg>/jetstack/*`, `<reg>/nginx/*` |
 | server manifest + app images (weave, …) | `wsm registry mirror --wandb-version` → `--mirror-registry` (auto-sets `--manifest-repository`) | `<reg>/wandb/server-manifest`, `<reg>/wandb/*` |
-| managed-service operators + data-plane (tiers 2/3) | `wsm registry mirror` (image push) + node containerd mirror (retarget) | `<reg>/<host-stripped>` |
+| managed-service operators + Kafka (tier 2) | `wsm registry mirror` (push) → `wsm deploy-v2 operator --mirror-registry` (per-subchart Helm values) | `<reg>/<host-stripped>` |
+| managed data-plane: ClickHouse/MySQL/Redis/SeaweedFS (tier 3) | `wsm registry mirror` (push) → `wsm deploy-v2 wandb deploy --mirror-registry` (sets `spec.global.imageRegistry`) | `<reg>/<host-stripped>` |
 | Kind node image (only if WSM provisions the cluster) | `wsm deploy-v2 operator --setup-k8s-cluster --kind-node-image <reg>/...` | `<reg>/...` |
 
-### Configuring the node redirect (tiers 2/3)
+### Configuring the node redirect (fallback)
 
-Tiers 2/3 only resolve from your registry if the **nodes** mirror `docker.io`/`quay.io`/`ghcr.io` to it.
+> **You usually don't need this.** `--mirror-registry` retargets tiers 2/3 explicitly
+> (Helm values + `spec.global.imageRegistry`). The node containerd redirect below is a
+> **fallback** — use it only on an operator too old to support `spec.global.imageRegistry`,
+> or if you deliberately don't pass `--mirror-registry` on phase 2.
+
+A node redirect makes tiers 2/3 resolve from your registry by having the **nodes** mirror `docker.io`/`quay.io`/`ghcr.io` to it.
 
 - **WSM-provisioned Kind clusters** — automatic. `wsm cluster create --insecure-registry-host <registry>` (and `--setup-k8s-cluster`) writes `/etc/containerd/certs.d/{docker.io,quay.io,ghcr.io,<registry>}/hosts.toml` for you.
 - **Your own cluster (EKS/GKE/AKS/bare-metal)** — you configure it once, on every node (including future autoscaled nodes). Drop this on each node and restart containerd:
@@ -203,23 +251,43 @@ docker run -d --name registry -p 5000:5000 \
 
 ### 3. Deploy with `--registry-ca-file` (handles host **and** operator trust)
 
-Pass the CA to `wsm` and it does two things: trusts the CA for its own chart pulls (an explicit cert pool — works on macOS too, no keychain edit), **and** mounts the CA into the operator + sets `SSL_CERT_FILE` so the operator's in-cluster manifest fetch trusts the registry. No manual `kubectl patch` required.
+Pass the CA to `wsm` and it does two things: trusts the CA for its own chart pulls (an explicit cert pool — works on macOS too, no keychain edit), **and** mounts the CA into the operator + sets `SSL_CERT_FILE` so the operator's in-cluster manifest fetch trusts the registry. No manual `kubectl patch` required. `--registry-ca-file` is a phase-1 flag (it wires chart-pull + operator trust); phase 2 only needs `--mirror-registry`.
 
 ```bash
+# Phase 1 — operator stack
 wsm deploy-v2 operator \
   --context <kube-context> \
   --mirror-registry $REG:5000 \
+  --operator-chart-version <operator-version> \   # must match the value you mirrored with
   --registry-ca-file ./ca.crt \
-  --skip-gateway-api-crds \
-  --wandb-version <version> \
-  --include-cr
+  --skip-gateway-api-crds
+
+# Phase 2 — W&B instance
+wsm deploy-v2 wandb deploy \
+  --context <kube-context> \
+  --mirror-registry $REG:5000 \
+  --wandb-version <version>
 ```
 
 > Without this, the operator loops on `x509: certificate is not trusted` and never reconciles — the manifest fetch is the step that's easy to miss. `wsm` re-applies the injection on every deploy, so it survives operator upgrades.
 
 ### 4. Make the nodes trust the CA (for image pulls)
 
-The nodes pull container images via containerd, which is separate from `wsm` and the operator. In each `/etc/containerd/certs.d/<host>/hosts.toml`, either point at a CA file you place on the node (`ca = "/etc/containerd/certs.d/<host>/ca.crt"`) or, for a lab, `skip_verify = true`. WSM-provisioned Kind clusters get this written for you.
+The nodes pull container images via containerd, which is **separate from `wsm` and the operator** — `--registry-ca-file` does not reach it. With a self-signed / internal-CA registry you must make each node trust the CA, or image pulls fail with `x509: certificate signed by unknown authority`. Two ways:
+
+**A. System trust (simplest; works on a stock Kind node, where `certs.d` isn't wired up).** Drop the CA into the node's trust store and restart containerd. For a Kind cluster:
+
+```bash
+for node in $(kind get nodes --name <cluster>); do
+  docker cp ca.crt $node:/usr/local/share/ca-certificates/registry-ca.crt
+  docker exec $node update-ca-certificates
+  docker exec $node systemctl restart containerd
+done
+```
+
+**B. Per-host `certs.d`** — point `ca`/`skip_verify` per registry host under `/etc/containerd/certs.d/<host>/hosts.toml`. This requires containerd's `config_path = "/etc/containerd/certs.d"` to be set (it is **not** on a stock Kind node — only when `wsm cluster create --insecure-registry-host` provisioned it). On a real cluster, set `config_path` once and drop a `hosts.toml` per node.
+
+> A registry with a cert signed by a CA your nodes already trust (the normal enterprise case) needs none of this.
 
 ---
 
@@ -231,10 +299,8 @@ Even with everything mirrored, a few things default to an online source. Each ha
 |--------------|------|------------------------------------|
 | **Gateway API CRDs** (a YAML on `github.com`) | Whenever nginx-gateway installs | Pre-apply the CRDs from a copy you carried in, then pass `--skip-gateway-api-crds`; **or** host the YAML internally and pass `--gateway-api-crd-url <internal-url>`. |
 | **Observability / telemetry images** (otel-collector, victoria-metrics-operator, grafana-operator + their data-plane pods) | Only if `--observability-mode=full\|forward` | These are **not yet mirrored by `wsm registry mirror`**. Either keep `--observability-mode=off` (default), or mirror those images into your registry by hand and ensure your node redirect covers them. |
-| **Node containerd config** (not an image pull, but a manual step) | Tiers 2/3 on any non-Kind cluster | Apply the `certs.d` config above to every node. On platforms with **no node access** (GKE Autopilot, EKS Fargate) tiers 2/3 cannot be retargeted today — you get the W&B app (tier 1) but not the managed databases. |
+| **Node containerd config** (fallback only) | Operator too old to support `spec.global.imageRegistry` | Normally **not needed** — `--mirror-registry` retargets tiers 2/3 explicitly. Only on an older operator must you apply the `certs.d` redirect to every node (and platforms with no node access — GKE Autopilot, EKS Fargate — then can't run the managed databases). |
 | **Kind node image** | Only if `--setup-k8s-cluster` | Mirror `kindest/node` and pass `--kind-node-image <reg>/kindest/node:...`. N/A for an existing cluster. |
-
-> The deepest limitation — tiers 2/3 needing a node-level redirect — exists because the operator hardcodes those image references. A future operator change adding a registry override would let WSM retarget them explicitly (like tier 1) and remove the node-config requirement on all platforms.
 
 ---
 
@@ -244,7 +310,7 @@ Even with everything mirrored, a few things default to an online source. Each ha
 
 **Before / during the deploy**
 - **Gateway API CRDs** — carry in `standard-install.yaml` and `kubectl apply` it (then `--skip-gateway-api-crds`), or host it internally and use `--gateway-api-crd-url`.
-- **Node containerd registry mirror** — on non-Kind clusters, configure `/etc/containerd/certs.d` on every node (incl. autoscaled ones) so `docker.io`/`quay.io`/`ghcr.io` resolve to your registry (tiers 2/3).
+- **Node containerd registry mirror** *(fallback only)* — needed only on an operator too old to support `spec.global.imageRegistry`; otherwise `--mirror-registry` retargets tiers 2/3 for you. See [Configuring the node redirect (fallback)](#configuring-the-node-redirect-fallback).
 - **Registry pull credentials** — for an auth'd registry, `docker login` + `helm registry login` for `wsm`, and create an `imagePullSecret` for the operator + W&B namespaces so in-cluster pulls and the manifest fetch authenticate.
 
 **After the deploy completes**
@@ -259,9 +325,11 @@ Even with everything mirrored, a few things default to an online source. Each ha
 
 **Bring up the complete app, offline.** This brings up the **whole** W&B instance (databases + app + **weave**) from your registry with the cluster offline. It uses an **HTTPS** registry, because the operator fetches the server manifest over HTTPS from inside the cluster (a plain-HTTP registry only gets you the install layer — see the insecure callout above).
 
+> **Run this on an amd64 (x86_64) host.** The wandb-operator image is currently published amd64-only, so a Kind cluster on an Apple Silicon (arm64) Mac runs it under emulation and the operator crashes (SIGSEGV in crd-installer). `wsm` detects non-amd64 nodes and **fails fast** at step 7 with a clear message rather than wedging. Use an amd64 machine for the local walkthrough, or point `--context` at a remote amd64 cluster. (`--allow-unsupported-arch` overrides the check, only sensible once a multi-arch operator image exists.)
+
 > ### Using your own registry? Skip the setup, swap two things.
 >
-> Steps 2–3 (cert + `registry:2` + the kind-network attach + node `certs.d`) only exist to stand up and reach an HTTPS registry locally. If you already run one (Harbor/ECR/Artifactory/…):
+> Step 2 (cert + `registry:2` + the kind-network attach) only exists to stand up and reach an HTTPS registry locally; step 3 is an optional fallback. If you already run a registry (Harbor/ECR/Artifactory/…):
 > - **Skip steps 2–3.** Use your registry's hostname as `$REG` everywhere; it's already reachable from host, nodes, and pods.
 > - **If your registry's cert is signed by a CA your hosts/nodes/cluster already trust** (the normal enterprise case): **drop `--registry-ca-file`** from the deploy, and skip the node `skip_verify` — it all just works. Keep `--registry-ca-file ./ca.crt` only for a self-signed / internal-CA cert that isn't in the system trust store.
 > - **If your registry requires a login:** replace `--insecure` on the mirror with `docker login $REG` + `helm registry login $REG`. Note: a registry that requires auth for *pulls* has an operator-side limitation — the operator fetches the server manifest anonymously, so allow anonymous read (at least on the `wandb/server-manifest` repo) or the W&B instance won't reconcile.
@@ -298,32 +366,28 @@ docker network connect --ip $REGIP kind local-registry         # now reachable f
 curl -sk https://$REG/v2/ -o /dev/null -w "registry -> %{http_code}\n"   # expect 200
 ```
 
-### 3. (online) Point the nodes' containerd at the registry (HTTPS)
-
-`wsm cluster create --insecure-registry-host` writes **HTTP** config, which won't work against an HTTPS registry — so write the `certs.d` redirect yourself (HTTPS, skip-verify for the self-signed cert). This redirects the tier-2/3 hosts to your registry:
+### 3. (online) Mirror the full image surface
 
 ```bash
-docker exec -i airgap-control-plane sh -s <<EOF
-for h in $REG docker.io quay.io ghcr.io; do
-  mkdir -p /etc/containerd/certs.d/\$h
-  printf '[host."https://$REG"]\n  capabilities = ["pull", "resolve"]\n  skip_verify = true\n' \
-    > /etc/containerd/certs.d/\$h/hosts.toml
-done
-EOF
-```
-
-> With your own registry whose CA the nodes already trust, drop `skip_verify` (or point `ca = ...` at the CA), and there's no `--insecure-registry-host` HTTP gotcha.
-
-### 4. (online) Mirror the full image surface
-
-```bash
+OP_VERSION=<operator-version>   # operator chart/image build (must include spec.global.imageRegistry)
 docker login                                 # avoids Docker Hub's anonymous pull rate limit (tiers 2/3)
-wsm registry mirror --to $REG --wandb-version <version> --insecure
+wsm registry mirror --to $REG \
+  --operator-chart-version $OP_VERSION \
+  --wandb-version <version> --insecure
 #   --insecure  → skip TLS verification of the self-signed cert on push
 #                 (drop it if your registry's CA is already trusted)
 ```
 
-This pushes tiers 1–3 (charts, operator, cert-manager, nginx-gateway, the managed-service operators + data-plane images) and the **server manifest + every app image** (weave, megabinary, …) rewritten to point at `$REG`.
+This pushes tiers 1–3 (charts, operator, cert-manager, nginx-gateway, the managed-service operators + data-plane images) and the **server manifest + every app image** (weave, megabinary, …) rewritten to point at `$REG`. `--operator-chart-version` picks the operator build (the one that brings `spec.global.imageRegistry`); `--wandb-version` picks the server manifest — pass the **same** `$OP_VERSION` to `deploy-v2 operator` in step 7.
+
+Confirm the push landed everything before you go offline:
+
+```bash
+wsm registry check --registry $REG \
+  --operator-chart-version $OP_VERSION \
+  --wandb-version <version> --insecure --fail-on-missing
+#   expect "N present, 0 missing" and exit 0
+```
 
 ### 5. (online, once) Install the Gateway API CRDs
 
@@ -343,18 +407,24 @@ Disconnect the cluster from the internet.
 ### 7. Install everything from the registry
 
 ```bash
+# Phase 1 — operator stack (incl. managed-service operators + Kafka, from the mirror)
 wsm deploy-v2 operator \
   --context kind-airgap \
   --mirror-registry $REG \
+  --operator-chart-version $OP_VERSION \   # same value you mirrored with in step 4
   --registry-ca-file ./ca.crt \
-  --skip-gateway-api-crds \
+  --skip-gateway-api-crds
+
+# Phase 2 — W&B instance (app images via the manifest, managed DBs via spec.global.imageRegistry)
+wsm deploy-v2 wandb deploy \
+  --context kind-airgap \
+  --mirror-registry $REG \
   --wandb-version <version> \
-  --include-cr \
   --size dev \                       # single-node Kind: 'small' (default) won't fit (see below)
   --object-store-storage-size 20Gi   # required workaround for the SeaweedFS limit (see below)
 ```
 
-`--registry-ca-file` makes `wsm`'s chart pulls trust the CA **and** mounts it into the operator (`SSL_CERT_FILE`) so its manifest fetch over HTTPS succeeds — no manual patch. **Drop `--registry-ca-file` if your registry's CA is already trusted by the host and cluster.** Do **not** pass `--insecure-registry` here — the manifest fetch needs real HTTPS.
+`--registry-ca-file` (phase 1) makes `wsm`'s chart pulls trust the CA **and** mounts it into the operator (`SSL_CERT_FILE`) so its manifest fetch over HTTPS succeeds — no manual patch. **Drop `--registry-ca-file` if your registry's CA is already trusted by the host and cluster.** Do **not** pass `--insecure-registry` here — the manifest fetch needs real HTTPS.
 
 **Two flags that matter on a small / single-node cluster (and why):**
 
@@ -364,8 +434,19 @@ wsm deploy-v2 operator \
 ### 8. Verify (no internet)
 
 ```bash
+# Registry side — every artifact the install needs is present in the mirror:
+wsm registry check --registry $REG --wandb-version <version> --insecure --fail-on-missing
+
+# Cluster side — the workloads came up from it:
 kubectl get pods -n wandb | grep -iE "weave|clickhouse|kafka|mysql|redis|seaweed"
 kubectl get wandb -n wandb
 ```
 
-The weave + database pods should reach `Running`, all pulled from `$REG`. Then complete the [manual steps not handled by `wsm`](#manual-steps-not-handled-by-wsm) (license, external DNS/TLS for the W&B endpoint).
+The weave + database pods should reach `Running`, all pulled from `$REG`. If a pod is stuck in `ImagePullBackOff` while `registry check` reports everything present, the image is in the registry but a pod is still asking for a public host — check that you passed `--mirror-registry` on **both** phases (step 7). Confirm the data-plane pods carry the mirror host:
+
+```bash
+kubectl get wandb -n wandb -o jsonpath='{.spec.global.imageRegistry}{"\n"}'   # should be $REG
+kubectl get pods -n wandb -o jsonpath='{range .items[*]}{.spec.containers[*].image}{"\n"}{end}' | sort -u
+```
+
+If a pull fails with `x509: certificate signed by unknown authority`, the refs are right but the **node doesn't trust the registry CA** — see [Make the nodes trust the CA](#4-make-the-nodes-trust-the-ca-for-image-pulls). If `spec.global.imageRegistry` is set but the data-plane images still show public hosts, your operator predates the field (apply the node-redirect fallback). Then complete the [manual steps not handled by `wsm`](#manual-steps-not-handled-by-wsm) (license, external DNS/TLS for the W&B endpoint).

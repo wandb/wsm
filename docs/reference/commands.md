@@ -16,7 +16,7 @@ Deploys the W&B operator (v2) and W&B instances.
 
 ### `wsm deploy-v2 operator`
 
-Deploys the W&B operator and its dependencies (cert-manager, nginx-gateway-fabric).
+Deploys the W&B operator and its dependencies (cert-manager, nginx-gateway-fabric). This is **phase 1**; it does **not** create the W&B instance — run `wsm deploy-v2 wandb deploy` (phase 2) afterward.
 
 ```bash
 wsm deploy-v2 operator [flags]
@@ -36,14 +36,11 @@ wsm deploy-v2 operator [flags]
 | `--install-cert-manager` | `auto` | Cert-manager install mode: `auto`, `true`, `false` |
 | `--install-nginx-gateway` | `auto` | Nginx-gateway-fabric install mode: `auto`, `true`, `false` |
 | `--enable-gateway-api` | `true` | Enable Gateway API support in cert-manager |
-| `--include-cr` | `false` | Also deploy the W&B CR in the same command |
-| `--mirror-registry` | — | Pull every chart and image from this registry (e.g. `harbor.corp:5443`). Populate it first with `wsm registry mirror --to <same-host>`. See [On-Prem Deployment](../deployment/on-prem.md). |
+| `--mirror-registry` | — | Pull every chart and image from this registry (e.g. `harbor.corp:5443`), and set the per-subchart Helm image values so the managed-service operators + Kafka broker pull from it. Populate it first with `wsm registry mirror --to <same-host>`. See [On-Prem Deployment](../deployment/on-prem.md). |
 | `--insecure-registry` | `false` | Use plain HTTP / skip TLS verification when fetching from `--mirror-registry`. Required for plain-HTTP `registry:2`; **never** in production. |
 | `--allow-unsupported-arch` | `false` | Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is amd64-only and crashes under emulation on arm64 (e.g. Kind on Apple Silicon); WSM fails fast on this by default. |
 
-#### Inherited Flags (when `--include-cr` is used)
-
-All flags from `wsm deploy-v2 wandb deploy` are also accepted.
+> **Phase split:** the operator command no longer creates the W&B CR (the old `--include-cr` flag was removed). Install the operator stack here, then run `wsm deploy-v2 wandb deploy`.
 
 ---
 
@@ -65,6 +62,8 @@ wsm deploy-v2 wandb deploy [flags]
 | `--wandb-namespace` | `wandb` | Kubernetes namespace for the CR |
 | `--wandb-hostname` | `http://localhost:8080` | External URL for accessing W&B |
 | `--wandb-version` | — | Server manifest version (defaults to built-in stable version) |
+| `--mirror-registry` | — | Install the W&B instance from this mirror. Defaults `--manifest-repository` to `oci://<mirror>/wandb/server-manifest` and sets `spec.global.imageRegistry` so the managed data-plane images (ClickHouse/MySQL/Redis/SeaweedFS) pull from the mirror. Populate it first with `wsm registry mirror`. |
+| `--manifest-repository` | — | OCI repository for the server manifest. Auto-set from `--mirror-registry` when that is provided. |
 | `--size` | `small` | Deployment size profile: `dev`, `micro`, `small`, `medium`, `large`, `xlarge`, `xxlarge` |
 | `--license` | — | W&B license string |
 | `--license-file` | — | Path to a file containing the W&B license |

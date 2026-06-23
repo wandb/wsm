@@ -282,8 +282,9 @@ wsm cluster cleanup --context kind-wandb-local
 # Remove everything WSM deployed
 wsm cluster cleanup --context <ctx>
 
-# Re-deploy from scratch
-wsm deploy-v2 operator --context <ctx> --include-cr
+# Re-deploy from scratch (two phases)
+wsm deploy-v2 operator --context <ctx>
+wsm deploy-v2 wandb deploy --context <ctx>
 ```
 
 ---

@@ -15,7 +15,8 @@ Running the quick-start command will automatically create and configure:
 ## Prerequisites
 
 - [WSM installed](./installation.md)
-- [Docker](https://docs.docker.com/get-docker/) running
+- [Docker](https://docs.docker.com/get-docker/) running — Kind uses Docker as its container runtime. **Podman is not sufficient.** On RHEL/CentOS, Docker is not installed by default; see [Installation → Linux Dependencies](./installation.md#linux-dependencies) for setup.
+- [`kubectl`](https://kubernetes.io/docs/tasks/tools/) — used by the [Monitor the Deployment](#monitor-the-deployment) steps below.
 - Port `8080` and `8443` available on your machine
 
 ## Deploy
@@ -80,6 +81,26 @@ The quick-start deployment uses these defaults:
 | **Size** | `small` |
 | **Version** | `0.79.2` (latest stable) |
 | **Gateway Class** | `nginx` |
+
+## Troubleshooting
+
+### Deploy fails: `stale GroupVersion discovery: metrics.k8s.io/v1beta1`
+
+If the deploy aborts at the gateway-API CRD check with:
+
+```
+failed to check if gateway api crds exist: unable to retrieve the complete list of
+server APIs: metrics.k8s.io/v1beta1: stale GroupVersion discovery: metrics.k8s.io/v1beta1
+```
+
+the cluster's metrics-server `APIService` is registered but not yet `Available`, so API discovery returns a partial result. Remove the unavailable aggregated API and re-run against the existing cluster (omit `--setup-k8s-cluster` so it isn't recreated):
+
+```bash
+kubectl --context kind-wandb delete apiservice v1beta1.metrics.k8s.io
+wsm deploy-v2 operator --include-cr --size dev --context kind-wandb
+```
+
+> **Temporary workaround.** The underlying issue is fixed in `fix/handle-partial-api-discovery-in-gateway-crd-check` (stops installing metrics-server and tolerates partial API discovery); once that lands, this section can be removed.
 
 ## Next Steps
 

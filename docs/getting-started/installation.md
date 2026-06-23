@@ -31,7 +31,7 @@ On RHEL/CentOS 9:
 sudo dnf config-manager --enable codeready-builder-for-rhel-9-rhui-rpms  # AWS RHUI
 # Or for non-cloud RHEL: sudo dnf config-manager --enable crb
 
-sudo dnf install -y pkgconfig gpgme-devel gcc
+sudo dnf install -y pkgconfig gpgme-devel gcc git
 
 # go-toolset from RHEL repos is too old; install Go from the official release
 curl -LO https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
@@ -39,6 +39,14 @@ sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf go1.26.0.linux-amd64.tar.gz
 echo 'export PATH=/usr/local/go/bin:$PATH' >> ~/.bashrc
 export PATH=/usr/local/go/bin:$PATH
+
+# Kind requires Docker as its container runtime (RHEL ships podman, which is not sufficient)
+sudo dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+sudo dnf install -y docker-ce docker-ce-cli containerd.io --allowerasing
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER
+# Log out and back in for the docker group to take effect.
+# RHEL 9 defaults to cgroup v2, so no grubby/reboot step is needed.
 ```
 
 On RHEL/CentOS 8:
@@ -47,7 +55,7 @@ On RHEL/CentOS 8:
 sudo dnf config-manager --enable codeready-builder-for-rhel-8-rhui-rpms  # AWS RHUI
 # Or for non-cloud RHEL: sudo dnf config-manager --enable powertools
 
-sudo dnf install -y pkgconfig gpgme-devel gcc
+sudo dnf install -y pkgconfig gpgme-devel gcc git
 
 # go-toolset from RHEL repos is too old; install Go from the official release
 curl -LO https://go.dev/dl/go1.26.0.linux-amd64.tar.gz

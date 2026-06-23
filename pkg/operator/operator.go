@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -131,7 +132,8 @@ func setNested(obj map[string]any, value any, path ...string) {
 // before installing.
 type MirrorConfig struct {
 	Host     string // hostname[:port] of the mirror, e.g. "local-registry:5000"
-	Insecure bool   // plain HTTP / self-signed; passed to Helm's OCI client
+	Insecure bool   // plain HTTP / skip TLS verify; passed to Helm's OCI client
+	CAFile   string // path to a PEM CA bundle to trust for an HTTPS mirror (self-signed / internal CA)
 }
 
 // InstallCertManager installs cert-manager.
@@ -165,7 +167,7 @@ func InstallCertManager(ctx context.Context, enableGatewayAPI bool, skipIfPresen
 	// Create registry client. Plain-HTTP / TLS-skip needed for self-hosted
 	// mirrors that don't have a real cert (e.g. a local registry:2).
 	plainHTTP := mirror != nil && mirror.Insecure
-	registryClient, err := newRegistryClient(settings, "", "", "", plainHTTP, plainHTTP)
+	registryClient, err := newRegistryClient(settings, "", "", mirrorCAFile(mirror), plainHTTP, plainHTTP)
 	if err != nil {
 		return fmt.Errorf("failed to create registry client: %w", err)
 	}
@@ -326,7 +328,7 @@ func DeleteCertManager(ctx context.Context) error {
 
 // InstallNginxGateway installs nginx-gateway-fabric.
 // When skipIfPresent is true, installation is skipped if the nginx-gateway-fabric deployment already exists.
-func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *MirrorConfig) error {
+func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *MirrorConfig, gatewayCRDURL string, skipGatewayCRDs bool) error {
 	if skipIfPresent {
 		deploymentExists, err := nginxGatewayDeploymentExists(ctx)
 		if err != nil {
@@ -342,7 +344,17 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *Mirror
 		return fmt.Errorf("failed to check if gateway api crds exist: %w", err)
 	}
 	if !exists {
-		if err := installGatewayApiCRDs(ctx); err != nil {
+		// In an air-gapped network the default URL is unreachable. --skip-gateway-api-crds
+		// lets the customer pre-apply the CRDs (e.g. from a mirrored copy) and have wsm
+		// assume they're present; --gateway-api-crd-url points the fetch at an internal host.
+		if skipGatewayCRDs {
+			return fmt.Errorf("gateway API CRDs are not installed and --skip-gateway-api-crds was set; apply them first (kubectl apply -f <gateway-api standard-install.yaml>)")
+		}
+		crdURL := gatewayCRDURL
+		if crdURL == "" {
+			crdURL = gatewayApiCRDURL
+		}
+		if err := installGatewayApiCRDs(ctx, crdURL); err != nil {
 			return fmt.Errorf("failed to install gateway api crds: %w", err)
 		}
 	}
@@ -365,7 +377,7 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *Mirror
 	// Create registry client. Plain-HTTP / TLS-skip needed for self-hosted
 	// mirrors that don't have a real cert (e.g. a local registry:2).
 	plainHTTP := mirror != nil && mirror.Insecure
-	registryClient, err := newRegistryClient(settings, "", "", "", plainHTTP, plainHTTP)
+	registryClient, err := newRegistryClient(settings, "", "", mirrorCAFile(mirror), plainHTTP, plainHTTP)
 	if err != nil {
 		return fmt.Errorf("failed to create registry client: %w", err)
 	}
@@ -599,9 +611,9 @@ func isRetryableServerAPIDiscoveryError(err error) bool {
 	return strings.Contains(err.Error(), completeServerAPIsDiscoveryErrSubstr)
 }
 
-// installGatewayApiCRDs installs Gateway API CRDs from the official YAML URL
-func installGatewayApiCRDs(ctx context.Context) error {
-	resp, err := http.Get(gatewayApiCRDURL)
+// installGatewayApiCRDs installs Gateway API CRDs from the given YAML URL.
+func installGatewayApiCRDs(ctx context.Context, crdURL string) error {
+	resp, err := http.Get(crdURL)
 	if err != nil {
 		return fmt.Errorf("failed to fetch Gateway API CRDs: %w", err)
 	}
@@ -655,7 +667,7 @@ func DeployOperator(
 	// Create registry client. Plain-HTTP / TLS-skip needed for self-hosted
 	// mirrors that don't have a real cert (e.g. a local registry:2).
 	plainHTTP := mirror != nil && mirror.Insecure
-	registryClient, err := newRegistryClient(settings, "", "", "", plainHTTP, plainHTTP)
+	registryClient, err := newRegistryClient(settings, "", "", mirrorCAFile(mirror), plainHTTP, plainHTTP)
 	if err != nil {
 		return fmt.Errorf("failed to create registry client: %w", err)
 	}
@@ -704,6 +716,51 @@ func DeployOperator(
 			"image": operatorImage,
 		},
 		"telemetry": telemetryValues,
+	}
+
+	// Point the bundled managed-service operator subcharts at the mirror. Each
+	// third-party subchart exposes images differently (no single global knob), so
+	// we set each chart's own registry/repository key — all resolving to
+	// <mirror>/<host-stripped path>, matching where `wsm registry mirror` pushes
+	// them (translate() in registry_mirror.go). Helm deep-merges these over the
+	// chart's values.yaml, so image tags and unrelated keys are preserved.
+	// Strimzi's defaultImageRegistry also retargets the Kafka broker images
+	// (STRIMZI_KAFKA_IMAGES), so the Kafka data-plane needs no CR-level override.
+	// Verified by `helm template` against operator chart 2.0.0-alpha.2.
+	if mirror != nil {
+		// moco injects three sidecar images into every MySQLCluster via the
+		// controller's --agent-image / --fluent-bit-image / mysqld_exporter args
+		// (driven by these chart values), so all four must be retargeted — not
+		// just the controller image. Verified by `helm template`.
+		releaseValues["moco"] = map[string]interface{}{
+			"image":          map[string]interface{}{"repository": mirror.Host + "/cybozu-go/moco"},
+			"agent":          map[string]interface{}{"image": map[string]interface{}{"repository": mirror.Host + "/cybozu-go/moco-agent"}},
+			"fluentbit":      map[string]interface{}{"image": map[string]interface{}{"repository": mirror.Host + "/cybozu-go/moco/fluent-bit"}},
+			"mysqldExporter": map[string]interface{}{"image": map[string]interface{}{"repository": mirror.Host + "/cybozu-go/moco/mysqld_exporter"}},
+		}
+		releaseValues["redis-operator"] = map[string]interface{}{
+			"redisOperator": map[string]interface{}{"imageName": mirror.Host + "/opstree/redis-operator"},
+		}
+		releaseValues["strimzi-kafka-operator"] = map[string]interface{}{
+			"defaultImageRegistry": mirror.Host,
+		}
+		releaseValues["seaweedfs-operator"] = map[string]interface{}{
+			"image": map[string]interface{}{
+				"registry":   mirror.Host,
+				"repository": "chrislusf/seaweedfs-operator",
+			},
+		}
+		releaseValues["altinity-clickhouse-operator"] = map[string]interface{}{
+			"operator": map[string]interface{}{
+				"image": map[string]interface{}{"registry": mirror.Host},
+			},
+			"metrics": map[string]interface{}{
+				"image": map[string]interface{}{"registry": mirror.Host},
+			},
+			"crdHook": map[string]interface{}{
+				"image": map[string]interface{}{"repository": mirror.Host + "/alpine/k8s"},
+			},
+		}
 	}
 
 	// The operator chart's telemetry-validation requires the caller to opt the
@@ -955,6 +1012,67 @@ func initActionConfigList(settings *cli.EnvSettings, allNamespaces bool) (*actio
 	}
 
 	return actionConfig, nil
+}
+
+// mirrorCAFile returns the CA bundle path for an HTTPS mirror with a self-signed
+// or internal-CA certificate, or "" if none is configured.
+func mirrorCAFile(mirror *MirrorConfig) string {
+	if mirror == nil {
+		return ""
+	}
+	return mirror.CAFile
+}
+
+// InjectRegistryCAIntoOperator makes the wandb-operator pod trust an HTTPS
+// mirror's CA. The operator fetches the server manifest from inside the cluster
+// with its own TLS-verifying client (not containerd), so a self-signed / internal
+// CA must be present in the pod's trust store. We mount the CA as a secret and
+// point Go's SSL_CERT_FILE at it — no operator image or chart change needed.
+func InjectRegistryCAIntoOperator(ctx context.Context, namespace, caFile string) error {
+	caData, err := os.ReadFile(caFile)
+	if err != nil {
+		return fmt.Errorf("read registry CA file %q: %w", caFile, err)
+	}
+
+	_, cs, err := kubectl.GetClientset()
+	if err != nil {
+		return err
+	}
+
+	const secretName = "wsm-registry-ca"
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: namespace},
+		Data:       map[string][]byte{"ca.crt": caData},
+	}
+	if _, err := cs.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+		if !errors.IsAlreadyExists(err) {
+			return fmt.Errorf("create registry CA secret: %w", err)
+		}
+		if _, err := cs.CoreV1().Secrets(namespace).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update registry CA secret: %w", err)
+		}
+	}
+
+	const deployName = "wandb-operator"
+	dep, err := cs.AppsV1().Deployments(namespace).Get(ctx, deployName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get operator deployment: %w", err)
+	}
+	if len(dep.Spec.Template.Spec.Containers) == 0 {
+		return fmt.Errorf("operator deployment %s/%s has no containers", namespace, deployName)
+	}
+	containerName := dep.Spec.Template.Spec.Containers[0].Name
+
+	// Strategic-merge patch: lists merge by name, so this adds the volume, mount,
+	// and env without disturbing what the chart already set, and is idempotent.
+	patch := fmt.Sprintf(`{"spec":{"template":{"spec":{`+
+		`"volumes":[{"name":%q,"secret":{"secretName":%q}}],`+
+		`"containers":[{"name":%q,`+
+		`"volumeMounts":[{"name":%q,"mountPath":"/etc/wsm-ca","readOnly":true}],`+
+		`"env":[{"name":"SSL_CERT_FILE","value":"/etc/wsm-ca/ca.crt"}]}]}}}}`,
+		secretName, secretName, containerName, secretName)
+
+	return kubectl.PatchDeployment(ctx, deployName, namespace, types.StrategicMergePatchType, []byte(patch))
 }
 
 func newRegistryClient(settings *cli.EnvSettings, certFile, keyFile, caFile string, insecureSkipTLSVerify, plainHTTP bool) (*registry.Client, error) {

@@ -23,6 +23,8 @@ func registryMirrorCmd() *cobra.Command {
 		insecure             bool
 		dryRun               bool
 		operatorChartVersion string
+		wandbVersion         string
+		skipManaged          bool
 	)
 
 	cmd := &cobra.Command{
@@ -53,6 +55,14 @@ manifest and subchart images are upcoming.`,
 			targetRegistry = strings.TrimRight(targetRegistry, "/")
 
 			items := buildMirrorPlan(targetRegistry, operatorChartVersion)
+			if !skipManaged {
+				// Tier 2 (subchart operators) + tier 3 (data-plane servers) for the
+				// managed MySQL/Redis/Kafka/ClickHouse/object-store services. These
+				// pull from docker.io/quay.io/ghcr.io and are retargeted at runtime by
+				// the containerd registry mirrors wsm writes for the Kind node — the
+				// operator hardcodes the data-plane image refs with no Helm/CR knob.
+				items = append(items, buildManagedImagePlan(targetRegistry)...)
+			}
 
 			fmt.Printf("Mirroring %d artifacts to %s\n\n", len(items), targetRegistry)
 
@@ -77,7 +87,7 @@ manifest and subchart images are upcoming.`,
 					continue
 				}
 				fmt.Printf("→ %s\n  → %s ... ", item.src, item.dst)
-				if err := mirrorOne(ctx, item.src, item.dst, srcCtx, dstCtx, policyCtx); err != nil {
+				if err := copyImage(ctx, item.src, item.dst, insecure, srcCtx, dstCtx, policyCtx); err != nil {
 					fmt.Printf("✗ %v\n", err)
 					failed++
 					continue
@@ -86,14 +96,24 @@ manifest and subchart images are upcoming.`,
 				pushed++
 			}
 
-			if dryRun {
-				return nil
+			if !dryRun {
+				fmt.Printf("\n%d total — %d pushed, %d failed\n", len(items), pushed, failed)
+				if failed > 0 {
+					return fmt.Errorf("%d artifact(s) failed to mirror", failed)
+				}
 			}
 
-			fmt.Printf("\n%d total — %d pushed, %d failed\n", len(items), pushed, failed)
-			if failed > 0 {
-				return fmt.Errorf("%d artifact(s) failed to mirror", failed)
+			// The server manifest + every W&B application image it references
+			// (weave-trace, weave-python, local, console, migrations, …) are only
+			// mirrored when a version is given, since they're version-specific.
+			if wandbVersion != "" {
+				if err := mirrorServerManifest(ctx, targetRegistry, wandbVersion, insecure, dryRun, srcCtx, dstCtx, policyCtx); err != nil {
+					return err
+				}
+			} else {
+				fmt.Println("\nNote: pass --wandb-version to also mirror the server manifest and W&B app images (weave, etc.).")
 			}
+
 			return nil
 		},
 	}
@@ -102,6 +122,8 @@ manifest and subchart images are upcoming.`,
 	cmd.Flags().BoolVar(&insecure, "insecure", false, "Skip TLS verification when pushing to the mirror (use for plain-HTTP registries like local registry:2)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print the source → target mirroring plan without pushing")
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-alpha.2", "Operator chart version; also used as the tag for the operator binary image")
+	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version (e.g. 0.81.0); when set, also mirror the server manifest and every application image it references, rewriting them to point at the mirror")
+	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Don't mirror the managed-service operator + data-plane images (ClickHouse/Kafka/MySQL/Redis/object-store). Use when you run W&B against external databases.")
 	return cmd
 }
 
@@ -161,9 +183,41 @@ func buildMirrorPlan(target, operatorChartVersion string) []mirrorItem {
 	return plan
 }
 
-// mirrorOne copies a single artifact from upstream to mirror using
-// containers/image. Works for both container images and OCI helm charts —
-// they're indistinguishable at the registry transport layer.
+func buildManagedImagePlan(target string) []mirrorItem {
+	images := []string{
+		// Tier 2 — subchart operator images (default-enabled subcharts).
+		"alpine/k8s:1.35.4", // altinity-clickhouse-operator.crdHook
+		"altinity/clickhouse-operator:0.26.3",
+		"altinity/metrics-exporter:0.26.3",
+		"chrislusf/seaweedfs-operator:1.0.21",
+		"ghcr.io/cybozu-go/moco:0.34.0",
+		"quay.io/opstree/redis-operator:v0.22.2",
+		"quay.io/strimzi/operator:0.50.0",
+
+		// Tier 3 — data-plane server images.
+		"altinity/clickhouse-server:25.8.16.10002.altinitystable",
+		"quay.io/strimzi/kafka:0.50.0-kafka-4.1.0",
+		// MySQL data plane: the moco operator injects an agent + fluent-bit +
+		// mysqld_exporter sidecar into every MySQLCluster pod (versions pinned by
+		// the moco subchart, currently 0.24.0), alongside the mysql server image.
+		// All four must be mirrored or the pod stalls on Init:ErrImagePull.
+		"ghcr.io/cybozu-go/moco/mysql:8.4.8",
+		"ghcr.io/cybozu-go/moco-agent:0.15.0",
+		"ghcr.io/cybozu-go/moco/fluent-bit:4.1.1.1",
+		"ghcr.io/cybozu-go/moco/mysqld_exporter:0.18.0.1",
+		"quay.io/opstree/redis:v7.0.15",
+		"quay.io/opstree/redis-sentinel:v7.0.12",
+		"quay.io/opstree/redis-exporter:v1.44.0",
+		"chrislusf/seaweedfs:latest",
+	}
+
+	plan := make([]mirrorItem, 0, len(images))
+	for _, img := range images {
+		plan = append(plan, mirrorItem{src: img, dst: translate(img, target)})
+	}
+	return plan
+}
+
 func mirrorOne(
 	ctx context.Context,
 	source, target string,
@@ -179,13 +233,8 @@ func mirrorOne(
 		return fmt.Errorf("parse target %q: %w", target, err)
 	}
 	if _, err := copy.Image(ctx, policyCtx, dstRef, srcRef, &copy.Options{
-		SourceCtx:      srcCtx,
-		DestinationCtx: dstCtx,
-		// Copy every architecture in the manifest list, not just the one
-		// matching the host OS. A customer's k8s nodes are linux/amd64 (or
-		// linux/arm64) and must pull from the mirror; the default
-		// CopySystemImage on a Mac would land only darwin/arm64 (which
-		// often doesn't even exist) and break the install.
+		SourceCtx:          srcCtx,
+		DestinationCtx:     dstCtx,
 		ImageListSelection: copy.CopyAllImages,
 	}); err != nil {
 		return err

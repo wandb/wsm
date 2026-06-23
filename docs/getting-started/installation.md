@@ -7,7 +7,8 @@ WSM is currently distributed as source code. A pre-built binary release pipeline
 - **Operating System**: Linux, macOS, or Windows (with WSL)
 - **git**: to clone this repository
 - **Shell**: Bash or compatible shell
-- **Go**: Version 1.23 or later
+- **Go**: Version 1.26.3 or later (matches `go.mod`; older toolchains will not build)
+- **C compiler** (`gcc`): the build uses cgo via the `gpgme` dependency
 - **pkg-config** and **gpgme**: Required for Go build dependencies
 
 ### macOS Dependencies
@@ -28,8 +29,23 @@ sudo apt-get install -y pkg-config libgpgme-dev
 
 On RHEL/CentOS/Fedora:
 ```bash
-sudo dnf install -y go-toolset pkgconfig gpgme-devel
+# gpgme-devel lives in the CodeReady Builder (CRB) repo, which is disabled by
+# default on RHEL — enable it first or the gpgme-devel install will fail.
+sudo dnf config-manager --set-enabled crb        # RHEL 9 / Rocky / Alma
+# On older RHEL the repo is named differently, e.g.:
+#   sudo subscription-manager repos --enable codeready-builder-for-rhel-9-$(arch)-rpms
+
+sudo dnf install -y gcc pkgconfig gpgme-devel
 ```
+
+> **Go version**: the distro `go-toolset` package is typically too old to build WSM
+> (`go.mod` pins **go 1.26.3**). Install an upstream Go 1.26.3+ from
+> <https://go.dev/dl/> instead of `go-toolset`, e.g.:
+> ```bash
+> curl -fsSLO https://go.dev/dl/go1.26.3.linux-amd64.tar.gz
+> sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.3.linux-amd64.tar.gz
+> export PATH=$PATH:/usr/local/go/bin
+> ```
 
 ## Building from Source
 

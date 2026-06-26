@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/docker/go-connections/tlsconfig"
+	appsv1 "github.com/wandb/operator/api/v1"
 	v2 "github.com/wandb/operator/api/v2"
 	"github.com/wandb/wsm/pkg/kubectl"
 	"helm.sh/helm/v4/pkg/action"
@@ -24,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // CreateNamespace creates a namespace if it doesn't exist
@@ -1112,6 +1115,74 @@ func GetCR(ctx context.Context, name, namespace string) (*v2.WeightsAndBiases, e
 		return nil, fmt.Errorf("failed to decode WeightsAndBiases: %w", err)
 	}
 	return cr, nil
+}
+
+func ConvertV1CRToV2(ctx context.Context, name, namespace string) (*unstructured.Unstructured, *unstructured.Unstructured, error) {
+	restConfig, dynamicClient, err := kubectl.GetDynamicClientset()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	weightsAndBiasesV1Resource := schema.GroupVersionResource{
+		Group:    "apps.wandb.com",
+		Version:  "v1",
+		Resource: "weightsandbiases",
+	}
+
+	liveV1Unstructured, err := dynamicClient.Resource(weightsAndBiasesV1Resource).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil, nil, fmt.Errorf("v1 WeightsAndBiases %s/%s not found", namespace, name)
+		}
+		return nil, nil, fmt.Errorf("failed to get v1 WeightsAndBiases %s/%s: %w", namespace, name, err)
+	}
+
+	liveV1JSON, err := json.Marshal(liveV1Unstructured.Object)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal v1 CR: %w", err)
+	}
+	sourceV1CR := &appsv1.WeightsAndBiases{}
+	if err := json.Unmarshal(liveV1JSON, sourceV1CR); err != nil {
+		return nil, nil, fmt.Errorf("failed to decode v1 CR: %w", err)
+	}
+
+	conversionScheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(conversionScheme); err != nil {
+		return nil, nil, fmt.Errorf("failed to build conversion scheme: %w", err)
+	}
+	conversionReader, err := ctrlclient.New(restConfig, ctrlclient.Options{Scheme: conversionScheme})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to build conversion reader: %w", err)
+	}
+	appsv1.SetConversionReader(conversionReader)
+	defer appsv1.SetConversionReader(nil)
+
+	convertedV2CR := &v2.WeightsAndBiases{}
+	if err := sourceV1CR.ConvertTo(convertedV2CR); err != nil {
+		return nil, nil, fmt.Errorf("conversion failed: %w", err)
+	}
+	convertedV2CR.TypeMeta = metav1.TypeMeta{APIVersion: "apps.wandb.com/v2", Kind: "WeightsAndBiases"}
+
+	convertedV2Object, err := runtime.DefaultUnstructuredConverter.ToUnstructured(convertedV2CR)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to convert v2 CR to unstructured: %w", err)
+	}
+	cleanedV2CR := &unstructured.Unstructured{Object: convertedV2Object}
+	stripServerManagedMetadata(cleanedV2CR)
+
+	cleanedV1CR := liveV1Unstructured.DeepCopy()
+	stripServerManagedMetadata(cleanedV1CR)
+
+	return cleanedV1CR, cleanedV2CR, nil
+}
+
+// stripServerManagedMetadata removes status and the apiserver-managed metadata
+// fields from obj so a v1/v2 comparison reflects only spec and user metadata.
+func stripServerManagedMetadata(obj *unstructured.Unstructured) {
+	unstructured.RemoveNestedField(obj.Object, "status")
+	for _, field := range []string{"resourceVersion", "uid", "generation", "selfLink", "managedFields", "creationTimestamp"} {
+		unstructured.RemoveNestedField(obj.Object, "metadata", field)
+	}
 }
 
 // WaitForCR waits for WeightsAndBiases CR to be ready

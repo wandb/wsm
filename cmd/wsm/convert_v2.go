@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/pmezard/go-difflib/difflib"
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/operator"
 	sigsyaml "sigs.k8s.io/yaml"
@@ -30,7 +29,6 @@ func ConvertV2Cmd() *cobra.Command {
 		wandbName      string
 		wandbNamespace string
 		outputPath     string
-		format         string
 		stripRoundTrip bool
 	)
 
@@ -43,21 +41,9 @@ apps.wandb.com/v2 CR it would produce.
 
 No operator or conversion webhook needs to be installed: the conversion code is
 compiled in from the operator version wsm is built against, so the output matches
-what the in-cluster webhook would emit after upgrade.
-
-Output formats (--format) optional:
-  unified  a unified diff (default). Tip: write it to a .diff/.patch file so
-           your editor colorizes it (a .yaml extension is parsed as YAML and
-           won't highlight the +/- lines).
-  split    two YAML files, <base>-v1.yaml and <base>-v2.yaml, for a side-by-side
-           compare in your editor (VS Code: select both, right-click > Compare).
-           v1 and v2 use different shapes (v1's spec.values blob vs v2's typed
-           spec), so side-by-side is usually far more legible than a line diff.`,
+what the in-cluster webhook would emit after upgrade.`,
 
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if format != "unified" && format != "split" {
-				return fmt.Errorf("invalid --format %q (expected: unified, split)", format)
-			}
 
 			ctx := context.Background()
 
@@ -83,34 +69,8 @@ Output formats (--format) optional:
 				return fmt.Errorf("failed to marshal v2 CR to YAML: %w", err)
 			}
 
-			if format == "split" {
-				return writeSplit(outputPath, wandbName, v1YAML, v2YAML)
-			}
+			return writeSplit(outputPath, wandbName, v1YAML, v2YAML)
 
-			diff, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
-				A:        difflib.SplitLines(string(v1YAML)),
-				B:        difflib.SplitLines(string(v2YAML)),
-				FromFile: fmt.Sprintf("%s/%s (apps.wandb.com/v1)", wandbNamespace, wandbName),
-				ToFile:   fmt.Sprintf("%s/%s (apps.wandb.com/v2)", wandbNamespace, wandbName),
-				Context:  3,
-			})
-			if err != nil {
-				return fmt.Errorf("failed to build diff: %w", err)
-			}
-
-			if diff == "" {
-				diff = "# no differences between the v1 CR and the converted v2 CR\n"
-			}
-
-			if outputPath != "" {
-				if err := os.WriteFile(outputPath, []byte(diff), 0644); err != nil {
-					return fmt.Errorf("failed to write diff to %q: %w", outputPath, err)
-				}
-				fmt.Printf("Wrote v1→v2 CR diff to %s\n", outputPath)
-				return nil
-			}
-
-			fmt.Print(diff)
 			return nil
 		},
 	}
@@ -118,7 +78,6 @@ Output formats (--format) optional:
 	cmd.Flags().StringVar(&wandbName, "wandb-name", "wandb", "Name of the W&B CR to convert")
 	cmd.Flags().StringVar(&wandbNamespace, "wandb-namespace", "default", "Namespace of the W&B CR to convert")
 	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Output path: the diff file (unified) or the base path for the two files (split)")
-	cmd.Flags().StringVar(&format, "format", "unified", "Output format: unified (diff) or split (two YAML files for side-by-side compare)")
 	cmd.Flags().BoolVar(&stripRoundTrip, "strip-roundtrip", false, "Drop the legacy v1-chart/v1-values round-trip annotations that bloat the output")
 
 	return cmd

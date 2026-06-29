@@ -1155,7 +1155,6 @@ func ConvertV1CRToV2(ctx context.Context, name, namespace string) (*unstructured
 		return nil, nil, fmt.Errorf("failed to build conversion reader: %w", err)
 	}
 	appsv1.SetConversionReader(conversionReader)
-	defer appsv1.SetConversionReader(nil)
 
 	convertedV2CR := &v2.WeightsAndBiases{}
 	if err := sourceV1CR.ConvertTo(convertedV2CR); err != nil {

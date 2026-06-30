@@ -139,8 +139,7 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
 	cmd.PersistentFlags().String("wandb-version", "", "Server manifest version (e.g., 0.76.1)")
 	cmd.PersistentFlags().String("wandb-namespace", "wandb", "Namespace for CR")
-	// TODO readd this when the CR reports ready properly
-	//cmd.Flags().Bool("wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
+	cmd.PersistentFlags().Bool("wait", true, "Wait for the W&B instance to be ready (status.ready == true)")
 
 	cmd.AddCommand(operatorDeployCmd())
 	cmd.AddCommand(wandbCmd())
@@ -275,6 +274,7 @@ func wandbCreateCmd() *cobra.Command {
 			wandbName, _ := cmd.Flags().GetString("wandb-name")
 			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
 			wait, _ := cmd.Flags().GetBool("wait")
+			operatorNamespace, _ := cmd.Flags().GetString("operator-namespace")
 
 			if err := validateObservabilityMode(telemetryMode); err != nil {
 				return err
@@ -315,11 +315,15 @@ func wandbCreateCmd() *cobra.Command {
 			// Step 6: Wait for CR to be ready (if requested)
 			if wait {
 				fmt.Println("Waiting for W&B instance to be ready...")
-
+				helmRevision, err := operator.ReleaseRevision("wandb-operator", operatorNamespace)
+				if err != nil {
+					return err
+				}
 				if err := operator.WaitForCRReady(ctx, wandbCR.Namespace, wandbCR.Name, 30*time.Minute); err != nil {
 					fmt.Println(" ✗")
 					return err
 				}
+				operator.SaveCheckpoint(ctx, wandbNamespace, wandbName, wandbCR, helmRevision, true)
 			}
 
 			return nil

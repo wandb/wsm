@@ -1,12 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -85,14 +82,6 @@ func UpgradeCmd() *cobra.Command {
 			if dryRun {
 				fmt.Println("(dry-run) no changes applied.")
 				return nil
-			} else {
-				fmt.Print("Proceed? [y/N]: ")
-				answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-				answer = strings.ToLower(strings.TrimSpace(answer))
-				if answer != "y" {
-					fmt.Println("aborted.")
-					return nil
-				}
 			}
 
 			currentCR.Spec.Wandb.Version = wandbVersion
@@ -106,10 +95,15 @@ func UpgradeCmd() *cobra.Command {
 
 			if wait {
 				fmt.Printf("→ Waiting for %s/%s to be ready (timeout %s)...\n", wandbNamespace, wandbName, timeout)
+				if err != nil {
+					return err
+				}
 				if err := operator.WaitForCRReady(ctx, wandbNamespace, wandbName, timeout); err != nil {
 					return fmt.Errorf("instance did not become ready: %w", err)
 				}
 				fmt.Println("Upgrade complete.")
+				// only save CR as good if WaitForCRReady was called otherwise can't trust that it's valid
+				operator.SaveCheckpoint(ctx, wandbNamespace, wandbName, currentCR, 0, true)
 			} else {
 				fmt.Printf("Upgrade applied. Check status with: kubectl get wandb -n %s %s\n", wandbNamespace, wandbName)
 			}
@@ -122,7 +116,7 @@ func UpgradeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&wandbName, "wandb-name", "wandb", "Name of the W&B instance")
 	cmd.Flags().StringVar(&wandbNamespace, "wandb-namespace", "wandb", "Namespace of the W&B instance")
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "Target server manifest version (e.g., 0.78.0) (required)")
-	cmd.Flags().BoolVar(&wait, "wait", false, "Wait for the W&B instance to be ready after applying")
+	cmd.Flags().BoolVar(&wait, "wait", true, "Wait for the W&B instance to be ready after applying")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "Timeout when --wait is set")
 	cmd.Flags().BoolVar(&force, "force", false, "Allow downgrades and unparseable versions")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would change without applying")

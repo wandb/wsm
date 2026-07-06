@@ -139,6 +139,13 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
 	cmd.PersistentFlags().String("wandb-version", "", "Server manifest version (e.g., 0.76.1)")
 	cmd.PersistentFlags().String("wandb-namespace", "wandb", "Namespace for CR")
+	cmd.PersistentFlags().String("oidc-client-id", "", "OIDC client ID as <secret-name>:<key> (spec.wandb.oidc.clientId; optional)")
+	cmd.PersistentFlags().String("oidc-client-secret", "", "OIDC client secret as <secret-name>:<key> (spec.wandb.oidc.clientSecret; optional)")
+	cmd.PersistentFlags().String("oidc-issuer-url", "", "OIDC issuer URL as <secret-name>:<key> (spec.wandb.oidc.issuerUrl; optional)")
+	cmd.PersistentFlags().String("oidc-auth-method", "", "OIDC auth method as <secret-name>:<key> (spec.wandb.oidc.authMethod; optional)")
+	// TODO(operator-bump): add --oidc-session-length once OidcSpec.SessionLength
+	// exists upstream; set it in processWandbCR (maps to app env
+	// GORILLA_SESSION_LENGTH, operator default 720h).
 	// TODO readd this when the CR reports ready properly
 	//cmd.Flags().Bool("wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
 
@@ -274,6 +281,10 @@ func wandbCreateCmd() *cobra.Command {
 			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
 			wandbName, _ := cmd.Flags().GetString("wandb-name")
 			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
+			oidcClientID, _ := cmd.Flags().GetString("oidc-client-id")
+			oidcClientSecret, _ := cmd.Flags().GetString("oidc-client-secret")
+			oidcIssuerURL, _ := cmd.Flags().GetString("oidc-issuer-url")
+			oidcAuthMethod, _ := cmd.Flags().GetString("oidc-auth-method")
 			wait, _ := cmd.Flags().GetBool("wait")
 
 			if err := validateObservabilityMode(telemetryMode); err != nil {
@@ -302,6 +313,10 @@ func wandbCreateCmd() *cobra.Command {
 				createCA,
 				size,
 				retentionPolicy,
+				oidcClientID,
+				oidcClientSecret,
+				oidcIssuerURL,
+				oidcAuthMethod,
 			)
 			if err != nil {
 				return err
@@ -373,6 +388,10 @@ func operatorDeployCmd() *cobra.Command {
 			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
 			wandbName, _ := cmd.Flags().GetString("wandb-name")
 			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
+			oidcClientID, _ := cmd.Flags().GetString("oidc-client-id")
+			oidcClientSecret, _ := cmd.Flags().GetString("oidc-client-secret")
+			oidcIssuerURL, _ := cmd.Flags().GetString("oidc-issuer-url")
+			oidcAuthMethod, _ := cmd.Flags().GetString("oidc-auth-method")
 			wait, _ := cmd.Flags().GetBool("wait")
 
 			if err := validateObservabilityMode(telemetryMode); err != nil {
@@ -413,6 +432,10 @@ func operatorDeployCmd() *cobra.Command {
 				createCA,
 				size,
 				retentionPolicy,
+				oidcClientID,
+				oidcClientSecret,
+				oidcIssuerURL,
+				oidcAuthMethod,
 			)
 			if err != nil {
 				return err
@@ -983,6 +1006,10 @@ func processWandbCR(
 	createCA bool,
 	size string,
 	retentionPolicy string,
+	oidcClientID string,
+	oidcClientSecret string,
+	oidcIssuerURL string,
+	oidcAuthMethod string,
 ) error {
 	if crFile != "" {
 		var err error
@@ -1021,6 +1048,37 @@ func processWandbCR(
 				return err
 			}
 			wandbCR.Spec.Wandb.License = strings.TrimSpace(string(licenseData))
+		}
+	}
+
+	// Each OIDC leaf is <secret-name>:<key>. --cr-file wins: a leaf it already set
+	// is left alone (the flag for it is ignored). Empty leaves stay zero and get
+	// stripped by operator.ApplyCR when none is configured (stripFieldsNotInCRDSchema).
+	oidcRefs := []struct {
+		value string
+		field *corev1.SecretKeySelector
+		flag  string
+	}{
+		{oidcClientID, &wandbCR.Spec.Wandb.OIDC.ClientId, "--oidc-client-id"},
+		{oidcClientSecret, &wandbCR.Spec.Wandb.OIDC.ClientSecret, "--oidc-client-secret"},
+		{oidcIssuerURL, &wandbCR.Spec.Wandb.OIDC.IssuerUrl, "--oidc-issuer-url"},
+		{oidcAuthMethod, &wandbCR.Spec.Wandb.OIDC.AuthMethod, "--oidc-auth-method"},
+	}
+	for _, ref := range oidcRefs {
+		if ref.value == "" {
+			continue
+		}
+		if ref.field.Name != "" || ref.field.Key != "" {
+			fmt.Printf("ignoring %s: spec.wandb.oidc value already set by --cr-file\n", ref.flag)
+			continue
+		}
+		secretName, key, ok := strings.Cut(ref.value, ":")
+		if !ok || secretName == "" || key == "" {
+			return fmt.Errorf("%s must be in <secret-name>:<key> form, got %q", ref.flag, ref.value)
+		}
+		*ref.field = corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+			Key:                  key,
 		}
 	}
 

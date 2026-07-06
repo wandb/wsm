@@ -16,10 +16,10 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(UpgradeCmd())
+	rootCmd.AddCommand(SetVersionCmd())
 }
 
-func UpgradeCmd() *cobra.Command {
+func SetVersionCmd() *cobra.Command {
 	var (
 		kubeContext    string
 		wandbName      string
@@ -32,9 +32,9 @@ func UpgradeCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "upgrade",
-		Short: "Upgrade an existing wsm-managed W&B instance to a new version",
-		Long:  `Patch spec.wandb.version on a WeightsAndBiases CR that wsm previously deployed.`,
+		Use:   "set-version",
+		Short: "Set version of wsm-managed W&B instance",
+		Long:  `Patch spec.wandb.version on a specific WeightsAndBiases CR`,
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if kubeContext == "" {
 				return errors.New("--context is required")

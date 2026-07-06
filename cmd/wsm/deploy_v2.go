@@ -1051,7 +1051,8 @@ func processWandbCR(
 		}
 	}
 
-	// Each OIDC leaf is <secret-name>:<key>; empty leaves stay zero and get
+	// Each OIDC leaf is <secret-name>:<key>. --cr-file wins: a leaf it already set
+	// is left alone (the flag for it is ignored). Empty leaves stay zero and get
 	// stripped by operator.ApplyCR when none is configured (stripFieldsNotInCRDSchema).
 	oidcRefs := []struct {
 		value string
@@ -1065,6 +1066,10 @@ func processWandbCR(
 	}
 	for _, ref := range oidcRefs {
 		if ref.value == "" {
+			continue
+		}
+		if ref.field.Name != "" || ref.field.Key != "" {
+			fmt.Printf("ignoring %s: spec.wandb.oidc value already set by --cr-file\n", ref.flag)
 			continue
 		}
 		secretName, key, ok := strings.Cut(ref.value, ":")

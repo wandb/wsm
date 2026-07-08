@@ -38,9 +38,15 @@ side can fetch everything from --mirror-registry instead of the public sources.
 Auth is read from your Docker config (~/.docker/config.json) by default. Use
 --insecure for a plain-HTTP / self-signed mirror (e.g. a local registry:2).
 
-Currently mirrors: the operator OCI chart and binary image, cert-manager and
-its 5 component images, and nginx-gateway-fabric with its 2 images. Server
-manifest and subchart images are upcoming.`,
+Mirrors, across three tiers: (1) the operator OCI chart + binary image,
+cert-manager and its 5 component images, and nginx-gateway-fabric with its 2
+images; (2) the managed-service operator images (moco/strimzi/altinity/opstree/
+seaweedfs); (3) the managed data-plane images (ClickHouse/Kafka/MySQL/Redis/
+SeaweedFS servers). With --wandb-version it also mirrors the server manifest and
+every W&B application image it references (weave, megabinary, frontend, …),
+rewriting the manifest's image refs to point at the mirror. Pass
+--skip-managed-images to omit tiers 2 and 3 (e.g. when running W&B against
+external databases).`,
 		Example: `  # Mirror everything to a local registry:2 on localhost:5000.
   wsm registry mirror --to localhost:5000 --insecure
 
@@ -57,11 +63,14 @@ manifest and subchart images are upcoming.`,
 
 			items := buildMirrorPlan(targetRegistry, operatorChartVersion)
 			if !skipManaged {
-				// Tier 2 (subchart operators) + tier 3 (data-plane servers) for the
-				// managed MySQL/Redis/Kafka/ClickHouse/object-store services. These
-				// pull from docker.io/quay.io/ghcr.io and are retargeted at runtime by
-				// the containerd registry mirrors wsm writes for the Kind node — the
-				// operator hardcodes the data-plane image refs with no Helm/CR knob.
+				// Managed MySQL/Redis/Kafka/ClickHouse/object-store services. These
+				// pull from docker.io/quay.io/ghcr.io and are pushed to provided registry mirror
+				// At install they're retargeted to the mirror by:
+				// Helm image values set from --mirror-registry using
+				// spec.global.imageRegistry on the CR, which the operator host-replaces
+				// (requires an operator version that declares the field). On a plain-HTTP local
+				// install without that field, the node's containerd registry mirrors
+				// (wsm cluster create --insecure-registry-host) redirect them instead.
 				items = append(items, buildManagedImagePlan(targetRegistry)...)
 			}
 

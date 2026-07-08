@@ -67,6 +67,10 @@ wsm deploy-v2 wandb deploy [flags]
 | `--size` | `small` | Deployment size profile: `dev`, `micro`, `small`, `medium`, `large`, `xlarge`, `xxlarge` |
 | `--license` | — | W&B license string |
 | `--license-file` | — | Path to a file containing the W&B license |
+| `--oidc-client-id` | — | OIDC client ID as `<secret-name>:<key>` (`spec.wandb.oidc.clientId`). Optional; leave unset to disable OIDC. Ignored for any leaf already set via `--cr-file` |
+| `--oidc-client-secret` | — | OIDC client secret as `<secret-name>:<key>` (`spec.wandb.oidc.clientSecret`) |
+| `--oidc-issuer-url` | — | OIDC issuer URL as `<secret-name>:<key>` (`spec.wandb.oidc.issuerUrl`) |
+| `--oidc-auth-method` | — | OIDC auth method as `<secret-name>:<key>` (`spec.wandb.oidc.authMethod`) |
 | `--gateway-class` | `nginx` | Gateway class name (selects Gateway API mode; the default). Mutually exclusive with `--ingress-class` |
 | `--ingress-class` | — | Ingress class name (selects Ingress mode). Takes precedence over the default `--gateway-class`; setting both explicitly is an error |
 | `--ingress-name` | — | Override the generated Ingress resource name (defaults to the CR name) |

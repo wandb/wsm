@@ -141,6 +141,13 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("wandb-version", "", "Server manifest version (e.g., 0.76.1)")
 	cmd.PersistentFlags().String("manifest-repository", "", "OCI repository for the server manifest (e.g. oci://harbor.corp/wandb/server-manifest). Defaults to oci://<mirror>/wandb/server-manifest when --mirror-registry is set, else the operator default.")
 	cmd.PersistentFlags().String("wandb-namespace", "wandb", "Namespace for CR")
+	cmd.PersistentFlags().String("oidc-client-id", "", "OIDC client ID as <secret-name>:<key> (spec.wandb.oidc.clientId; optional)")
+	cmd.PersistentFlags().String("oidc-client-secret", "", "OIDC client secret as <secret-name>:<key> (spec.wandb.oidc.clientSecret; optional)")
+	cmd.PersistentFlags().String("oidc-issuer-url", "", "OIDC issuer URL as <secret-name>:<key> (spec.wandb.oidc.issuerUrl; optional)")
+	cmd.PersistentFlags().String("oidc-auth-method", "", "OIDC auth method as <secret-name>:<key> (spec.wandb.oidc.authMethod; optional)")
+	// TODO(operator-bump): add --oidc-session-length once OidcSpec.SessionLength
+	// exists upstream; set it in processWandbCR (maps to app env
+	// GORILLA_SESSION_LENGTH, operator default 720h).
 	// TODO readd this when the CR reports ready properly
 	//cmd.Flags().Bool("wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
 
@@ -279,6 +286,10 @@ func wandbCreateCmd() *cobra.Command {
 			manifestRepo, _ := cmd.Flags().GetString("manifest-repository")
 			objectStoreStorageSize, _ := cmd.Flags().GetString("object-store-storage-size")
 			mirrorRegistry, _ := cmd.Flags().GetString("mirror-registry")
+			oidcClientID, _ := cmd.Flags().GetString("oidc-client-id")
+			oidcClientSecret, _ := cmd.Flags().GetString("oidc-client-secret")
+			oidcIssuerURL, _ := cmd.Flags().GetString("oidc-issuer-url")
+			oidcAuthMethod, _ := cmd.Flags().GetString("oidc-auth-method")
 			wait, _ := cmd.Flags().GetBool("wait")
 
 			if err := validateObservabilityMode(telemetryMode); err != nil {
@@ -317,6 +328,10 @@ func wandbCreateCmd() *cobra.Command {
 				retentionPolicy,
 				manifestRepo,
 				objectStoreStorageSize,
+				oidcClientID,
+				oidcClientSecret,
+				oidcIssuerURL,
+				oidcAuthMethod,
 			)
 			if err != nil {
 				return err
@@ -393,17 +408,17 @@ func operatorDeployCmd() *cobra.Command {
 			forwardHeaders, _ := cmd.Flags().GetStringToString("observability-forward-headers")
 			wandbNamespace, _ := cmd.Flags().GetString("wandb-namespace")
 
-			// A plain-HTTP / TLS-skipped mirror installs the operator stack offline
-			// (operator, cert-manager, nginx-gateway, the managed-service operators),
-			// but it cannot bring up the W&B instance: the operator fetches the
-			// server manifest over HTTPS from inside the cluster (its own client,
-			// with TLS verification, not containerd), so a plain-HTTP mirror can't
-			// serve it. Warn, don't block — this is the supported local-testing path
-			// for the install layer. Use --registry-ca-file with an HTTPS mirror for
-			// a full deploy (see docs/deployment/on-prem.md).
 			if mirrorRegistry != "" && insecureRegistry {
 				fmt.Println("⚠ --insecure-registry: the operator stack will install from the mirror, but the W&B instance will NOT reconcile — the operator fetches the server manifest over HTTPS and cannot use a plain-HTTP registry. For a full offline install, serve the mirror over HTTPS and pass --registry-ca-file. See docs/deployment/on-prem.md.")
 			}
+			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
+			wandbName, _ := cmd.Flags().GetString("wandb-name")
+			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
+			oidcClientID, _ := cmd.Flags().GetString("oidc-client-id")
+			oidcClientSecret, _ := cmd.Flags().GetString("oidc-client-secret")
+			oidcIssuerURL, _ := cmd.Flags().GetString("oidc-issuer-url")
+			oidcAuthMethod, _ := cmd.Flags().GetString("oidc-auth-method")
+			wait, _ := cmd.Flags().GetBool("wait")
 
 			if err := validateObservabilityMode(telemetryMode); err != nil {
 				return err
@@ -426,7 +441,33 @@ func operatorDeployCmd() *cobra.Command {
 				ForwardHeaders:    forwardHeaders,
 			}
 
-			// Perform the operator-stack deployment (phase 1 only — no CR).
+			err := processWandbCR(
+				crFile,
+				wandbVersion,
+				wandbName,
+				wandbHostname,
+				gatewayClass,
+				ingressClass,
+				ingressName,
+				issuerName,
+				addIngressAnnotations,
+				license,
+				licenseFile,
+				telemetryMode,
+				wandbNamespace,
+				createCA,
+				size,
+				retentionPolicy,
+				oidcClientID,
+				oidcClientSecret,
+				oidcIssuerURL,
+				oidcAuthMethod,
+			)
+			if err != nil {
+				return err
+			}
+
+			// Perform the deployment
 			deployStart := time.Now()
 			if err := performDeploy(
 				setupCluster,
@@ -1010,6 +1051,10 @@ func processWandbCR(
 	retentionPolicy string,
 	manifestRepo string,
 	objectStoreStorageSize string,
+	oidcClientID string,
+	oidcClientSecret string,
+	oidcIssuerURL string,
+	oidcAuthMethod string,
 ) error {
 	if crFile != "" {
 		var err error
@@ -1060,6 +1105,37 @@ func processWandbCR(
 				return err
 			}
 			wandbCR.Spec.Wandb.License = strings.TrimSpace(string(licenseData))
+		}
+	}
+
+	// Each OIDC leaf is <secret-name>:<key>. --cr-file wins: a leaf it already set
+	// is left alone (the flag for it is ignored). Empty leaves stay zero and get
+	// stripped by operator.ApplyCR when none is configured (stripFieldsNotInCRDSchema).
+	oidcRefs := []struct {
+		value string
+		field *corev1.SecretKeySelector
+		flag  string
+	}{
+		{oidcClientID, &wandbCR.Spec.Wandb.OIDC.ClientId, "--oidc-client-id"},
+		{oidcClientSecret, &wandbCR.Spec.Wandb.OIDC.ClientSecret, "--oidc-client-secret"},
+		{oidcIssuerURL, &wandbCR.Spec.Wandb.OIDC.IssuerUrl, "--oidc-issuer-url"},
+		{oidcAuthMethod, &wandbCR.Spec.Wandb.OIDC.AuthMethod, "--oidc-auth-method"},
+	}
+	for _, ref := range oidcRefs {
+		if ref.value == "" {
+			continue
+		}
+		if ref.field.Name != "" || ref.field.Key != "" {
+			fmt.Printf("ignoring %s: spec.wandb.oidc value already set by --cr-file\n", ref.flag)
+			continue
+		}
+		secretName, key, ok := strings.Cut(ref.value, ":")
+		if !ok || secretName == "" || key == "" {
+			return fmt.Errorf("%s must be in <secret-name>:<key> form, got %q", ref.flag, ref.value)
+		}
+		*ref.field = corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+			Key:                  key,
 		}
 	}
 

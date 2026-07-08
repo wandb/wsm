@@ -1148,12 +1148,36 @@ func stripFieldsNotInCRDSchema(obj *unstructured.Unstructured) {
 	// .status is always operator-owned; never SSA from the client side.
 	unstructured.RemoveNestedField(obj.Object, "status")
 
-	// OidcSpec is a by-value struct in the v2 Go API, so Go's `omitempty`
-	// does not drop a zero value — wsm would emit oidc.{clientId,clientSecret,
-	// issuerUrl,authMethod}: {"key": ""} on every apply even when no OIDC is
-	// configured. Drop the whole oidc block; wsm has no flag for it, so a
-	// user with OIDC needs --cr-file regardless.
-	unstructured.RemoveNestedField(obj.Object, "spec", "wandb", "oidc")
+	// OidcSpec is a by-value struct, so `omitempty` can't drop its zero value
+	// (serializes as oidc.*: {"key": ""}). Strip it unless a leaf is set, so
+	// configured OIDC (flags or --cr-file) still reaches the CRD.
+	// TODO(operator-bump): drop this once OidcSpec is a pointer upstream — the
+	// alpha.2 CRD already tolerates the empty block (verified on Kind).
+	if !oidcConfigured(obj) {
+		unstructured.RemoveNestedField(obj.Object, "spec", "wandb", "oidc")
+	}
+}
+
+// oidcConfigured reports whether spec.wandb.oidc has any leaf selector with a
+// non-empty name or key (a real reference, not the zero-value struct).
+func oidcConfigured(obj *unstructured.Unstructured) bool {
+	oidc, found, err := unstructured.NestedMap(obj.Object, "spec", "wandb", "oidc")
+	if err != nil || !found {
+		return false
+	}
+	for _, leaf := range oidc {
+		selector, ok := leaf.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if name, _, _ := unstructured.NestedString(selector, "name"); name != "" {
+			return true
+		}
+		if key, _, _ := unstructured.NestedString(selector, "key"); key != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // DeleteCR deletes a WeightsAndBiases CR from the cluster

@@ -411,14 +411,6 @@ func operatorDeployCmd() *cobra.Command {
 			if mirrorRegistry != "" && insecureRegistry {
 				fmt.Println("⚠ --insecure-registry: the operator stack will install from the mirror, but the W&B instance will NOT reconcile — the operator fetches the server manifest over HTTPS and cannot use a plain-HTTP registry. For a full offline install, serve the mirror over HTTPS and pass --registry-ca-file. See docs/deployment/on-prem.md.")
 			}
-			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
-			wandbName, _ := cmd.Flags().GetString("wandb-name")
-			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
-			oidcClientID, _ := cmd.Flags().GetString("oidc-client-id")
-			oidcClientSecret, _ := cmd.Flags().GetString("oidc-client-secret")
-			oidcIssuerURL, _ := cmd.Flags().GetString("oidc-issuer-url")
-			oidcAuthMethod, _ := cmd.Flags().GetString("oidc-auth-method")
-			wait, _ := cmd.Flags().GetBool("wait")
 
 			if err := validateObservabilityMode(telemetryMode); err != nil {
 				return err
@@ -439,32 +431,6 @@ func operatorDeployCmd() *cobra.Command {
 				OtelResourceAttrs: otelResourceAttrs,
 				ForwardProtocol:   forwardProtocol,
 				ForwardHeaders:    forwardHeaders,
-			}
-
-			err := processWandbCR(
-				crFile,
-				wandbVersion,
-				wandbName,
-				wandbHostname,
-				gatewayClass,
-				ingressClass,
-				ingressName,
-				issuerName,
-				addIngressAnnotations,
-				license,
-				licenseFile,
-				telemetryMode,
-				wandbNamespace,
-				createCA,
-				size,
-				retentionPolicy,
-				oidcClientID,
-				oidcClientSecret,
-				oidcIssuerURL,
-				oidcAuthMethod,
-			)
-			if err != nil {
-				return err
 			}
 
 			// Perform the deployment

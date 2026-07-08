@@ -25,6 +25,7 @@ func registryMirrorCmd() *cobra.Command {
 		operatorChartVersion string
 		wandbVersion         string
 		skipManaged          bool
+		manifestSource       string
 	)
 
 	cmd := &cobra.Command{
@@ -107,7 +108,7 @@ manifest and subchart images are upcoming.`,
 			// (weave-trace, weave-python, local, console, migrations, …) are only
 			// mirrored when a version is given, since they're version-specific.
 			if wandbVersion != "" {
-				if err := mirrorServerManifest(ctx, targetRegistry, wandbVersion, insecure, dryRun, srcCtx, dstCtx, policyCtx); err != nil {
+				if err := mirrorServerManifest(ctx, targetRegistry, wandbVersion, manifestSource, insecure, dryRun, srcCtx, dstCtx, policyCtx); err != nil {
 					return err
 				}
 			} else {
@@ -124,6 +125,11 @@ manifest and subchart images are upcoming.`,
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-alpha.2", "Operator chart version; also used as the tag for the operator binary image")
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version (e.g. 0.81.0); when set, also mirror the server manifest and every application image it references, rewriting them to point at the mirror")
 	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Don't mirror the managed-service operator + data-plane images (ClickHouse/Kafka/MySQL/Redis/object-store). Use when you run W&B against external databases.")
+	// TESTING ONLY, hidden from --help: pull the server manifest from a non-upstream
+	// OCI repo (e.g. a local Tilt registry serving unreleased wandb/core manifest
+	// changes) instead of us-docker.pkg.dev. Not a supported customer workflow.
+	cmd.Flags().StringVar(&manifestSource, "manifest-source", "", "TESTING ONLY: pull the server manifest from this OCI repo (host/path, no tag) instead of the public upstream; --wandb-version supplies the tag. Reuses --insecure for TLS skip.")
+	_ = cmd.Flags().MarkHidden("manifest-source")
 	return cmd
 }
 

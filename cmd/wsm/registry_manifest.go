@@ -53,14 +53,28 @@ const wandbPublicPrefix = "us-docker.pkg.dev/wandb-production/public/"
 // brings the whole app up with no public-registry access.
 func mirrorServerManifest(
 	ctx context.Context,
-	target, version string,
+	target, version, manifestSource string,
 	insecure, dryRun bool,
 	srcCtx, dstCtx *types.SystemContext,
 	policyCtx *signature.PolicyContext,
 ) error {
-	fmt.Printf("\nServer manifest %s:%s\n", serverManifestUpstream, version)
+	// manifestSource is a hidden dev/testing override (--manifest-source): pull
+	// the manifest from a non-upstream OCI repo (e.g. a local Tilt registry
+	// serving unreleased wandb/core changes) instead of serverManifestUpstream.
+	// Not a supported customer workflow.
+	source := serverManifestUpstream
+	if manifestSource != "" {
+		source = manifestSource
+	}
+	fmt.Printf("\nServer manifest %s:%s\n", source, version)
 
-	files, err := pullManifestYAML(ctx, version)
+	var files map[string][]byte
+	var err error
+	if manifestSource != "" {
+		files, err = pullManifestYAMLFrom(ctx, manifestSource, version, insecure)
+	} else {
+		files, err = pullManifestYAML(ctx, version)
+	}
 	if err != nil {
 		return fmt.Errorf("pull server manifest: %w", err)
 	}
@@ -70,7 +84,7 @@ func mirrorServerManifest(
 		return fmt.Errorf("enumerate manifest images: %w", err)
 	}
 	if len(refs) == 0 {
-		return fmt.Errorf("server manifest %s:%s referenced no images", serverManifestUpstream, version)
+		return fmt.Errorf("server manifest %s:%s referenced no images", source, version)
 	}
 
 	// Map each unique source repository to its mirror location once; the same
@@ -82,7 +96,7 @@ func mirrorServerManifest(
 
 	fmt.Printf("  %d application image(s) referenced:\n", len(refs))
 	for _, ref := range refs {
-		src := ref.GetImage()
+		src := ref.GetImage("")
 		dst := mirrorImageRef(target, ref)
 		fmt.Printf("    %s\n      → %s\n", src, dst)
 	}
@@ -99,7 +113,7 @@ func mirrorServerManifest(
 	// report them after the manifest is pushed.
 	var failedImages []string
 	for _, ref := range refs {
-		src := ref.GetImage()
+		src := ref.GetImage("")
 		dst := mirrorImageRef(target, ref)
 		fmt.Printf("→ %s\n  → %s ... ", src, dst)
 		if err := copyImage(ctx, src, dst, insecure, srcCtx, dstCtx, policyCtx); err != nil {
@@ -332,7 +346,7 @@ func collectManifestImages(files map[string][]byte) ([]wmanifest.ImageRef, error
 		if ref.Repository == "" {
 			return
 		}
-		key := ref.GetImage()
+		key := ref.GetImage("")
 		if _, ok := seen[key]; ok {
 			return
 		}
@@ -388,7 +402,7 @@ func mirrorImageRef(target string, ref wmanifest.ImageRef) string {
 		Tag:        ref.Tag,
 		Digest:     ref.Digest,
 	}
-	return mirrored.GetImage()
+	return mirrored.GetImage("")
 }
 
 // replaceRepo replaces every standalone occurrence of oldRepo with newRepo in

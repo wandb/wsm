@@ -161,7 +161,7 @@ func registryCheckCmd() *cobra.Command {
 					manifestWarn = fmt.Sprintf("could not parse server manifest %s:%s — application images not checked (%v)", manifestRepo, wandbVersion, err)
 				} else {
 					for _, r := range refs {
-						targets = append(targets, r.GetImage())
+						targets = append(targets, r.GetImage(""))
 					}
 				}
 			}

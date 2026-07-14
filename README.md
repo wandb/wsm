@@ -20,8 +20,24 @@ Basic commands to get started:
 wsm list
 wsm download
 wsm deploy
+wsm version   # print the build's version, commit, and date
 wsm --help
 ```
+
+## Releasing
+
+Releases are cut automatically when a PR is merged into `main` — no manual tagging needed.
+
+- The version bump is chosen by a label on the merged PR:
+  - `release:major` → `vX+1.0.0`
+  - `release:minor` → `vX.Y+1.0`
+  - `release:patch` (or no label) → `vX.Y.Z+1`
+  - `release:skip` → no release
+- The new tag is pushed and [GoReleaser](https://goreleaser.com) builds the binaries and
+  publishes the GitHub release. The version is baked into the binary — check it with
+  `wsm version`.
+- Need to cut one by hand? Push a tag (`git tag vX.Y.Z && git push origin vX.Y.Z`) and the
+  same build runs.
 
 ## Requirements
 

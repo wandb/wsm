@@ -8,8 +8,14 @@ ifeq ($(shell uname),Darwin)
 	export LDFLAGS=-w
 endif
 
+# Version stamp for local builds; CI releases are stamped by GoReleaser instead.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+GO_LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
+
 build:
-	go build -o wsm ./cmd/wsm
+	go build -ldflags "$(GO_LDFLAGS)" -o wsm ./cmd/wsm
 
 # Modern linter installation
 install-lint:

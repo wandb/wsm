@@ -26,6 +26,8 @@ cmd/wsm/bundle/
 
 bundle/
 
-wsm
+# Anchored to repo root: the built binary is ./wsm. An unanchored `wsm` would
+# also match the cmd/wsm/ directory and silently ignore new files added there.
+/wsm
 
 test-wsm/

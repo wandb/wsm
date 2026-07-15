@@ -172,6 +172,7 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().StringArray("custom-ca-cert-file", nil, "Path to a PEM CA certificate to trust in W&B workloads; repeatable (spec.global.customCACerts; optional)")
 	cmd.PersistentFlags().String("custom-ca-configmap", "", "Name of a ConfigMap holding CA certificates to trust in W&B workloads (spec.global.caCertsConfigMap; optional)")
 	cmd.PersistentFlags().Int32("objectstore-copies", 0, "Managed object store replica copies (spec.objectStore.managedObjectStore.copies; optional, operator default when unset)")
+	cmd.PersistentFlags().Bool("bucket-proxy", false, "Route object-store access through the W&B app instead of direct client access (spec.wandb.bucketProxy; optional, operator default when unset)")
 	cmd.PersistentFlags().StringArray("cr-set", nil, "Set an arbitrary CR field as <path>=<value>, e.g. spec.wandb.version=0.82.2; repeatable, YAML-typed, overrides the built-in template, --cr-file, and the typed flags above")
 	// TODO readd this when the CR reports ready properly
 	//cmd.Flags().Bool("wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
@@ -960,6 +961,14 @@ func changedInt32(cmd *cobra.Command, name string) *int32 {
 	return &v
 }
 
+func changedBool(cmd *cobra.Command, name string) *bool {
+	if !cmd.Flags().Changed(name) {
+		return nil
+	}
+	v, _ := cmd.Flags().GetBool(name)
+	return &v
+}
+
 // wandbCRFlags holds every flag value that shapes the WeightsAndBiases CR. Both
 // `wandb deploy` and `operator` build the same CR, so they read this one set via
 // wandbCRFlagsFrom — keeping the two commands in lockstep and avoiding a long
@@ -990,6 +999,7 @@ type wandbCRFlags struct {
 	customCACertFiles     []string
 	customCAConfigMap     string
 	objectStoreCopies     *int32
+	bucketProxy           *bool
 	// crSet is applied to the unstructured CR at apply time (operator.ApplyCR),
 	// not by processWandbCR, since it can address any field the typed struct has.
 	crSet []string
@@ -1029,6 +1039,7 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 		customCACertFiles:     certFiles,
 		customCAConfigMap:     str("custom-ca-configmap"),
 		objectStoreCopies:     changedInt32(cmd, "objectstore-copies"),
+		bucketProxy:           changedBool(cmd, "bucket-proxy"),
 		crSet:                 crSet,
 	}
 }
@@ -1254,6 +1265,10 @@ func processWandbCR(f wandbCRFlags) error {
 		if o, ok := wandbCR.Spec.ObjectStore[v2.DefaultInstanceName]; ok && o.ManagedObjectStore != nil {
 			o.ManagedObjectStore.Copies = *f.objectStoreCopies
 		}
+	}
+
+	if f.bucketProxy != nil {
+		wandbCR.Spec.Wandb.BucketProxy = *f.bucketProxy
 	}
 
 	wandbCR.Namespace = f.wandbNamespace

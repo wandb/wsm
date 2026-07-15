@@ -27,6 +27,11 @@ builds:
     tags:
     - containers_image_openpgp
     main: ./cmd/wsm
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
 
 archives:
   - format: tar.gz

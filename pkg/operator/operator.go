@@ -14,6 +14,7 @@ import (
 	appsv1 "github.com/wandb/operator/api/v1"
 	v2 "github.com/wandb/operator/api/v2"
 	"github.com/wandb/wsm/pkg/kubectl"
+	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/loader"
 	"helm.sh/helm/v4/pkg/cli"
@@ -1001,7 +1002,7 @@ func newRegistryClient(settings *cli.EnvSettings, certFile, keyFile, caFile stri
 	return registryClient, nil
 }
 
-func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases) error {
+func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases, overrides []CROverride) error {
 	gvk := wandbCR.GroupVersionKind()
 	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(wandbCR)
 	if err != nil {
@@ -1015,11 +1016,99 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases) error {
 
 	stripFieldsNotInCRDSchema(obj)
 
+	// --cr-set overrides are applied last — after the template, --cr-file, typed
+	// flags, and the strip — so a set field always wins and is never removed. The
+	// CRD validates the result server-side on apply.
+	for _, o := range overrides {
+		if err := unstructured.SetNestedField(obj.Object, o.Value, o.Path...); err != nil {
+			return fmt.Errorf("failed to apply --cr-set %s: %w", strings.Join(o.Path, "."), err)
+		}
+	}
+
 	if err := kubectl.ApplyUnstructured(ctx, obj); err != nil {
 		return fmt.Errorf("failed to apply CR: %w", err)
 	}
 
 	return nil
+}
+
+// CROverride is a parsed `--cr-set path=value` entry applied to the CR just
+// before it is sent to the apiserver. Path is the dotted field path split into
+// segments; Value is a JSON-compatible scalar/list/map inferred from the RHS.
+type CROverride struct {
+	Path  []string
+	Value interface{}
+}
+
+// ParseCROverrides parses `path=value` entries. The value is interpreted as
+// YAML, so `3` becomes a number, `true` a bool, `720h` a string, and `[a,b]` a
+// list. Parsing happens up front so a malformed entry fails before any cluster
+// change. Paths address map/struct fields by dotted name (list indices are not
+// supported — use --cr-file for those).
+func ParseCROverrides(sets []string) ([]CROverride, error) {
+	overrides := make([]CROverride, 0, len(sets))
+	for _, s := range sets {
+		path, rawValue, ok := strings.Cut(s, "=")
+		if !ok || path == "" {
+			return nil, fmt.Errorf("--cr-set %q must be in path=value form", s)
+		}
+		var value interface{}
+		if err := yaml.Unmarshal([]byte(rawValue), &value); err != nil {
+			return nil, fmt.Errorf("--cr-set %q: invalid value: %w", s, err)
+		}
+		value, err := toJSONCompatible(value)
+		if err != nil {
+			return nil, fmt.Errorf("--cr-set %q: %w", s, err)
+		}
+		overrides = append(overrides, CROverride{Path: strings.Split(path, "."), Value: value})
+	}
+	return overrides, nil
+}
+
+// toJSONCompatible converts a yaml.Unmarshal result into the types
+// unstructured.SetNestedField accepts (int64/float64/bool/string/nil, and
+// slices/maps thereof), recursing through lists and maps.
+func toJSONCompatible(v interface{}) (interface{}, error) {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		for k, e := range val {
+			n, err := toJSONCompatible(e)
+			if err != nil {
+				return nil, err
+			}
+			val[k] = n
+		}
+		return val, nil
+	case map[interface{}]interface{}:
+		m := make(map[string]interface{}, len(val))
+		for k, e := range val {
+			ks, ok := k.(string)
+			if !ok {
+				return nil, fmt.Errorf("map keys must be strings, got %T", k)
+			}
+			n, err := toJSONCompatible(e)
+			if err != nil {
+				return nil, err
+			}
+			m[ks] = n
+		}
+		return m, nil
+	case []interface{}:
+		for i, e := range val {
+			n, err := toJSONCompatible(e)
+			if err != nil {
+				return nil, err
+			}
+			val[i] = n
+		}
+		return val, nil
+	case int:
+		return int64(val), nil
+	case int64, float64, bool, string, nil:
+		return val, nil
+	default:
+		return nil, fmt.Errorf("unsupported value type %T", v)
+	}
 }
 
 // stripFieldsNotInCRDSchema removes fields the Go API types include but the

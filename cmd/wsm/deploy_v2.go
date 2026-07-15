@@ -158,6 +158,7 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().StringArray("custom-ca-cert-file", nil, "Path to a PEM CA certificate to trust in W&B workloads; repeatable (spec.global.customCACerts; optional)")
 	cmd.PersistentFlags().String("custom-ca-configmap", "", "Name of a ConfigMap holding CA certificates to trust in W&B workloads (spec.global.caCertsConfigMap; optional)")
 	cmd.PersistentFlags().Int32("objectstore-copies", 0, "Managed object store replica copies (spec.objectStore.managedObjectStore.copies; optional, operator default when unset)")
+	cmd.PersistentFlags().StringArray("cr-set", nil, "Set an arbitrary CR field as <path>=<value>, e.g. spec.wandb.version=0.82.2; repeatable, YAML-typed, overrides the built-in template, --cr-file, and the typed flags above")
 	// TODO readd this when the CR reports ready properly
 	//cmd.Flags().Bool("wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
 
@@ -286,6 +287,10 @@ func wandbCreateCmd() *cobra.Command {
 			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), f.gatewayClass, f.ingressClass); err != nil {
 				return err
 			}
+			crOverrides, err := operator.ParseCROverrides(f.crSet)
+			if err != nil {
+				return err
+			}
 
 			ctx := context.Background()
 
@@ -293,7 +298,7 @@ func wandbCreateCmd() *cobra.Command {
 				return err
 			}
 
-			err := deployWandbCR(ctx, f.createCA, createAwsStorageClass, createAwsIngressClass, f.ingressClass)
+			err = deployWandbCR(ctx, f.createCA, createAwsStorageClass, createAwsIngressClass, f.ingressClass, crOverrides)
 			if err != nil {
 				return err
 			}
@@ -355,6 +360,10 @@ func operatorDeployCmd() *cobra.Command {
 			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), f.gatewayClass, f.ingressClass); err != nil {
 				return err
 			}
+			crOverrides, err := operator.ParseCROverrides(f.crSet)
+			if err != nil {
+				return err
+			}
 
 			telemetry := operator.TelemetryConfig{
 				Mode:              f.telemetryMode,
@@ -393,6 +402,7 @@ func operatorDeployCmd() *cobra.Command {
 				kindNodeImage,
 				mirrorRegistry,
 				insecureRegistry,
+				crOverrides,
 			); err != nil {
 				fmt.Printf("\n✗ Deployment failed: %v\n", err)
 				return err
@@ -452,6 +462,7 @@ func performDeploy(
 	kindNodeImage string,
 	mirrorRegistry string,
 	insecureRegistry bool,
+	crOverrides []operator.CROverride,
 ) error {
 	ctx := context.Background()
 	installNginxGatewayMode = strings.ToLower(strings.TrimSpace(installNginxGatewayMode))
@@ -603,7 +614,7 @@ func performDeploy(
 		fmt.Printf("[%d/%d] Creating W&B instance...", currentStep, totalSteps)
 		start = time.Now()
 
-		err := deployWandbCR(ctx, createCA, createAwsStorageClass, createAwsIngressClass, ingressClass)
+		err := deployWandbCR(ctx, createCA, createAwsStorageClass, createAwsIngressClass, ingressClass, crOverrides)
 		if err != nil {
 			return err
 		}
@@ -649,7 +660,7 @@ func destroyWandbCR(ctx context.Context, name string, namespace string) error {
 	return nil
 }
 
-func deployWandbCR(ctx context.Context, createCA bool, createAwsStorageClass, createAwsIngressClass bool, ingressClass string) error {
+func deployWandbCR(ctx context.Context, createCA bool, createAwsStorageClass, createAwsIngressClass bool, ingressClass string, crOverrides []operator.CROverride) error {
 	if err := operator.CreateNamespace(ctx, wandbCR.Namespace); err != nil {
 		return err
 	}
@@ -675,7 +686,7 @@ func deployWandbCR(ctx context.Context, createCA bool, createAwsStorageClass, cr
 		}
 	}
 
-	if err := operator.ApplyCR(ctx, wandbCR); err != nil {
+	if err := operator.ApplyCR(ctx, wandbCR, crOverrides); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -959,6 +970,9 @@ type wandbCRFlags struct {
 	customCACertFiles     []string
 	customCAConfigMap     string
 	objectStoreCopies     *int32
+	// crSet is applied to the unstructured CR at apply time (operator.ApplyCR),
+	// not by processWandbCR, since it can address any field the typed struct has.
+	crSet []string
 }
 
 // wandbCRFlagsFrom reads the CR-shaping flags off cmd. Flags are declared on the
@@ -968,6 +982,7 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 	boolean := func(name string) bool { v, _ := cmd.Flags().GetBool(name); return v }
 
 	certFiles, _ := cmd.Flags().GetStringArray("custom-ca-cert-file")
+	crSet, _ := cmd.Flags().GetStringArray("cr-set")
 	return wandbCRFlags{
 		crFile:                str("cr-file"),
 		wandbVersion:          str("wandb-version"),
@@ -994,6 +1009,7 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 		customCACertFiles:     certFiles,
 		customCAConfigMap:     str("custom-ca-configmap"),
 		objectStoreCopies:     changedInt32(cmd, "objectstore-copies"),
+		crSet:                 crSet,
 	}
 }
 

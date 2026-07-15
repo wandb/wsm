@@ -91,6 +91,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--custom-ca-cert-file` | — | Path to a PEM CA certificate to trust in W&B workloads; repeatable, each file's contents is appended to `spec.global.customCACerts` |
 | `--custom-ca-configmap` | — | Name of a ConfigMap holding CA certificates to trust in W&B workloads (`spec.global.caCertsConfigMap`) |
 | `--objectstore-copies` | — | Managed object store replica copies (`spec.objectStore.managedObjectStore.copies`). Operator default applies when unset. Applies to the default managed instance only (see note below) |
+| `--cr-set` | — | Set an arbitrary CR field as `<path>=<value>`, e.g. `spec.wandb.version=0.82.2`; repeatable. Values are YAML-typed (`3`→number, `true`→bool, `[a,b]`→list). Overrides the built-in template, `--cr-file`, and the typed flags above (see note below) |
 | `--gateway-class` | `nginx` | Gateway class name (selects Gateway API mode; the default). Mutually exclusive with `--ingress-class` |
 | `--ingress-class` | — | Ingress class name (selects Ingress mode). Takes precedence over the default `--gateway-class`; setting both explicitly is an error |
 | `--ingress-name` | — | Override the generated Ingress resource name (defaults to the CR name) |
@@ -111,6 +112,14 @@ wsm deploy-v2 wandb deploy [flags]
 | `--wait` | `false` | Wait for the W&B instance to report Ready |
 
 > **Default managed instance.** Managed `mysql`, `redis`, `objectStore`, and `clickHouse` are keyed by instance name; `wsm` builds a single instance under the reserved key `default`. Flags that tune managed infra — `--observability-mode` (per-service telemetry) and `--objectstore-copies` — only affect that `default` instance. To run multiple instances or tune a differently-keyed one, supply the full shape via `--cr-file`.
+
+> **Setting arbitrary CR fields with `--cr-set`.** Rather than adding a dedicated flag for every CR field, `--cr-set <path>=<value>` sets any field on the CR by its dotted path. It applies last — after the built-in template, `--cr-file`, and the typed flags — so it always wins, and the operator's CRD validates the result on apply. Use it for fields without a dedicated flag; use `--cr-file` for large or deeply-nested shapes. Values are parsed as YAML, so types infer automatically. List **indices** are not addressable (set the whole list, or use `--cr-file`). Example:
+>
+> ```bash
+> wsm deploy-v2 wandb deploy --context <ctx> \
+>   --cr-set spec.objectStore.default.seaweedObjectStore.filerStorageSize=50Gi \
+>   --cr-set spec.wandb.additionalHostnames='[wandb.corp.example.com]'
+> ```
 
 > **Observability.** `--observability-mode` is applied to the operator chart during `wsm deploy-v2 operator` (it enables the `victoria-metrics-operator` and, for `full`, the `grafana-operator` dependencies the chart requires) and also toggles per-service telemetry on the CR. `full` deploys Grafana and the Victoria Metrics/Logs/Traces stack as ClusterIP services in the W&B namespace — view Grafana with [`wsm telemetry grafana`](#wsm-telemetry) and VictoriaMetrics with [`wsm telemetry victoria`](#wsm-telemetry). `forward` ships OTLP data to `--observability-forward-endpoint` and does not run Grafana (VMUI is still available via `wsm telemetry victoria`).
 
@@ -134,6 +143,11 @@ wsm deploy-v2 wandb deploy --context prod \
   --oidc-client-secret wandb-oidc:clientSecret \
   --oidc-issuer-url wandb-oidc:issuerUrl \
   --oidc-session-length 720h
+
+# Set a CR field that has no dedicated flag, via --cr-set (repeatable, YAML-typed)
+wsm deploy-v2 wandb deploy --context prod \
+  --cr-set spec.wandb.additionalHostnames='[wandb.corp.example.com]' \
+  --cr-set spec.objectStore.default.seaweedObjectStore.filerStorageSize=50Gi
 
 # Advanced shapes: hand the whole CR in a file
 wsm deploy-v2 wandb deploy --context prod --cr-file ./my-wandb.yaml

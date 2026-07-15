@@ -99,7 +99,7 @@ func SetVersionCmd() *cobra.Command {
 
 			start := time.Now()
 			fmt.Print("→ Applying upgrade...")
-			if err := operator.ApplyCR(ctx, currentCR); err != nil {
+			if err := operator.ApplyCR(ctx, currentCR, nil); err != nil {
 				return fmt.Errorf("failed to apply upgrade: %w", err)
 			}
 			fmt.Printf(" (%s)\n", time.Since(start).Round(time.Second))

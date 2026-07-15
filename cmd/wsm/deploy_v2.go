@@ -31,7 +31,7 @@ func init() {
 }
 
 // TODO once an official release publishes a manifest, we should switch to lookup up the most recent non-dev release and not have a default.
-const defaultWandbVersion = "0.81.0"
+const defaultWandbVersion = "0.82.2"
 
 const (
 	certManagerInstallModeAuto  = "auto"
@@ -57,17 +57,23 @@ var (
 					Enabled: ptr.Bool(false),
 				},
 			},
-			MySQL: v2.MySQLSpec{
-				ManagedMysql: &v2.ManagedMysqlSpec{
-					Telemetry: v2.Telemetry{
-						Enabled: false,
+			// Managed infra is keyed by instance name; wsm builds the single
+			// reserved DefaultInstanceName instance. Kafka stays a struct.
+			MySQL: map[string]v2.MySQLSpec{
+				v2.DefaultInstanceName: {
+					ManagedMysql: &v2.ManagedMysqlSpec{
+						Telemetry: v2.Telemetry{
+							Enabled: false,
+						},
 					},
 				},
 			},
-			Redis: v2.RedisSpec{
-				ManagedRedis: &v2.ManagedRedisSpec{
-					Telemetry: v2.Telemetry{
-						Enabled: false,
+			Redis: map[string]v2.RedisSpec{
+				v2.DefaultInstanceName: {
+					ManagedRedis: &v2.ManagedRedisSpec{
+						Telemetry: v2.Telemetry{
+							Enabled: false,
+						},
 					},
 				},
 			},
@@ -78,17 +84,21 @@ var (
 					},
 				},
 			},
-			ObjectStore: v2.ObjectStoreSpec{
-				ManagedObjectStore: &v2.ManagedObjectStoreSpec{
-					Telemetry: v2.Telemetry{
-						Enabled: false,
+			ObjectStore: map[string]v2.ObjectStoreSpec{
+				v2.DefaultInstanceName: {
+					ManagedObjectStore: &v2.ManagedObjectStoreSpec{
+						Telemetry: v2.Telemetry{
+							Enabled: false,
+						},
 					},
 				},
 			},
-			ClickHouse: v2.ClickHouseSpec{
-				ManagedClickHouse: &v2.ManagedClickHouseSpec{
-					Telemetry: v2.Telemetry{
-						Enabled: false,
+			ClickHouse: map[string]v2.ClickHouseSpec{
+				v2.DefaultInstanceName: {
+					ManagedClickHouse: &v2.ManagedClickHouseSpec{
+						Telemetry: v2.Telemetry{
+							Enabled: false,
+						},
 					},
 				},
 			},
@@ -143,9 +153,11 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("oidc-client-secret", "", "OIDC client secret as <secret-name>:<key> (spec.wandb.oidc.clientSecret; optional)")
 	cmd.PersistentFlags().String("oidc-issuer-url", "", "OIDC issuer URL as <secret-name>:<key> (spec.wandb.oidc.issuerUrl; optional)")
 	cmd.PersistentFlags().String("oidc-auth-method", "", "OIDC auth method as <secret-name>:<key> (spec.wandb.oidc.authMethod; optional)")
-	// TODO(operator-bump): add --oidc-session-length once OidcSpec.SessionLength
-	// exists upstream; set it in processWandbCR (maps to app env
-	// GORILLA_SESSION_LENGTH, operator default 720h).
+	cmd.PersistentFlags().String("oidc-session-length", "", "OIDC session length, e.g. 720h (spec.wandb.oidc.sessionLength; optional)")
+	cmd.PersistentFlags().String("image-registry", "", "Retarget container images to this registry for air-gapped installs (spec.global.imageRegistry; optional)")
+	cmd.PersistentFlags().StringArray("custom-ca-cert-file", nil, "Path to a PEM CA certificate to trust in W&B workloads; repeatable (spec.global.customCACerts; optional)")
+	cmd.PersistentFlags().String("custom-ca-configmap", "", "Name of a ConfigMap holding CA certificates to trust in W&B workloads (spec.global.caCertsConfigMap; optional)")
+	cmd.PersistentFlags().Int32("objectstore-copies", 0, "Managed object store replica copies (spec.objectStore.managedObjectStore.copies; optional, operator default when unset)")
 	// TODO readd this when the CR reports ready properly
 	//cmd.Flags().Bool("wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
 
@@ -263,66 +275,25 @@ func wandbCreateCmd() *cobra.Command {
 		Short: "Deploy a W&B instance",
 		Long:  `Deploy a W&B instance with specified versions and configuration`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			crFile, _ := cmd.Flags().GetString("cr-file")
-			createCA, _ := cmd.Flags().GetBool("create-ca")
+			f := wandbCRFlagsFrom(cmd)
 			createAwsIngressClass, _ := cmd.Flags().GetBool("create-aws-ingress-class")
 			createAwsStorageClass, _ := cmd.Flags().GetBool("create-aws-storage-class")
-			addIngressAnnotations, _ := cmd.Flags().GetBool("add-ingress-annotations")
-			license, _ := cmd.Flags().GetString("license")
-			licenseFile, _ := cmd.Flags().GetString("license-file")
-			telemetryMode, _ := cmd.Flags().GetString("observability-mode")
-			gatewayClass, _ := cmd.Flags().GetString("gateway-class")
-			ingressClass, _ := cmd.Flags().GetString("ingress-class")
-			ingressName, _ := cmd.Flags().GetString("ingress-name")
-			issuerName, _ := cmd.Flags().GetString("issuer-name")
-			size, _ := cmd.Flags().GetString("size")
-			retentionPolicy, _ := cmd.Flags().GetString("retention-policy")
-			wandbNamespace, _ := cmd.Flags().GetString("wandb-namespace")
-			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
-			wandbName, _ := cmd.Flags().GetString("wandb-name")
-			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
-			oidcClientID, _ := cmd.Flags().GetString("oidc-client-id")
-			oidcClientSecret, _ := cmd.Flags().GetString("oidc-client-secret")
-			oidcIssuerURL, _ := cmd.Flags().GetString("oidc-issuer-url")
-			oidcAuthMethod, _ := cmd.Flags().GetString("oidc-auth-method")
 			wait, _ := cmd.Flags().GetBool("wait")
 
-			if err := validateObservabilityMode(telemetryMode); err != nil {
+			if err := validateObservabilityMode(f.telemetryMode); err != nil {
 				return err
 			}
-			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), gatewayClass, ingressClass); err != nil {
+			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), f.gatewayClass, f.ingressClass); err != nil {
 				return err
 			}
 
 			ctx := context.Background()
 
-			err := processWandbCR(
-				crFile,
-				wandbVersion,
-				wandbName,
-				wandbHostname,
-				gatewayClass,
-				ingressClass,
-				ingressName,
-				issuerName,
-				addIngressAnnotations,
-				license,
-				licenseFile,
-				telemetryMode,
-				wandbNamespace,
-				createCA,
-				size,
-				retentionPolicy,
-				oidcClientID,
-				oidcClientSecret,
-				oidcIssuerURL,
-				oidcAuthMethod,
-			)
-			if err != nil {
+			if err := processWandbCR(f); err != nil {
 				return err
 			}
 
-			err = deployWandbCR(ctx, createCA, createAwsStorageClass, createAwsIngressClass, ingressClass)
+			err := deployWandbCR(ctx, f.createCA, createAwsStorageClass, createAwsIngressClass, f.ingressClass)
 			if err != nil {
 				return err
 			}
@@ -363,20 +334,9 @@ func operatorDeployCmd() *cobra.Command {
 		Short: "Deploy the v2 operator",
 		Long:  `Deploy the v2 operator with specified versions and configuration`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			crFile, _ := cmd.Flags().GetString("cr-file")
-			createCA, _ := cmd.Flags().GetBool("create-ca")
+			f := wandbCRFlagsFrom(cmd)
 			createAwsIngressClass, _ := cmd.Flags().GetBool("create-aws-ingress-class")
 			createAwsStorageClass, _ := cmd.Flags().GetBool("create-aws-storage-class")
-			addIngressAnnotations, _ := cmd.Flags().GetBool("add-ingress-annotations")
-			gatewayClass, _ := cmd.Flags().GetString("gateway-class")
-			ingressClass, _ := cmd.Flags().GetString("ingress-class")
-			ingressName, _ := cmd.Flags().GetString("ingress-name")
-			issuerName, _ := cmd.Flags().GetString("issuer-name")
-			size, _ := cmd.Flags().GetString("size")
-			retentionPolicy, _ := cmd.Flags().GetString("retention-policy")
-			license, _ := cmd.Flags().GetString("license")
-			licenseFile, _ := cmd.Flags().GetString("license-file")
-			telemetryMode, _ := cmd.Flags().GetString("observability-mode")
 			telemetryForwardEndpoint, _ := cmd.Flags().GetString("observability-forward-endpoint")
 			otelSecret, _ := cmd.Flags().GetString("observability-otel-secret")
 			otelProtocol, _ := cmd.Flags().GetString("observability-otel-protocol")
@@ -384,28 +344,20 @@ func operatorDeployCmd() *cobra.Command {
 			otelResourceAttrs, _ := cmd.Flags().GetString("observability-otel-resource-attributes")
 			forwardProtocol, _ := cmd.Flags().GetString("observability-forward-protocol")
 			forwardHeaders, _ := cmd.Flags().GetStringToString("observability-forward-headers")
-			wandbNamespace, _ := cmd.Flags().GetString("wandb-namespace")
-			wandbVersion, _ := cmd.Flags().GetString("wandb-version")
-			wandbName, _ := cmd.Flags().GetString("wandb-name")
-			wandbHostname, _ := cmd.Flags().GetString("wandb-hostname")
-			oidcClientID, _ := cmd.Flags().GetString("oidc-client-id")
-			oidcClientSecret, _ := cmd.Flags().GetString("oidc-client-secret")
-			oidcIssuerURL, _ := cmd.Flags().GetString("oidc-issuer-url")
-			oidcAuthMethod, _ := cmd.Flags().GetString("oidc-auth-method")
 			wait, _ := cmd.Flags().GetBool("wait")
 
-			if err := validateObservabilityMode(telemetryMode); err != nil {
+			if err := validateObservabilityMode(f.telemetryMode); err != nil {
 				return err
 			}
-			if telemetryMode == operator.TelemetryModeForward && telemetryForwardEndpoint == "" {
+			if f.telemetryMode == operator.TelemetryModeForward && telemetryForwardEndpoint == "" {
 				return fmt.Errorf("--observability-mode=forward requires --observability-forward-endpoint")
 			}
-			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), gatewayClass, ingressClass); err != nil {
+			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), f.gatewayClass, f.ingressClass); err != nil {
 				return err
 			}
 
 			telemetry := operator.TelemetryConfig{
-				Mode:              telemetryMode,
+				Mode:              f.telemetryMode,
 				ForwardEndpoint:   telemetryForwardEndpoint,
 				OtelSecretName:    otelSecret,
 				OtelProtocol:      otelProtocol,
@@ -415,29 +367,7 @@ func operatorDeployCmd() *cobra.Command {
 				ForwardHeaders:    forwardHeaders,
 			}
 
-			err := processWandbCR(
-				crFile,
-				wandbVersion,
-				wandbName,
-				wandbHostname,
-				gatewayClass,
-				ingressClass,
-				ingressName,
-				issuerName,
-				addIngressAnnotations,
-				license,
-				licenseFile,
-				telemetryMode,
-				wandbNamespace,
-				createCA,
-				size,
-				retentionPolicy,
-				oidcClientID,
-				oidcClientSecret,
-				oidcIssuerURL,
-				oidcAuthMethod,
-			)
-			if err != nil {
+			if err := processWandbCR(f); err != nil {
 				return err
 			}
 
@@ -452,14 +382,14 @@ func operatorDeployCmd() *cobra.Command {
 				wait,
 				clusterName,
 				telemetry,
-				wandbNamespace,
+				f.wandbNamespace,
 				workers,
 				operatorChartVersion,
 				operatorNamespace,
-				createCA,
+				f.createCA,
 				createAwsStorageClass,
 				createAwsIngressClass,
-				ingressClass,
+				f.ingressClass,
 				kindNodeImage,
 				mirrorRegistry,
 				insecureRegistry,
@@ -477,8 +407,8 @@ func operatorDeployCmd() *cobra.Command {
 				if setupCluster {
 					fmt.Printf("  • Kubectl context: kind-%s\n", clusterName)
 				}
-				fmt.Printf("  • Namespace: %s\n", wandbNamespace)
-				fmt.Printf("  • Status: kubectl get wandb -n %s\n", wandbNamespace)
+				fmt.Printf("  • Namespace: %s\n", f.wandbNamespace)
+				fmt.Printf("  • Status: kubectl get wandb -n %s\n", f.wandbNamespace)
 				fmt.Println()
 			}
 			return nil
@@ -490,7 +420,7 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
 	cmd.Flags().StringVar(&kindNodeImage, "kind-node-image", "", "Kind node image to use, e.g. myreg.example.com/kindest/node:v1.35.1@sha256:... (defaults to the upstream pinned image; only used with --setup-k8s-cluster)")
 
-	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-alpha.2", "Operator Chart version (e.g., v2.0.0)")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.1", "Operator Chart version (e.g., v2.0.0)")
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
 	cmd.Flags().StringVar(&installCertManagerMode, "install-cert-manager", certManagerInstallModeAuto, "Cert-manager install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
 	cmd.Flags().StringVar(&installNginxGatewayMode, "install-nginx-gateway", nginxGatewayInstallModeAuto, "Nginx-gateway-fabric install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
@@ -989,60 +919,117 @@ func createDefaultAwsStorageClass(ctx context.Context) error {
 	return kubectl.ApplyStorageClass(ctx, &storageClass)
 }
 
-func processWandbCR(
-	crFile string,
-	wandbVersion string,
-	wandbName string,
-	wandbHostname string,
-	gatewayClass string,
-	ingressClass string,
-	ingressName string,
-	issuerName string,
-	addIngressAnnotations bool,
-	license string,
-	licenseFile string,
-	telemetryMode string,
-	wandbNamespace string,
-	createCA bool,
-	size string,
-	retentionPolicy string,
-	oidcClientID string,
-	oidcClientSecret string,
-	oidcIssuerURL string,
-	oidcAuthMethod string,
-) error {
-	if crFile != "" {
+// changedInt32 returns a pointer to the flag's int32 value only when the user
+// explicitly set it, so an unset flag leaves the operator's own default intact.
+func changedInt32(cmd *cobra.Command, name string) *int32 {
+	if !cmd.Flags().Changed(name) {
+		return nil
+	}
+	v, _ := cmd.Flags().GetInt32(name)
+	return &v
+}
+
+// wandbCRFlags holds every flag value that shapes the WeightsAndBiases CR. Both
+// `wandb deploy` and `operator` build the same CR, so they read this one set via
+// wandbCRFlagsFrom — keeping the two commands in lockstep and avoiding a long
+// positional argument list where adjacent same-typed values are easy to swap.
+type wandbCRFlags struct {
+	crFile                string
+	wandbVersion          string
+	wandbName             string
+	wandbHostname         string
+	gatewayClass          string
+	ingressClass          string
+	ingressName           string
+	issuerName            string
+	addIngressAnnotations bool
+	license               string
+	licenseFile           string
+	telemetryMode         string
+	wandbNamespace        string
+	createCA              bool
+	size                  string
+	retentionPolicy       string
+	oidcClientID          string
+	oidcClientSecret      string
+	oidcIssuerURL         string
+	oidcAuthMethod        string
+	oidcSessionLength     string
+	imageRegistry         string
+	customCACertFiles     []string
+	customCAConfigMap     string
+	objectStoreCopies     *int32
+}
+
+// wandbCRFlagsFrom reads the CR-shaping flags off cmd. Flags are declared on the
+// shared persistent flag set, so both subcommands see the same names.
+func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
+	str := func(name string) string { v, _ := cmd.Flags().GetString(name); return v }
+	boolean := func(name string) bool { v, _ := cmd.Flags().GetBool(name); return v }
+
+	certFiles, _ := cmd.Flags().GetStringArray("custom-ca-cert-file")
+	return wandbCRFlags{
+		crFile:                str("cr-file"),
+		wandbVersion:          str("wandb-version"),
+		wandbName:             str("wandb-name"),
+		wandbHostname:         str("wandb-hostname"),
+		gatewayClass:          str("gateway-class"),
+		ingressClass:          str("ingress-class"),
+		ingressName:           str("ingress-name"),
+		issuerName:            str("issuer-name"),
+		addIngressAnnotations: boolean("add-ingress-annotations"),
+		license:               str("license"),
+		licenseFile:           str("license-file"),
+		telemetryMode:         str("observability-mode"),
+		wandbNamespace:        str("wandb-namespace"),
+		createCA:              boolean("create-ca"),
+		size:                  str("size"),
+		retentionPolicy:       str("retention-policy"),
+		oidcClientID:          str("oidc-client-id"),
+		oidcClientSecret:      str("oidc-client-secret"),
+		oidcIssuerURL:         str("oidc-issuer-url"),
+		oidcAuthMethod:        str("oidc-auth-method"),
+		oidcSessionLength:     str("oidc-session-length"),
+		imageRegistry:         str("image-registry"),
+		customCACertFiles:     certFiles,
+		customCAConfigMap:     str("custom-ca-configmap"),
+		objectStoreCopies:     changedInt32(cmd, "objectstore-copies"),
+	}
+}
+
+func processWandbCR(f wandbCRFlags) error {
+	if f.crFile != "" {
 		var err error
-		wandbCR, err = readCRFile(crFile)
+		wandbCR, err = readCRFile(f.crFile)
 		if err != nil {
 			fmt.Printf("failed to read CR file: %v\n", err)
 			return err
 		}
 	}
 
-	wandbCR.Name = wandbName
-	wandbCR.Spec.Wandb.Hostname = wandbHostname
-	wandbCR.Spec.Size = v2.Size(size)
-	wandbCR.Spec.RetentionPolicy.OnDelete = v2.OnDeletePolicy(retentionPolicy)
+	wandbCR.Name = f.wandbName
+	wandbCR.Spec.Wandb.Hostname = f.wandbHostname
+	wandbCR.Spec.Size = v2.Size(f.size)
+	wandbCR.Spec.RetentionPolicy.OnDelete = v2.OnDeletePolicy(f.retentionPolicy)
 
-	if wandbCR.Spec.Wandb.Version == "" && wandbVersion == "" {
+	if wandbCR.Spec.Wandb.Version == "" && f.wandbVersion == "" {
 		wandbCR.Spec.Wandb.Version = defaultWandbVersion
 	}
 
-	if wandbVersion != "" {
-		wandbCR.Spec.Wandb.Version = wandbVersion
+	if f.wandbVersion != "" {
+		wandbCR.Spec.Wandb.Version = f.wandbVersion
 	}
 
-	if license != "" && licenseFile != "" {
+	if f.license != "" && f.licenseFile != "" {
 		return fmt.Errorf("cannot specify both license and license file")
 	}
 
-	if license != "" || licenseFile != "" {
-		if license != "" {
-			wandbCR.Spec.Wandb.License = license
+	if f.license != "" || f.licenseFile != "" {
+		if f.license != "" {
+			wandbCR.Spec.Wandb.License = f.license
 		}
-		if licenseFile != "" {
-			licenseData, err := os.ReadFile(licenseFile)
+		if f.licenseFile != "" {
+			licenseData, err := os.ReadFile(f.licenseFile)
 			if err != nil {
 				fmt.Printf("failed to read license file: %v\n", err)
 				return err
@@ -1059,10 +1046,10 @@ func processWandbCR(
 		field *corev1.SecretKeySelector
 		flag  string
 	}{
-		{oidcClientID, &wandbCR.Spec.Wandb.OIDC.ClientId, "--oidc-client-id"},
-		{oidcClientSecret, &wandbCR.Spec.Wandb.OIDC.ClientSecret, "--oidc-client-secret"},
-		{oidcIssuerURL, &wandbCR.Spec.Wandb.OIDC.IssuerUrl, "--oidc-issuer-url"},
-		{oidcAuthMethod, &wandbCR.Spec.Wandb.OIDC.AuthMethod, "--oidc-auth-method"},
+		{f.oidcClientID, &wandbCR.Spec.Wandb.OIDC.ClientId, "--oidc-client-id"},
+		{f.oidcClientSecret, &wandbCR.Spec.Wandb.OIDC.ClientSecret, "--oidc-client-secret"},
+		{f.oidcIssuerURL, &wandbCR.Spec.Wandb.OIDC.IssuerUrl, "--oidc-issuer-url"},
+		{f.oidcAuthMethod, &wandbCR.Spec.Wandb.OIDC.AuthMethod, "--oidc-auth-method"},
 	}
 	for _, ref := range oidcRefs {
 		if ref.value == "" {
@@ -1082,26 +1069,56 @@ func processWandbCR(
 		}
 	}
 
+	// sessionLength is a plain string leaf, not a selector. The W&B app consumes
+	// it as a Go duration (default 720h), so reject malformed values here rather
+	// than surfacing an opaque failure at reconcile. --cr-file wins.
+	if f.oidcSessionLength != "" {
+		if _, err := time.ParseDuration(f.oidcSessionLength); err != nil {
+			return fmt.Errorf("--oidc-session-length must be a Go duration, e.g. 720h: %w", err)
+		}
+		if wandbCR.Spec.Wandb.OIDC.SessionLength != "" {
+			fmt.Println("ignoring --oidc-session-length: spec.wandb.oidc.sessionLength already set by --cr-file")
+		} else {
+			wandbCR.Spec.Wandb.OIDC.SessionLength = f.oidcSessionLength
+		}
+	}
+
+	// spec.global: air-gap image retarget + custom CA trust. Only set when a
+	// flag is supplied; an empty GlobalSpec is stripped by operator.ApplyCR.
+	if f.imageRegistry != "" {
+		wandbCR.Spec.Global.ImageRegistry = f.imageRegistry
+	}
+	if f.customCAConfigMap != "" {
+		wandbCR.Spec.Global.CACertsConfigMap = f.customCAConfigMap
+	}
+	for _, certFile := range f.customCACertFiles {
+		pem, err := os.ReadFile(certFile)
+		if err != nil {
+			return fmt.Errorf("failed to read custom CA cert file %q: %w", certFile, err)
+		}
+		wandbCR.Spec.Global.CustomCACerts = append(wandbCR.Spec.Global.CustomCACerts, string(pem))
+	}
+
 	// --ingress-class and --gateway-class select mutually exclusive networking
 	// modes. --gateway-class has a non-empty default ("nginx"), so an explicit
 	// --ingress-class must take precedence and suppress the Gateway API config.
-	if ingressClass != "" {
+	if f.ingressClass != "" {
 		wandbCR.Spec.Networking.Mode = v2.NetworkingModeIngress
 		wandbCR.Spec.Networking.Ingress = &v2.IngressConfig{
-			IngressClassName: &ingressClass,
-			Name:             ingressName,
+			IngressClassName: &f.ingressClass,
+			Name:             f.ingressName,
 		}
-	} else if gatewayClass != "" {
+	} else if f.gatewayClass != "" {
 		wandbCR.Spec.Networking.Mode = v2.NetworkingModeGatewayAPI
 		wandbCR.Spec.Networking.GatewayAPI = &v2.GatewayAPIConfig{
 			Gateway: v2.GatewayConfig{
 				Managed:          true,
-				GatewayClassName: &gatewayClass,
+				GatewayClassName: &f.gatewayClass,
 			},
 		}
 	}
 
-	if addIngressAnnotations {
+	if f.addIngressAnnotations {
 		// InfrastructureAnnotations exist only on the managed Gateway; the CR's
 		// IngressConfig has no annotations field. Apply them in Gateway API mode
 		// and no-op otherwise to avoid a nil dereference.
@@ -1115,18 +1132,18 @@ func processWandbCR(
 	}
 
 	if strings.HasPrefix(wandbCR.Spec.Wandb.Hostname, "https") {
-		if createCA {
+		if f.createCA {
 			wandbCR.Spec.Networking.TLS = &v2.TLSConfig{
-				SecretName: wandbName + "-tls-secret",
+				SecretName: f.wandbName + "-tls-secret",
 				CertManager: &v2.CertManagerConfig{
-					Issuer: wandbName + "-ca-issuer",
+					Issuer: f.wandbName + "-ca-issuer",
 				},
 			}
-		} else if issuerName != "" {
+		} else if f.issuerName != "" {
 			wandbCR.Spec.Networking.TLS = &v2.TLSConfig{
-				SecretName: wandbName + "-tls-secret",
+				SecretName: f.wandbName + "-tls-secret",
 				CertManager: &v2.CertManagerConfig{
-					Issuer: issuerName,
+					Issuer: f.issuerName,
 				},
 			}
 		} else {
@@ -1134,25 +1151,37 @@ func processWandbCR(
 		}
 	}
 
-	if telemetryMode != "" && telemetryMode != operator.TelemetryModeOff {
-		if wandbCR.Spec.MySQL.ManagedMysql != nil {
-			wandbCR.Spec.MySQL.ManagedMysql.Telemetry.Enabled = true
+	// Telemetry and copies mutate the single instance under DefaultInstanceName —
+	// the one wsm's template builds. A --cr-file that keys managed infra under a
+	// different instance name won't be touched by these flags; author such CRs
+	// with telemetry/copies set directly.
+	if f.telemetryMode != "" && f.telemetryMode != operator.TelemetryModeOff {
+		// The map value is a struct copy, but ManagedX are pointers, so mutating
+		// through them reaches the pointee — no write-back to the map needed.
+		if m, ok := wandbCR.Spec.MySQL[v2.DefaultInstanceName]; ok && m.ManagedMysql != nil {
+			m.ManagedMysql.Telemetry.Enabled = true
 		}
 		if wandbCR.Spec.Kafka.ManagedKafka != nil {
 			wandbCR.Spec.Kafka.ManagedKafka.Telemetry.Enabled = true
 		}
-		if wandbCR.Spec.ClickHouse.ManagedClickHouse != nil {
-			wandbCR.Spec.ClickHouse.ManagedClickHouse.Telemetry.Enabled = true
+		if c, ok := wandbCR.Spec.ClickHouse[v2.DefaultInstanceName]; ok && c.ManagedClickHouse != nil {
+			c.ManagedClickHouse.Telemetry.Enabled = true
 		}
-		if wandbCR.Spec.Redis.ManagedRedis != nil {
-			wandbCR.Spec.Redis.ManagedRedis.Telemetry.Enabled = true
+		if r, ok := wandbCR.Spec.Redis[v2.DefaultInstanceName]; ok && r.ManagedRedis != nil {
+			r.ManagedRedis.Telemetry.Enabled = true
 		}
-		if wandbCR.Spec.ObjectStore.ManagedObjectStore != nil {
-			wandbCR.Spec.ObjectStore.ManagedObjectStore.Telemetry.Enabled = true
+		if o, ok := wandbCR.Spec.ObjectStore[v2.DefaultInstanceName]; ok && o.ManagedObjectStore != nil {
+			o.ManagedObjectStore.Telemetry.Enabled = true
 		}
 	}
 
-	wandbCR.Namespace = wandbNamespace
+	if f.objectStoreCopies != nil {
+		if o, ok := wandbCR.Spec.ObjectStore[v2.DefaultInstanceName]; ok && o.ManagedObjectStore != nil {
+			o.ManagedObjectStore.Copies = *f.objectStoreCopies
+		}
+	}
+
+	wandbCR.Namespace = f.wandbNamespace
 	return nil
 }
 

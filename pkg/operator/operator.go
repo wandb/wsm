@@ -1038,6 +1038,25 @@ func stripFieldsNotInCRDSchema(obj *unstructured.Unstructured) {
 	if !oidcConfigured(obj) {
 		unstructured.RemoveNestedField(obj.Object, "spec", "wandb", "oidc")
 	}
+
+	// GlobalSpec and WandbProbeDefaults are by-value structs, so `omitempty`
+	// can't drop their zero value — they serialize as an empty `{}` block. Strip
+	// when empty so an unconfigured wsm install doesn't send meaningless fields
+	// (mirrors the OIDC strip above). A populated block (C1 flags / --cr-file) is
+	// kept.
+	if isEmptyNestedMap(obj, "spec", "global") {
+		unstructured.RemoveNestedField(obj.Object, "spec", "global")
+	}
+	if isEmptyNestedMap(obj, "spec", "wandb", "probes") {
+		unstructured.RemoveNestedField(obj.Object, "spec", "wandb", "probes")
+	}
+}
+
+// isEmptyNestedMap reports whether the field at the given path is absent or an
+// empty map.
+func isEmptyNestedMap(obj *unstructured.Unstructured, fields ...string) bool {
+	m, found, err := unstructured.NestedMap(obj.Object, fields...)
+	return err != nil || !found || len(m) == 0
 }
 
 // oidcConfigured reports whether spec.wandb.oidc has any leaf selector with a
@@ -1046,6 +1065,11 @@ func oidcConfigured(obj *unstructured.Unstructured) bool {
 	oidc, found, err := unstructured.NestedMap(obj.Object, "spec", "wandb", "oidc")
 	if err != nil || !found {
 		return false
+	}
+	// sessionLength is a plain string leaf, not a selector; a non-empty value
+	// alone counts as configured so it isn't stripped with the empty block.
+	if sl, _, _ := unstructured.NestedString(oidc, "sessionLength"); sl != "" {
+		return true
 	}
 	for _, leaf := range oidc {
 		selector, ok := leaf.(map[string]interface{})

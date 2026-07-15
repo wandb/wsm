@@ -12,7 +12,7 @@ require (
 	github.com/docker/go-connections v0.7.0
 	github.com/pkg/errors v0.9.1
 	github.com/spf13/cobra v1.10.2
-	github.com/wandb/operator v1.21.3-0.20260611200416-80f51a441d6e
+	github.com/wandb/operator v1.22.1-0.20260715191206-c60e3ac91508
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v3 v3.20.2
 	helm.sh/helm/v4 v4.1.4
@@ -117,13 +117,14 @@ require (
 	github.com/jmoiron/sqlx v1.4.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kedacore/keda/v2 v2.18.3 // indirect
-	github.com/klauspost/compress v1.18.3 // indirect
+	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
 	github.com/lann/builder v0.0.0-20180802200727-47ae307949d0 // indirect
 	github.com/lann/ps v0.0.0-20150810152359-62de8c46ede0 // indirect
 	github.com/letsencrypt/boulder v0.0.0-20250225164044-d27f0c8a9685 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/liggitt/tabwriter v0.0.0-20181228230101-89fcab3d43de // indirect
+	github.com/lmittmann/tint v1.1.2 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
@@ -182,13 +183,13 @@ require (
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.50.0 // indirect
+	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
-	golang.org/x/term v0.42.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
+	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/term v0.43.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.5.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260406210006-6f92a3bedf2d // indirect

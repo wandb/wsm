@@ -11,7 +11,22 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "wsm",
 	Short: "Weights & Biases Server Manager",
-	Long:  `A utility for managing Weights & Biases Server deployments`,
+	Long: `A utility for managing Weights & Biases Server deployments instances on Kubernetes — for local development and airgapped installs.
+	
+	  Quick start (local kind cluster):
+		wsm deploy-v2 operator \
+			--context kind-wandb \
+			--setup-k8s-cluster \
+			--cluster-name wandb \
+			--include-cr
+	  
+	  Common commands:
+		wsm deploy-v2 operator   Deploy the v2 operator (and optionally a W&B CR).
+		wsm upgrade              Bump the W&B version on an existing install.
+		wsm cluster cleanup      Remove everything wsm deployed.
+		wsm list                 List the container images required for a deploy.
+	
+	  Run 'wsm <command> --help' for details on any command.`,
 }
 
 // Child commands add themselves via init() so all that should be done here is to set global
@@ -24,9 +39,7 @@ func Execute() {
 	}
 }
 
-func init() {
-
-}
+func init() {}
 
 func main() {
 	Execute()

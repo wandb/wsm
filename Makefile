@@ -1,11 +1,19 @@
-GO_VERSION = 1.24.0
+GO_VERSION = 1.25.0
 
-GOLANGCI_LINT_VERSION = v1.64.5
+GOLANGCI_LINT_VERSION = v2.11.4
 
 # Set environment variables to suppress linker warnings on macOS
 ifeq ($(shell uname),Darwin)
 	export CGO_LDFLAGS=-Wl,-w
 	export LDFLAGS=-w
+endif
+
+ifeq ($(OS),Windows_NT)
+	INSTALL_DIR ?= $(USERPROFILE)/bin
+	BINARY = wsm.exe
+else
+	INSTALL_DIR ?= /usr/local/bin
+	BINARY = wsm
 endif
 
 # Version stamp for local builds; CI releases are stamped by GoReleaser instead.
@@ -15,7 +23,11 @@ DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 GO_LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
 build:
-	go build -ldflags "$(GO_LDFLAGS)" -o wsm ./cmd/wsm
+	CGO_ENABLED=0 go build -tags containers_image_openpgp -ldflags "$(GO_LDFLAGS)" -o $(BINARY) ./cmd/wsm
+
+install: build
+	install -d $(INSTALL_DIR)
+	install $(BINARY) $(INSTALL_DIR)/$(BINARY)
 
 # Modern linter installation
 install-lint:
@@ -57,4 +69,4 @@ safe-update-deps:
 	go get -u ./...
 	go mod tidy
 
-.PHONY: install-lint lint lint-fix fmt test build clean-lint safe-update-deps
+.PHONY: install-lint lint lint-fix fmt test build install clean-lint safe-update-deps

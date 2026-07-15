@@ -31,3 +31,19 @@ bundle/
 /wsm
 
 test-wsm/
+
+.idea/
+.k8s-images
+license.key
+
+# Per-session output of the audit-operator-diff skill
+.claude/audit-report.md
+
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl

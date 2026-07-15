@@ -1,0 +1,18 @@
+# aws_profile = "SbxAdmin"  # AWS CLI profile name (for SSO, named profiles, etc.)
+deployment_name      = "wandb-op-aws"
+append_timestamp     = false
+region              = "us-west-2"
+kubernetes_version  = "1.34"
+node_count          = 3
+node_instance_type  = "m5.2xlarge"
+storage_class_name  = "gp2"
+
+# Set to true to install the AWS Load Balancer Controller for ALB ingress / Gateway API
+install_cloud_lb_controller = false
+
+# Set to true to create an S3 bucket with IAM credentials for external object store
+create_bucket = false
+
+tags = {
+  "Team" = "platform"
+}

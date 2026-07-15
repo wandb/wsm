@@ -1,5 +1,9 @@
 name: Release
 
+# Manual escape hatch: pushing a tag by hand cuts a release via the shared
+# GoReleaser build. Automatic releases on merge to main are handled by
+# release-on-merge.yaml, which calls the same reusable workflow.
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: true
@@ -14,25 +18,5 @@ on:
       - "*"
 
 jobs:
-  linux:
-    runs-on: ubuntu-latest
-    if: github.repository_owner == 'wandb'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 1.24
-          cache: true
-          cache-dependency-path: go.sum
-      - name: Install dependencies
-        run: go get ./...
-      - name: Install GoReleaser
-        uses: goreleaser/goreleaser-action@v5
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+  release:
+    uses: ./.github/workflows/goreleaser.yaml

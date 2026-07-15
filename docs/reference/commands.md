@@ -118,7 +118,7 @@ wsm deploy-v2 wandb deploy [flags]
 >
 > ```bash
 > wsm deploy-v2 wandb deploy --context <ctx> \
->   --cr-set spec.objectStore.default.seaweedObjectStore.filerStorageSize=50Gi \
+>   --cr-set spec.objectStore.default.managedObjectStore.SeaweedObjectStoreSpec.filerStorageSize=50Gi \
 >   --cr-set spec.wandb.additionalHostnames='[wandb.corp.example.com]'
 > ```
 
@@ -148,7 +148,7 @@ wsm deploy-v2 wandb deploy --context prod \
 # Set a CR field that has no dedicated flag, via --cr-set (repeatable, YAML-typed)
 wsm deploy-v2 wandb deploy --context prod \
   --cr-set spec.wandb.additionalHostnames='[wandb.corp.example.com]' \
-  --cr-set spec.objectStore.default.seaweedObjectStore.filerStorageSize=50Gi
+  --cr-set spec.objectStore.default.managedObjectStore.SeaweedObjectStoreSpec.filerStorageSize=50Gi
 
 # Advanced shapes: hand the whole CR in a file
 wsm deploy-v2 wandb deploy --context prod --cr-file ./my-wandb.yaml

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/kind"
 	"github.com/wandb/wsm/pkg/kubectl"
@@ -30,8 +31,21 @@ func init() {
 	rootCmd.AddCommand(ClusterCmd())
 }
 
-// TODO once an official release publishes a manifest, we should switch to lookup up the most recent non-dev release and not have a default.
-const defaultWandbVersion = "0.82.2"
+// W&B server version policy — the two values wsm bumps per release. Both live
+// here so nobody has to dig through the command wiring to find or change them.
+//
+//   - defaultWandbVersion: stamped into spec.wandb.version when --wandb-version
+//     is unset. Bump this each W&B/operator release.
+//   - minWandbVersion: the oldest server wsm will deploy. A resolved version
+//     below this (via --wandb-version, --cr-file, or --cr-set spec.wandb.version)
+//     is rejected up front. Raise it when dropping support for old servers.
+//
+// TODO once an official release publishes a manifest, we should switch to looking
+// up the most recent non-dev release and not have a default.
+const (
+	defaultWandbVersion = "0.82.2"
+	minWandbVersion     = "0.80.0"
+)
 
 const (
 	certManagerInstallModeAuto  = "auto"
@@ -147,7 +161,7 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("size", "small", "W&B instance size (dev, micro, small, medium, large, xlarge, xxlarge)")
 	cmd.PersistentFlags().String("wandb-hostname", "http://localhost:8080", "Hostname to use for the W&B instance")
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
-	cmd.PersistentFlags().String("wandb-version", "", "Server manifest version (e.g., 0.76.1)")
+	cmd.PersistentFlags().String("wandb-version", "", fmt.Sprintf("Server manifest version (defaults to %s when unset; must be >= %s)", defaultWandbVersion, minWandbVersion))
 	cmd.PersistentFlags().String("wandb-namespace", "wandb", "Namespace for CR")
 	cmd.PersistentFlags().String("oidc-client-id", "", "OIDC client ID as <secret-name>:<key> (spec.wandb.oidc.clientId; optional)")
 	cmd.PersistentFlags().String("oidc-client-secret", "", "OIDC client secret as <secret-name>:<key> (spec.wandb.oidc.clientSecret; optional)")
@@ -291,6 +305,9 @@ func wandbCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := validateVersionOverride(crOverrides); err != nil {
+				return err
+			}
 
 			ctx := context.Background()
 
@@ -362,6 +379,9 @@ func operatorDeployCmd() *cobra.Command {
 			}
 			crOverrides, err := operator.ParseCROverrides(f.crSet)
 			if err != nil {
+				return err
+			}
+			if err := validateVersionOverride(crOverrides); err != nil {
 				return err
 			}
 
@@ -1013,6 +1033,39 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 	}
 }
 
+// validateWandbVersion rejects a W&B server version below minWandbVersion. The
+// floor is compared on the core major.minor.patch, so a pre-release build of the
+// minimum line (e.g. 0.80.0-rc.1) still passes.
+func validateWandbVersion(version string) error {
+	v, err := semver.NewVersion(version)
+	if err != nil {
+		return fmt.Errorf("wandb version %q is not valid semver: %w", version, err)
+	}
+	minV := semver.MustParse(minWandbVersion)
+	core := semver.New(v.Major(), v.Minor(), v.Patch(), "", "")
+	if core.LessThan(minV) {
+		return fmt.Errorf("wandb version %q is below the minimum supported version %s", version, minWandbVersion)
+	}
+	return nil
+}
+
+// validateVersionOverride applies the minWandbVersion floor to a
+// `--cr-set spec.wandb.version=…` override, so the escape hatch can't undercut
+// the minimum supported server.
+func validateVersionOverride(overrides []operator.CROverride) error {
+	for _, o := range overrides {
+		if strings.Join(o.Path, ".") != "spec.wandb.version" {
+			continue
+		}
+		version, ok := o.Value.(string)
+		if !ok {
+			return fmt.Errorf("--cr-set spec.wandb.version must be a string, got %T", o.Value)
+		}
+		return validateWandbVersion(version)
+	}
+	return nil
+}
+
 func processWandbCR(f wandbCRFlags) error {
 	if f.crFile != "" {
 		var err error
@@ -1034,6 +1087,12 @@ func processWandbCR(f wandbCRFlags) error {
 
 	if f.wandbVersion != "" {
 		wandbCR.Spec.Wandb.Version = f.wandbVersion
+	}
+
+	// Enforce the minimum supported server on the resolved version (default,
+	// --wandb-version, or --cr-file). --cr-set is checked separately before apply.
+	if err := validateWandbVersion(wandbCR.Spec.Wandb.Version); err != nil {
+		return err
 	}
 
 	if f.license != "" && f.licenseFile != "" {

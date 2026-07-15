@@ -70,6 +70,9 @@ func SetVersionCmd() *cobra.Command {
 			}
 
 			if !force {
+				if err := validateWandbVersion(wandbVersion); err != nil {
+					return fmt.Errorf("%w (pass --force to override)", err)
+				}
 				down, cmpErr := isDowngrade(currentVersion, wandbVersion)
 				if cmpErr != nil {
 					return fmt.Errorf("%w (pass --force to proceed anyway)", cmpErr)
@@ -121,7 +124,7 @@ func SetVersionCmd() *cobra.Command {
 	cmd.Flags().StringVar(&kubeContext, "context", "", "name of the kubeconfig context to use (required)")
 	cmd.Flags().StringVar(&wandbName, "wandb-name", "wandb", "Name of the W&B instance")
 	cmd.Flags().StringVar(&wandbNamespace, "wandb-namespace", "wandb", "Namespace of the W&B instance")
-	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "Target server manifest version (e.g., 0.78.0) (required)")
+	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", fmt.Sprintf("Target server manifest version (required; must be >= %s unless --force)", minWandbVersion))
 	cmd.Flags().BoolVar(&wait, "wait", false, "Wait for the W&B instance to be ready after applying")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "Timeout when --wait is set")
 	cmd.Flags().BoolVar(&force, "force", false, "Allow downgrades and unparseable versions")

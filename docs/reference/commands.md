@@ -129,7 +129,7 @@ wsm deploy-v2 wandb deploy [flags]
 # Minimal deploy against an already-installed operator
 wsm deploy-v2 wandb deploy --context prod
 
-# Pin a specific server version
+# Pin a specific server version (must be >= the minimum supported version)
 wsm deploy-v2 wandb deploy --context prod --wandb-version 0.82.2
 
 # TLS with a self-signed CA (https hostname triggers cert-manager wiring)

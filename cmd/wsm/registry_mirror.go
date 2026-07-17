@@ -40,7 +40,7 @@ Auth is read from your Docker config (~/.docker/config.json) by default. Use
 
 Mirrors, across three tiers: (1) the operator OCI chart + binary image,
 cert-manager and its 5 component images, and nginx-gateway-fabric with its 2
-images; (2) the managed-service operator images (moco/strimzi/altinity/opstree/
+images; (2) the managed-service operator images (moco/altinity/opstree/
 seaweedfs); (3) the managed data-plane images (ClickHouse/Kafka/MySQL/Redis/
 SeaweedFS servers). With --wandb-version it also mirrors the server manifest and
 every W&B application image it references (weave, megabinary, frontend, …),
@@ -131,7 +131,7 @@ external databases).`,
 	cmd.Flags().StringVar(&targetRegistry, "to", "", "Hostname of your mirror, e.g. harbor.example.com (required)")
 	cmd.Flags().BoolVar(&insecure, "insecure", false, "Skip TLS verification when pushing to the mirror (use for plain-HTTP registries like local registry:2)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print the source → target mirroring plan without pushing")
-	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-alpha.2", "Operator chart version; also used as the tag for the operator binary image")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.1", "Operator chart version; also used as the tag for the operator binary image")
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version (e.g. 0.81.0); when set, also mirror the server manifest and every application image it references, rewriting them to point at the mirror")
 	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Don't mirror the managed-service operator + data-plane images (ClickHouse/Kafka/MySQL/Redis/object-store). Use when you run W&B against external databases.")
 	// TESTING ONLY, hidden from --help: pull the server manifest from a non-upstream
@@ -205,25 +205,25 @@ func buildManagedImagePlan(target string) []mirrorItem {
 		"altinity/clickhouse-operator:0.26.3",
 		"altinity/metrics-exporter:0.26.3",
 		"chrislusf/seaweedfs-operator:1.0.21",
-		"ghcr.io/cybozu-go/moco:0.34.0",
+		"ghcr.io/cybozu-go/moco:0.36.0",
 		"quay.io/opstree/redis-operator:v0.22.2",
-		"quay.io/strimzi/operator:0.50.0",
 
 		// Tier 3 — data-plane server images.
 		"altinity/clickhouse-server:25.8.16.10002.altinitystable",
-		"quay.io/strimzi/kafka:0.50.0-kafka-4.1.0",
-		// MySQL data plane: the moco operator injects an agent + fluent-bit +
-		// mysqld_exporter sidecar into every MySQLCluster pod (versions pinned by
-		// the moco subchart, currently 0.24.0), alongside the mysql server image.
-		// All four must be mirrored or the pod stalls on Init:ErrImagePull.
+		"altinity/clickhouse-keeper:25.8.16.10002.altinitystable",
+		// Kafka (Bufstream): broker + etcd + aws-cli bucket-ensure init image.
+		"us-docker.pkg.dev/buf-images-1/buf/images/bufstream:0.4.15",
+		"quay.io/coreos/etcd:v3.5.31",
+		"amazon/aws-cli:2.35.10",
+		// moco injects agent/fluent-bit/mysqld_exporter sidecars; all must be mirrored.
 		"ghcr.io/cybozu-go/moco/mysql:8.4.8",
-		"ghcr.io/cybozu-go/moco-agent:0.15.0",
-		"ghcr.io/cybozu-go/moco/fluent-bit:4.1.1.1",
-		"ghcr.io/cybozu-go/moco/mysqld_exporter:0.18.0.1",
+		"ghcr.io/cybozu-go/moco-agent:0.16.0",
+		"ghcr.io/cybozu-go/moco/fluent-bit:5.0.2.1",
+		"ghcr.io/cybozu-go/moco/mysqld_exporter:0.19.0.1",
 		"quay.io/opstree/redis:v7.0.15",
 		"quay.io/opstree/redis-sentinel:v7.0.12",
 		"quay.io/opstree/redis-exporter:v1.44.0",
-		"chrislusf/seaweedfs:latest",
+		"chrislusf/seaweedfs:4.35",
 	}
 
 	plan := make([]mirrorItem, 0, len(images))

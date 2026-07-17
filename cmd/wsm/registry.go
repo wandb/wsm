@@ -210,7 +210,7 @@ func registryCheckCmd() *cobra.Command {
 	cmd.Flags().StringVar(&registry, "registry", "", "Target registry to check against, e.g. myreg.example.com (required)")
 	cmd.Flags().BoolVar(&insecure, "insecure", false, "Skip TLS verification when contacting the registry")
 	cmd.Flags().BoolVar(&failOnMissing, "fail-on-missing", false, "Exit non-zero if any artifact is missing")
-	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-alpha.2", "Operator chart version that was mirrored (must match 'wsm registry mirror')")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.1", "Operator chart version that was mirrored (must match 'wsm registry mirror')")
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version that was mirrored; when set, also check the server manifest and every application image it references")
 	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Don't check the managed-service operator + data-plane images (match the flag you mirrored with)")
 	return cmd

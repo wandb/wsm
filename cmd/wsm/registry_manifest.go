@@ -299,7 +299,7 @@ func extractManifestYAML(ctx context.Context, fetcher content.Fetcher, desc ocis
 				layer.MediaType == "application/vnd.docker.image.rootfs.diff.tar.gzip" {
 				gzr, err := gzip.NewReader(rc)
 				if err != nil {
-					rc.Close()
+					_ = rc.Close()
 					return nil, fmt.Errorf("gzip layer %s: %w", layer.Digest, err)
 				}
 				reader = gzr
@@ -311,7 +311,7 @@ func extractManifestYAML(ctx context.Context, fetcher content.Fetcher, desc ocis
 					break
 				}
 				if err != nil {
-					rc.Close()
+					_ = rc.Close()
 					return nil, fmt.Errorf("read layer %s: %w", layer.Digest, err)
 				}
 				if filepath.Ext(header.Name) != ".yaml" {
@@ -319,12 +319,12 @@ func extractManifestYAML(ctx context.Context, fetcher content.Fetcher, desc ocis
 				}
 				contents, err := io.ReadAll(tr)
 				if err != nil {
-					rc.Close()
+					_ = rc.Close()
 					return nil, fmt.Errorf("read %s: %w", header.Name, err)
 				}
 				files[header.Name] = contents
 			}
-			rc.Close()
+			_ = rc.Close()
 		}
 		if len(files) == 0 {
 			return nil, errors.New("no .yaml files found in manifest layers")

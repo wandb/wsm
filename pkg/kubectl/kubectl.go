@@ -36,7 +36,17 @@ var (
 	once        sync.Once
 	mapperOnce  sync.Once
 	kubeContext string
+	initErr     error
 )
+
+// clientInitErr reports why the k8s clients are unavailable, preferring the captured kubeconfig error
+// over a bare os.ErrNotExist so callers surface something actionable (e.g. an unknown context).
+func clientInitErr() error {
+	if initErr != nil {
+		return initErr
+	}
+	return os.ErrNotExist
+}
 
 func SetContext(ctx string) {
 	kubeContext = ctx
@@ -53,6 +63,7 @@ func ResetClients() {
 	clientset = nil
 	dynamicHost = nil
 	mapper = nil
+	initErr = nil
 	once = sync.Once{}
 	mapperOnce = sync.Once{}
 }
@@ -89,9 +100,16 @@ func initConfig() {
 		var err error
 		config, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides).ClientConfig()
 		if err != nil {
-			// fallback to in-cluster config
-			config, err = rest.InClusterConfig()
-			if err != nil {
+			// fallback to in-cluster config; if that also fails, keep the kubeconfig error (more actionable).
+			var inClusterErr error
+			config, inClusterErr = rest.InClusterConfig()
+			if inClusterErr != nil {
+				if kubeContext != "" {
+					initErr = fmt.Errorf("failed to load kubeconfig for context %q: %w", kubeContext, err)
+				} else {
+					initErr = fmt.Errorf("failed to load kubeconfig: %w", err)
+				}
+				config = nil
 				return
 			}
 		}
@@ -106,7 +124,7 @@ func initConfig() {
 func GetConfig() (*rest.Config, error) {
 	initConfig()
 	if config == nil {
-		return nil, os.ErrNotExist
+		return nil, clientInitErr()
 	}
 	return config, nil
 }
@@ -114,7 +132,7 @@ func GetConfig() (*rest.Config, error) {
 func GetDynamicClientset() (*rest.Config, *dynamic.DynamicClient, error) {
 	initConfig()
 	if config == nil || dynamicHost == nil {
-		return nil, nil, os.ErrNotExist
+		return nil, nil, clientInitErr()
 	}
 	return config, dynamicHost, nil
 }
@@ -122,7 +140,7 @@ func GetDynamicClientset() (*rest.Config, *dynamic.DynamicClient, error) {
 func GetClientset() (*rest.Config, *kubernetes.Clientset, error) {
 	initConfig()
 	if config == nil || clientset == nil {
-		return nil, nil, os.ErrNotExist
+		return nil, nil, clientInitErr()
 	}
 	return config, clientset, nil
 }

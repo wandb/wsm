@@ -77,35 +77,6 @@ const (
 	completeServerAPIsDiscoveryErrSubstr = "unable to retrieve the complete list of server APIs"
 )
 
-const (
-	TelemetryModeOff     = "off"
-	TelemetryModeFull    = "full"
-	TelemetryModeForward = "forward"
-)
-
-func ValidTelemetryMode(mode string) bool {
-	switch mode {
-	case TelemetryModeOff, TelemetryModeFull, TelemetryModeForward:
-		return true
-	default:
-		return false
-	}
-}
-
-// TelemetryConfig bundles the operator-chart telemetry values wsm sets. Every
-// field except Mode is optional; an empty/zero field is omitted from the chart
-// values so the operator chart's own default for that key is preserved.
-type TelemetryConfig struct {
-	Mode              string
-	ForwardEndpoint   string
-	OtelSecretName    string
-	OtelProtocol      string
-	OtelServiceName   string
-	OtelResourceAttrs string
-	ForwardProtocol   string
-	ForwardHeaders    map[string]string
-}
-
 var (
 	apiDiscoveryRetryInterval = 2 * time.Second
 	apiDiscoveryRetryTimeout  = 2 * time.Minute
@@ -690,28 +661,7 @@ func DeployOperator(
 		operatorImage["repository"] = mirror.Host + "/wandb/operator"
 	}
 
-	telemetryValues := map[string]interface{}{
-		"mode": telemetry.Mode,
-	}
-	// Only set otelemetry.* keys the user supplied; leaving a key unset preserves the
-	// chart default (notably otelemetry.secretName, which telemetry-validation requires
-	// non-empty for full/forward).
-	otel := map[string]interface{}{}
-	if telemetry.OtelSecretName != "" {
-		otel["secretName"] = telemetry.OtelSecretName
-	}
-	if telemetry.OtelProtocol != "" {
-		otel["protocol"] = telemetry.OtelProtocol
-	}
-	if telemetry.OtelServiceName != "" {
-		otel["serviceName"] = telemetry.OtelServiceName
-	}
-	if telemetry.OtelResourceAttrs != "" {
-		otel["resourceAttributes"] = telemetry.OtelResourceAttrs
-	}
-	if len(otel) > 0 {
-		telemetryValues["otel"] = otel
-	}
+	telemetryValues := buildTelemetryValues(telemetry)
 	releaseValues := map[string]interface{}{
 		"wandb": map[string]interface{}{
 			"install": false,
@@ -781,30 +731,14 @@ func DeployOperator(
 			return fmt.Errorf("failed to ensure telemetry namespace %q: %w", wandbNamespace, err)
 		}
 	}
+	// Enable the telemetry subchart dependencies (chart defaults are false). The
+	// forwarding.otlp.* values for "forward" are already set by buildTelemetryValues.
 	switch telemetry.Mode {
 	case TelemetryModeFull:
 		releaseValues["victoria-metrics-operator"] = map[string]interface{}{"enabled": true}
 		releaseValues["grafana-operator"] = map[string]interface{}{"enabled": true}
 	case TelemetryModeForward:
 		releaseValues["victoria-metrics-operator"] = map[string]interface{}{"enabled": true}
-		otlp := map[string]interface{}{
-			"endpoint": telemetry.ForwardEndpoint,
-		}
-		if telemetry.ForwardProtocol != "" {
-			otlp["protocol"] = telemetry.ForwardProtocol
-		}
-		if len(telemetry.ForwardHeaders) > 0 {
-			// Helm coalesces and schema-validates values as map[string]interface{};
-			// a map[string]string trips its type detector ("invalid jsonType").
-			headers := make(map[string]interface{}, len(telemetry.ForwardHeaders))
-			for k, v := range telemetry.ForwardHeaders {
-				headers[k] = v
-			}
-			otlp["headers"] = headers
-		}
-		telemetryValues["forwarding"] = map[string]interface{}{
-			"otlp": otlp,
-		}
 	}
 
 	if releaseExists {

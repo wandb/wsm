@@ -728,8 +728,10 @@ func DeployOperator(
 	// <mirror>/<host-stripped path>, matching where `wsm registry mirror` pushes
 	// them (translate() in registry_mirror.go). Helm deep-merges these over the
 	// chart's values.yaml, so image tags and unrelated keys are preserved.
-	// Kafka (Bufstream) has no subchart operator here; its images are retargeted
-	// via spec.global.imageRegistry on the CR, not a Helm value.
+	// Kafka (Bufstream) has no subchart operator here and no Helm image knob; the
+	// operator emits its data-plane images with upstream refs, so they reach the
+	// mirror via each node's container-runtime registry mirror — not a Helm value
+	// and not spec.global.imageRegistry (which --mirror-registry does not set).
 	if mirror != nil {
 		// moco injects three sidecar images into every MySQLCluster via the
 		// controller's --agent-image / --fluent-bit-image / mysqld_exporter args

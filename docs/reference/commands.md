@@ -37,7 +37,7 @@ wsm deploy-v2 operator [flags]
 | `--install-nginx-gateway` | `auto` | Nginx-gateway-fabric install mode: `auto`, `true`, `false` |
 | `--enable-gateway-api` | `true` | Enable Gateway API support in cert-manager |
 | `--include-cr` | `false` | Also deploy the WeightsAndBiases CR in this run. Left off, this command installs only the operator stack (phase 1) and you run `wsm deploy-v2 wandb deploy` separately (phase 2). When set, all `wsm deploy-v2 wandb deploy` CR flags apply here too. |
-| `--mirror-registry` | — | Pull every chart and image from this registry (e.g. `harbor.corp:5443`), and set the per-subchart Helm image values so the managed-service operators + Kafka broker pull from it. Populate it first with `wsm registry mirror --to <same-host>`. See [On-Prem Deployment](../deployment/on-prem.md). |
+| `--mirror-registry` | — | Pull every chart and image from this registry (e.g. `harbor.corp:5443`), and set the per-subchart Helm image values so the managed-service operators pull from it. The managed data-plane images (incl. the Kafka/Bufstream broker) keep upstream refs and reach the mirror via each node's container-runtime registry mirror — not this flag. Populate it first with `wsm registry mirror --to <same-host>`. See [On-Prem Deployment](../deployment/on-prem.md). |
 | `--insecure-registry` | `false` | Use plain HTTP / skip TLS verification when fetching from `--mirror-registry`. Required for plain-HTTP `registry:2`; **never** in production. |
 | `--registry-ca-file` | — | PEM CA bundle to trust for an HTTPS `--mirror-registry` with a self-signed / internal-CA cert. Used for chart pulls and mounted into the operator so its server-manifest fetch trusts the registry. |
 | `--gateway-api-crd-url` | — | Fetch the Gateway API CRDs from this URL instead of the GitHub default (use a mirrored copy for air-gapped installs). |
@@ -82,7 +82,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--wandb-hostname` | `http://localhost:8080` | External URL for accessing W&B |
 | `--wandb-version` | — | Server manifest version (defaults to built-in stable version) |
 | `--mirror-registry` | — | Install the W&B instance from this mirror. Defaults `--manifest-repository` to `oci://<mirror>/wandb/server-manifest` (charts, operator/infra images, and the rewritten app images come from the mirror). The managed data-plane images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) keep their upstream refs and reach the mirror via each node's container-runtime registry mirror — not `spec.global.imageRegistry`. Populate the mirror first with `wsm registry mirror`. |
-| `--manifest-repository` | — | OCI repository for the server manifest. Auto-set from `--mirror-registry` when that is provided. |
+| `--manifest-repository` | — | Server manifest source. Accepts an OCI repository (`oci://…`, pulled over HTTPS) **or** a local `file://` path mounted onto the operator pod (the no-TLS option for plain-HTTP / insecure air-gap installs; a plain-HTTP `oci://` mirror is rejected). Auto-set to `oci://<mirror>/wandb/server-manifest` when `--mirror-registry` is provided and this is unset. |
 | `--size` | `small` | Deployment size profile: `dev`, `micro`, `small`, `medium`, `large`, `xlarge`, `xxlarge` |
 | `--license` | — | W&B license string |
 | `--license-file` | — | Path to a file containing the W&B license |
@@ -153,7 +153,11 @@ wsm deploy-v2 wandb deploy --context prod \
 wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --wandb-version 0.82.2
 
 # Air-gapped, split registry (replaces the deprecated --image-registry): charts/manifest
-# from the mirror, but the managed data-plane images from a different registry
+# from the mirror, but the managed data-plane images from a different registry.
+# The operator prepends spec.global.imageRegistry to the full upstream path, so
+# other-reg.corp must preserve full upstream paths (e.g. other-reg.corp:5443/cybozu-go/moco).
+# Without --cr-set, spec.global.imageRegistry stays empty and the data-plane images
+# reach the mirror only via each node's container-runtime registry mirror (see on-prem.md).
 wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 \
   --cr-set spec.global.imageRegistry=other-reg.corp:5443 --wandb-version 0.82.2
 

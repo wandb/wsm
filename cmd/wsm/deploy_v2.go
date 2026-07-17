@@ -18,6 +18,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"knative.dev/pkg/ptr"
 
@@ -173,7 +174,7 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("oidc-issuer-url", "", "OIDC issuer URL as <secret-name>:<key> (spec.wandb.oidc.issuerUrl; optional)")
 	cmd.PersistentFlags().String("oidc-auth-method", "", "OIDC auth method as <secret-name>:<key> (spec.wandb.oidc.authMethod; optional)")
 	cmd.PersistentFlags().String("oidc-session-length", "", "OIDC session length, e.g. 720h (spec.wandb.oidc.sessionLength; optional)")
-	cmd.PersistentFlags().String("image-registry", "", "Retarget container images to this registry for air-gapped installs (spec.global.imageRegistry; optional). Overrides the value --mirror-registry sets; usually you only need --mirror-registry.")
+	cmd.PersistentFlags().String("image-registry", "", "Retarget container images to this registry for air-gapped installs (spec.global.imageRegistry; optional). Usually you only need --mirror-registry, which does not set spec.global.imageRegistry.")
 	_ = cmd.PersistentFlags().MarkDeprecated("image-registry", "use --mirror-registry, or --cr-set spec.global.imageRegistry=<host> for a different data-plane registry")
 	cmd.PersistentFlags().StringArray("custom-ca-cert-file", nil, "Path to a PEM CA certificate to trust in W&B workloads; repeatable (spec.global.customCACerts; optional)")
 	cmd.PersistentFlags().String("custom-ca-configmap", "", "Name of a ConfigMap holding CA certificates to trust in W&B workloads (spec.global.caCertsConfigMap; optional)")
@@ -316,12 +317,9 @@ func wandbCreateCmd() *cobra.Command {
 				return err
 			}
 
-			// When installing from a mirror, default the server-manifest source to
-			// the mirror so the operator pulls the manifest (and every app image it
-			// references) offline. 'wsm registry mirror --wandb-version' pushes it to
-			// exactly this path.
-			if f.manifestRepo == "" && f.mirrorRegistry != "" {
-				f.manifestRepo = "oci://" + strings.TrimRight(f.mirrorRegistry, "/") + "/wandb/server-manifest"
+			// The CR is applied on this path, so an unusable manifest source is fatal.
+			if err := normalizeMirrorManifestSource(&f, true); err != nil {
+				return err
 			}
 
 			ctx := context.Background()
@@ -389,8 +387,10 @@ func operatorDeployCmd() *cobra.Command {
 			forwardHeaders, _ := cmd.Flags().GetStringToString("observability-forward-headers")
 			wait, _ := cmd.Flags().GetBool("wait")
 
-			if f.mirrorRegistry != "" && f.insecureRegistry {
-				fmt.Println("⚠ --insecure-registry: the operator stack will install from the mirror, but the W&B instance will NOT reconcile — the operator fetches the server manifest over HTTPS and cannot use a plain-HTTP registry. For a full offline install, serve the mirror over HTTPS and pass --registry-ca-file. See docs/deployment/on-prem.md.")
+			// The CR only reconciles this run when --include-cr is set; otherwise the
+			// operator stack still installs and an unusable manifest source is a warning.
+			if err := normalizeMirrorManifestSource(&f, includeCR); err != nil {
+				return err
 			}
 
 			if err := validateObservabilityMode(f.telemetryMode); err != nil {
@@ -469,7 +469,8 @@ func operatorDeployCmd() *cobra.Command {
 				fmt.Printf("  • Status: kubectl get wandb -n %s\n", f.wandbNamespace)
 				fmt.Println()
 			} else {
-				fmt.Println("Next: install the W&B instance with 'wsm deploy-v2 wandb deploy'", "(add --mirror-registry for an air-gapped install).")
+				kubeContext, _ := cmd.Flags().GetString("context")
+				fmt.Printf("Next: install the W&B instance with 'wsm deploy-v2 wandb deploy --context %s' (add --mirror-registry for an air-gapped install).\n", kubeContext)
 			}
 			return nil
 		},
@@ -485,7 +486,7 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().StringVar(&installCertManagerMode, "install-cert-manager", certManagerInstallModeAuto, "Cert-manager install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
 	cmd.Flags().StringVar(&installNginxGatewayMode, "install-nginx-gateway", nginxGatewayInstallModeAuto, "Nginx-gateway-fabric install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
 
-	cmd.Flags().BoolVar(&enableGatewayAPI, "enable-gateway-api", true, "Disables Gateway API support for cert-manager")
+	cmd.Flags().BoolVar(&enableGatewayAPI, "enable-gateway-api", true, "Enable Gateway API support for cert-manager")
 	cmd.Flags().BoolVar(&includeCR, "include-cr", false, "Also deploy the WeightsAndBiases CR in this run instead of leaving it to 'wsm deploy-v2 wandb deploy'")
 	cmd.Flags().StringVar(&gatewayCRDURL, "gateway-api-crd-url", "", "Fetch the Gateway API CRDs from this URL instead of the GitHub default (use a mirrored copy for air-gapped installs)")
 	cmd.Flags().BoolVar(&skipGatewayCRDs, "skip-gateway-api-crds", false, "Assume the Gateway API CRDs are already installed; fail instead of fetching them from the internet")
@@ -1180,6 +1181,30 @@ func validateVersionOverride(overrides []operator.CROverride) error {
 	return nil
 }
 
+// normalizeMirrorManifestSource defaults the server-manifest source from the mirror
+// and rejects a source the operator can't consume. When installing from a mirror,
+// defaulting manifestRepo to oci://<mirror>/wandb/server-manifest makes the operator
+// pull the manifest (and every app image it references) offline — 'wsm registry mirror
+// --wandb-version' pushes it to exactly this path. willReconcile is true when the CR is
+// actually applied this run (always for `wandb deploy`; only with --include-cr for
+// `operator`); when false the operator stack still installs and the CR is deferred, so
+// an unusable source is a warning, not a failure.
+func normalizeMirrorManifestSource(f *wandbCRFlags, willReconcile bool) error {
+	if f.manifestRepo == "" && f.mirrorRegistry != "" {
+		f.manifestRepo = "oci://" + strings.TrimRight(f.mirrorRegistry, "/") + "/wandb/server-manifest"
+	}
+	// An oci:// manifest is fetched over HTTPS; a plain-HTTP mirror can't serve it. A
+	// file:// source is mounted onto the operator pod and needs no registry TLS.
+	if f.insecureRegistry && strings.HasPrefix(f.manifestRepo, "oci://") {
+		msg := "--insecure-registry: the operator fetches an oci:// server manifest over HTTPS and cannot use a plain-HTTP registry. Serve the mirror over HTTPS with --registry-ca-file, or deliver the manifest via --manifest-repository file://… (see docs/deployment/on-prem.md)"
+		if willReconcile {
+			return errors.New(msg)
+		}
+		fmt.Println("⚠ " + msg + "; the operator stack will install but the W&B instance will not reconcile until you provide a usable manifest source.")
+	}
+	return nil
+}
+
 func processWandbCR(f wandbCRFlags) error {
 	if f.crFile != "" {
 		var err error
@@ -1218,6 +1243,13 @@ func processWandbCR(f wandbCRFlags) error {
 	// and the master refuses to start with a limit >= 30000, so the size preset's
 	// default (e.g. 100Gi -> 102400) crashes SeaweedFS. Keep this under 30Gi.
 	if f.objectStoreStorageSize != "" {
+		q, err := resource.ParseQuantity(f.objectStoreStorageSize)
+		if err != nil {
+			return fmt.Errorf("--object-store-storage-size %q is not a valid quantity: %w", f.objectStoreStorageSize, err)
+		}
+		if mib := q.Value() / (1024 * 1024); mib >= 30000 {
+			return fmt.Errorf("--object-store-storage-size %q yields SeaweedFS volumeSizeLimitMB %d; must be < 30000 (keep it under ~30Gi)", f.objectStoreStorageSize, mib)
+		}
 		if o, ok := wandbCR.Spec.ObjectStore[v2.DefaultInstanceName]; ok && o.ManagedObjectStore != nil {
 			o.ManagedObjectStore.StorageSize = f.objectStoreStorageSize
 		}

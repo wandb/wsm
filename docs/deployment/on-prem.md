@@ -214,7 +214,7 @@ DB images get retargeted**:
 | operator chart + image | `wsm registry mirror` → `wsm deploy-v2 operator --mirror-registry` | `$REG/wandb/charts/operator`, `$REG/wandb/operator` |
 | cert-manager, nginx-gateway | same | `$REG/jetstack/*`, `$REG/nginx/*` |
 | server manifest + app images (weave, …) | `wsm registry mirror --wandb-version` → `--mirror-registry` (auto-sets `--manifest-repository`) | `$REG/wandb/server-manifest`, `$REG/wandb/*` |
-| managed-service operators + Kafka (tier 2) | `wsm registry mirror` (push) → `wsm deploy-v2 operator --mirror-registry` (per-subchart Helm values) | `$REG/<host-stripped>` |
+| managed-service operators (tier 2) | `wsm registry mirror` (push) → `wsm deploy-v2 operator --mirror-registry` (per-subchart Helm values) | `$REG/<host-stripped>` |
 | managed data-plane: ClickHouse/MySQL/Redis/SeaweedFS/Kafka (tier 3) | `wsm registry mirror` (push) → node/runtime registry mirror (`--insecure-registry-host` on Kind; per-node config on a real cluster) | `$REG/<host-stripped>` |
 | Kind node image (only if WSM provisions the cluster) | `wsm deploy-v2 operator --setup-k8s-cluster --kind-node-image $REG/...` | `$REG/...` |
 
@@ -289,11 +289,11 @@ kubectl get pods -n wandb | grep -iE "weave|clickhouse|kafka|mysql|redis|seaweed
 kubectl get wandb -n wandb
 ```
 
-The weave + database pods should reach `Running`, all pulled from `$REG`. If a pod is stuck in `ImagePullBackOff` while `registry check` reports everything present, the image is in the registry but a pod is still asking for a public host — check that you passed `--mirror-registry` on **both** phases (step 7). Confirm the data-plane pods carry the mirror host:
+The weave + database pods should reach `Running`, all pulled from `$REG`. If a pod is stuck in `ImagePullBackOff` while `registry check` reports everything present, the image is in the registry but a pod is still asking for a public host — check that you passed `--mirror-registry` on **both** phases (step 7). Note that `spec.global.imageRegistry` stays **empty**: `--mirror-registry` does not set it, and the data-plane pods keep their **upstream** image refs — the node's containerd registry mirror rewrites them to `$REG` at pull time. So a public-host `ImagePullBackOff` is a node-mirror problem, not a CR field to change:
 
 ```bash
-kubectl get wandb -n wandb -o jsonpath='{.spec.global.imageRegistry}{"\n"}'   # should be $REG
-kubectl get pods -n wandb -o jsonpath='{range .items[*]}{.spec.containers[*].image}{"\n"}{end}' | sort -u
+kubectl get wandb -n wandb -o jsonpath='{.spec.global.imageRegistry}{"\n"}'   # expected: empty (unless you set --cr-set/--image-registry)
+kubectl get pods -n wandb -o jsonpath='{range .items[*]}{.spec.containers[*].image}{"\n"}{end}' | sort -u   # data-plane refs stay upstream; the node mirror redirects them
 ```
 
 If a pull fails with `x509: certificate signed by unknown authority`, the refs are right but the **node doesn't trust the registry CA** — see [Make the nodes trust the CA](#make-the-nodes-trust-the-ca). If the data-plane pods `ImagePullBackOff` on **public** hosts (`docker.io/…`, `quay.io/…`, `us-docker.pkg.dev/…`), the node's container-runtime registry mirror isn't configured for that registry — add it to `certs.d` (`--insecure-registry-host` on Kind). Then complete the [manual steps not handled by `wsm`](#manual-steps-not-handled-by-wsm) (license, external DNS/TLS for the W&B endpoint).

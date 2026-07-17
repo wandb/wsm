@@ -1,0 +1,199 @@
+name: PR Checks
+
+on:
+  pull_request:
+    # labeled/unlabeled so the Release Label job re-evaluates when a release
+    # label is added or removed after the PR is opened.
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled]
+    branches: [main]
+
+permissions:
+  pull-requests: read
+  contents: read
+
+env:
+  # Bots whose PRs don't follow the Conventional-Commit / template rules.
+  # To exempt another bot, add its payload login (e.g. "foo[bot]") to this
+  # space-separated list — that's the only change needed; all jobs read it.
+  EXEMPT_AUTHORS: "dependabot[bot] wandb-renovate[bot]"
+
+jobs:
+  pr-body:
+    name: PR Body
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            // Auto-generated PRs (bots) don't follow the template, so exempt them. Exit
+            // success rather than skip — a skipped required check leaves the PR stuck
+            // "waiting for status".
+            const author = (context.payload.pull_request.user || {}).login || "";
+            const exemptAuthors = (process.env.EXEMPT_AUTHORS || "").split(/\s+/).filter(Boolean);
+            if (exemptAuthors.includes(author)) {
+              core.info(`Skipping PR Body check for exempt PR (author=${author}).`);
+              return;
+            }
+
+            const body = context.payload.pull_request.body || "";
+            // Strip HTML comments so guidance text never counts toward the Summary minimum.
+            const stripped = body.replace(/<!--[\s\S]*?-->/g, "");
+            const errors = [];
+
+            // 1) Summary section must have >= 50 non-whitespace chars (excluding the Jira line).
+            const summaryMatch = stripped.match(/#\s*Summary\s*([\s\S]*?)(?=\n#\s|$)/i);
+            let summaryText = summaryMatch ? summaryMatch[1] : "";
+            summaryText = summaryText.replace(/\*\*Jira:\*\*.*$/gim, "");
+            const summaryLen = summaryText.replace(/\s/g, "").length;
+            if (summaryLen < 50) {
+              errors.push(
+                `Summary section has only ${summaryLen} non-whitespace characters; need >= 50. ` +
+                `Describe what this PR does and why.`
+              );
+            }
+
+            // 2) No requirement checkbox may be left unchecked.
+            const unchecked = stripped.split("\n").filter((l) => /^\s*-\s*\[ \]/.test(l));
+            if (unchecked.length) {
+              errors.push(
+                `${unchecked.length} unchecked checkbox(es) found. Complete every requirement before merging:\n` +
+                unchecked.map((l) => "  " + l.trim()).join("\n")
+              );
+            }
+
+            if (errors.length) {
+              core.setFailed(errors.join("\n\n"));
+            } else {
+              core.info(`PR body OK (Summary: ${summaryLen} chars, all checkboxes checked).`);
+            }
+
+  pr-title:
+    name: PR Title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            // Bots use their own title format; exempt them. Exit success rather than skip —
+            // a skipped required check blocks the merge gate.
+            const author = (context.payload.pull_request.user || {}).login || "";
+            const exemptAuthors = (process.env.EXEMPT_AUTHORS || "").split(/\s+/).filter(Boolean);
+            if (exemptAuthors.includes(author)) {
+              core.info(`Skipping PR Title check for exempt PR (author=${author}).`);
+              return;
+            }
+
+            const title = context.payload.pull_request.title || "";
+            const types = "feat|fix|build|chore|ci|docs|perf|refactor|revert|style|test";
+            const re = new RegExp(`^(${types})(\\([a-z0-9 ._-]+\\))?(!)?: (.+)$`);
+            const m = title.match(re);
+            if (!m) {
+              core.setFailed(
+                `PR title "${title}" is not a valid Conventional Commit.\n` +
+                `Format: type(scope)!: description\n` +
+                `Types: ${types.replace(/\|/g, ", ")}\n` +
+                `Example: feat(deploy-v2): add kind cluster picker\n` +
+                `See https://www.conventionalcommits.org/en/v1.0.0/`
+              );
+              return;
+            }
+            const desc = m[4].trim();
+            const errors = [];
+            const fillers = ["update", "fix", "changes", "change", "wip", "stuff", "misc", "tweak", "tweaks"];
+            if (desc.length < 10) errors.push(`Description "${desc}" is too short (< 10 chars). Be specific.`);
+            if (fillers.includes(desc.toLowerCase())) errors.push(`Description "${desc}" is filler — say what actually changed.`);
+            if (/[.]$/.test(desc)) errors.push(`Drop the trailing period on the description.`);
+            if (/^[A-Z]/.test(desc)) errors.push(`Start the description lowercase, e.g. "add ..." not "Add ...".`);
+            if (/^(added|fixed|updated|removed|changed|created|deleted|refactored|implemented|renamed|moved)\b/i.test(desc)) {
+              errors.push(`Use imperative mood ("add/fix/update/remove"), not past tense ("${desc.split(/\s+/)[0]}").`);
+            }
+            if (title.length > 72) errors.push(`Title is ${title.length} chars; keep it <= 72 (<= 50 ideal).`);
+
+            if (errors.length) {
+              core.setFailed(
+                `PR title needs work:\n` + errors.map((e) => "  - " + e).join("\n") +
+                `\nSee https://graphite.com/guides/best-pr-title-guidelines`
+              );
+            } else {
+              core.info(`PR title OK — type=${m[1]} scope=${m[2] || "none"} breaking=${m[3] ? "yes" : "no"}.`);
+            }
+
+  pr-commits:
+    name: PR Commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            // Bots use their own commit format; exempt them. Exit success rather than skip —
+            // a skipped required check blocks the merge gate.
+            const author = (context.payload.pull_request.user || {}).login || "";
+            const exemptAuthors = (process.env.EXEMPT_AUTHORS || "").split(/\s+/).filter(Boolean);
+            if (exemptAuthors.includes(author)) {
+              core.info(`Skipping PR Commits check for exempt PR (author=${author}).`);
+              return;
+            }
+
+            const { data: commits } = await github.rest.pulls.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const types = "feat|fix|build|chore|ci|docs|perf|refactor|revert|style|test";
+            const re = new RegExp(`^(${types})(\\([a-z0-9 ._-]+\\))?(!)?: (.+)$`);
+            const bad = [];
+            for (const c of commits) {
+              const subject = c.commit.message.split("\n")[0];
+              if (/^(Merge|fixup!|squash!)/.test(subject)) continue; // skip merge/autosquash commits
+              const m = subject.match(re);
+              if (!m) {
+                bad.push(`${c.sha.slice(0, 7)}  "${subject}"  -> not a Conventional Commit`);
+              } else if (/[.]$/.test(m[4].trim())) {
+                bad.push(`${c.sha.slice(0, 7)}  "${subject}"  -> drop trailing period`);
+              }
+            }
+            if (bad.length) {
+              core.setFailed(
+                `Invalid commit message(s) — keep the branch history Conventional-Commit clean:\n` +
+                bad.map((b) => "  " + b).join("\n") +
+                `\nFormat: type(scope)!: description (types: ${types.replace(/\|/g, ", ")})`
+              );
+            } else {
+              core.info(`All ${commits.length} commit subject(s) OK.`);
+            }
+
+  pr-release-label:
+    name: Release Label
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            // release-on-merge.yaml cuts a release on every merge to main and reads the
+            // bump level from a release:* label. Require an explicit choice so the bump is
+            // never an accidental default. Bots (renovate/dependabot) are exempt — their
+            // merges fall through to the patch default in release-on-merge.yaml.
+            const author = (context.payload.pull_request.user || {}).login || "";
+            const exemptAuthors = (process.env.EXEMPT_AUTHORS || "").split(/\s+/).filter(Boolean);
+            if (exemptAuthors.includes(author)) {
+              core.info(`Skipping Release Label check for exempt PR (author=${author}).`);
+              return;
+            }
+
+            const labels = (context.payload.pull_request.labels || []).map((l) => l.name);
+            const releaseLabels = ["release:major", "release:minor", "release:patch", "release:skip"];
+            const found = labels.filter((l) => releaseLabels.includes(l));
+            const menu =
+              `\n  1. release:major  — breaking change (vX+1.0.0)` +
+              `\n  2. release:minor  — new feature (vX.Y+1.0)` +
+              `\n  3. release:patch  — bug fix / no API change (vX.Y.Z+1)` +
+              `\n  4. release:skip   — no release for this merge`;
+
+            if (found.length === 0) {
+              core.setFailed(`This PR has no release label. Please choose one of the following labels:${menu}`);
+            } else if (found.length > 1) {
+              core.setFailed(`This PR has multiple release labels (${found.join(", ")}). Choose exactly one:${menu}`);
+            } else {
+              core.info(`Release label OK — ${found[0]}.`);
+            }

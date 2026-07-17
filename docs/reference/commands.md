@@ -85,7 +85,7 @@ wsm deploy-v2 wandb deploy [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--context` | — | **Required.** Name of the kubeconfig context to use |
-| `--cr-file` | — | Path to a custom WeightsAndBiases CR YAML file |
+| `--cr-file` | — | Path to a custom WeightsAndBiases CR YAML file. Validated strictly: unknown/misspelled fields error out |
 | `--wandb-name` | `wandb` | Name of the W&B instance |
 | `--wandb-namespace` | `wandb` | Kubernetes namespace for the CR |
 | `--wandb-hostname` | `http://localhost:8080` | External URL for accessing W&B |

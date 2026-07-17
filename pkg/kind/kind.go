@@ -234,14 +234,17 @@ nodeRegistration:
 // host-stripped path (e.g. quay.io/strimzi/kafka → <mirror>/v2/strimzi/kafka),
 // which is exactly where `wsm registry mirror` pushes them.
 //
-// us-docker.pkg.dev is deliberately absent: W&B's own charts/operator/app images
-// are retargeted explicitly (Helm values + server-manifest rewrite) under a
-// project-stripped path (<mirror>/wandb/*) that wouldn't match a transparent
-// mirror's full-path request.
+// us-docker.pkg.dev is included only for the Bufstream Kafka image
+// (us-docker.pkg.dev/buf-images-1/...), a managed data-plane image the operator
+// emits with its upstream ref. W&B's own charts/operator/app images use
+// mirror-host refs (Helm values + server-manifest rewrite → <mirror>/wandb/*),
+// so they never transit this mirror and its project-stripped path doesn't
+// collide with them.
 var upstreamRegistryMirrors = map[string]string{
-	"docker.io": "https://registry-1.docker.io",
-	"quay.io":   "https://quay.io",
-	"ghcr.io":   "https://ghcr.io",
+	"docker.io":         "https://registry-1.docker.io",
+	"quay.io":           "https://quay.io",
+	"ghcr.io":           "https://ghcr.io",
+	"us-docker.pkg.dev": "https://us-docker.pkg.dev",
 }
 
 func writeInsecureRegistryHostsConfig(ctx context.Context, clusterName, insecureRegistryHost string) error {

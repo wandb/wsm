@@ -112,25 +112,29 @@ spec:
   retentionPolicy:
     onDelete: detach
   mysql:
-    managedMysql:
-      telemetry:
-        enabled: true
+    default:
+      managedMysql:
+        telemetry:
+          enabled: true
   redis:
-    managedRedis:
-      telemetry:
-        enabled: true
+    default:
+      managedRedis:
+        telemetry:
+          enabled: true
   kafka:
     managedKafka:
       telemetry:
         enabled: true
   objectStore:
-    managedObjectStore:
-      telemetry:
-        enabled: true
+    default:
+      managedObjectStore:
+        telemetry:
+          enabled: true
   clickHouse:
-    managedClickHouse:
-      telemetry:
-        enabled: true
+    default:
+      managedClickHouse:
+        telemetry:
+          enabled: true
 ```
 
 ## Networking Modes

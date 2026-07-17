@@ -85,7 +85,7 @@ wsm deploy-v2 wandb deploy [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--context` | — | **Required.** Name of the kubeconfig context to use |
-| `--cr-file` | — | Path to a custom WeightsAndBiases CR YAML file |
+| `--cr-file` | — | Path to a custom WeightsAndBiases CR YAML file. Validated strictly: unknown/misspelled fields error out |
 | `--wandb-name` | `wandb` | Name of the W&B instance |
 | `--wandb-namespace` | `wandb` | Kubernetes namespace for the CR |
 | `--wandb-hostname` | `http://localhost:8080` | External URL for accessing W&B |
@@ -412,6 +412,21 @@ wsm telemetry vmagent  --context <kubeconfig-context>   # VMAgent scrape-status 
 | `vmagent` | `vmagent-victoria-agent` | 8429 | `/` | `full` or `forward` |
 
 Each subcommand takes `--service` (override the resolved Service name), `--local-port` (0 for an OS-assigned port), `--remote-port`, and `--no-browser`. Services are looked up by their well-known names (above); if the operator has renamed one, pass `--service` to point at it.
+
+---
+
+## Utility Commands
+
+### `wsm version`
+
+Print the `wsm` version, git commit, and build date, then exit. Needs no cluster or `--context`.
+
+```bash
+wsm version
+# wsm v2.0.0 (commit 738c0b9, built 2026-07-17T21:23:14Z)
+```
+
+The values are stamped in at build time (GoReleaser on tagged releases; `make build` stamps a `dev` build locally). The version is also available as `wsm --version`.
 
 ---
 

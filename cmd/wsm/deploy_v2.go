@@ -25,6 +25,7 @@ import (
 	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	certmanagermetav1 "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	"github.com/wandb/operator/api/v2"
+	sigsyaml "sigs.k8s.io/yaml"
 )
 
 func init() {
@@ -320,7 +321,7 @@ func wandbCreateCmd() *cobra.Command {
 
 			ctx := context.Background()
 
-			if err := processWandbCR(f); err != nil {
+			if err := processWandbCR(cmd, f); err != nil {
 				return err
 			}
 
@@ -400,7 +401,7 @@ func operatorDeployCmd() *cobra.Command {
 				return err
 			}
 
-			if err := processWandbCR(f); err != nil {
+			if err := processWandbCR(cmd, f); err != nil {
 				return err
 			}
 
@@ -1211,7 +1212,7 @@ func normalizeMirrorManifestSource(f *wandbCRFlags, willReconcile bool) error {
 	return nil
 }
 
-func processWandbCR(f wandbCRFlags) error {
+func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 	if f.crFile != "" {
 		var err error
 		wandbCR, err = readCRFile(f.crFile)
@@ -1221,10 +1222,21 @@ func processWandbCR(f wandbCRFlags) error {
 		}
 	}
 
-	wandbCR.Name = f.wandbName
-	wandbCR.Spec.Wandb.Hostname = f.wandbHostname
-	wandbCR.Spec.Size = v2.Size(f.size)
-	wandbCR.Spec.RetentionPolicy.OnDelete = v2.OnDeletePolicy(f.retentionPolicy)
+	// Apply each flag only when explicitly set; otherwise keep the CR-file value,
+	// falling back to the flag default (carried in f.*) when the file left it empty.
+	// Preserves the documented precedence: --cr-set > flags > --cr-file.
+	if cmd.Flags().Changed("wandb-name") || wandbCR.Name == "" {
+		wandbCR.Name = f.wandbName
+	}
+	if cmd.Flags().Changed("wandb-hostname") || wandbCR.Spec.Wandb.Hostname == "" {
+		wandbCR.Spec.Wandb.Hostname = f.wandbHostname
+	}
+	if cmd.Flags().Changed("size") || wandbCR.Spec.Size == "" {
+		wandbCR.Spec.Size = v2.Size(f.size)
+	}
+	if cmd.Flags().Changed("retention-policy") || wandbCR.Spec.RetentionPolicy.OnDelete == "" {
+		wandbCR.Spec.RetentionPolicy.OnDelete = v2.OnDeletePolicy(f.retentionPolicy)
+	}
 
 	if wandbCR.Spec.Wandb.Version == "" && f.wandbVersion == "" {
 		wandbCR.Spec.Wandb.Version = defaultWandbVersion
@@ -1444,9 +1456,9 @@ func readCRFile(crPath string) (*v2.WeightsAndBiases, error) {
 		return nil, fmt.Errorf("failed to read CR file: %w", err)
 	}
 	cr := &v2.WeightsAndBiases{}
-	err = yaml.Unmarshal(crData, cr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse CR YAML: %w", err)
+	// Strict surfaces unknown/misspelled keys as errors instead of dropping them
+	if err := sigsyaml.UnmarshalStrict(crData, cr); err != nil {
+		return nil, fmt.Errorf("failed to parse CR YAML from %s: %w", crPath, err)
 	}
 	return cr, nil
 }

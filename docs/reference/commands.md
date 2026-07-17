@@ -415,6 +415,21 @@ Each subcommand takes `--service` (override the resolved Service name), `--local
 
 ---
 
+## Utility Commands
+
+### `wsm version`
+
+Print the `wsm` version, git commit, and build date, then exit. Needs no cluster or `--context`.
+
+```bash
+wsm version
+# wsm v2.0.0 (commit 738c0b9, built 2026-07-17T21:23:14Z)
+```
+
+The values are stamped in at build time (GoReleaser on tagged releases; `make build` stamps a `dev` build locally). The version is also available as `wsm --version`.
+
+---
+
 ## Flag Precedence
 
 When multiple configuration sources specify the same value, the resolution order is:

@@ -51,7 +51,7 @@ CR field reference: [`docs/reference/cr-fields.md`](./docs/reference/cr-fields.m
 | `wsm telemetry` | v2 | Open the in-cluster telemetry UIs (Grafana, VictoriaMetrics). |
 | `wsm set-version` | — | Set the version of a wsm-managed W&B instance. |
 | `wsm console` | v1 | Port-forward and open the W&B console in a browser. |
-| `wsm version` | — | Print the wsm version, commit, and build date. |
+| [`wsm version`](#wsm-version) | — | Print the wsm version, commit, and build date. |
 | [`wsm deploy`](#wsm-deploy) | v1 | Legacy three-phase install (operator → chart ConfigMap → v1 CR). |
 | [`wsm list`](#wsm-list) | v1 | List the container images a fresh install would pull. |
 | [`wsm download`](#wsm-download) | v1 | Build an air-gapped `./bundle/` (charts + images + spec). |
@@ -175,6 +175,20 @@ Download images and charts into a `./bundle/` for offline transfer. Requires
 ```bash
 wsm download [-p linux/amd64]
 ```
+
+---
+
+### `wsm version`
+
+Print the `wsm` version, git commit, and build date. Needs no cluster.
+
+```bash
+wsm version           # wsm v2.0.0 (commit 738c0b9, built 2026-07-17T…)
+wsm --version         # same value, cobra's built-in flag
+```
+
+Values are stamped at build time (GoReleaser on tagged releases; `make build`
+stamps a local `dev` build).
 
 ---
 

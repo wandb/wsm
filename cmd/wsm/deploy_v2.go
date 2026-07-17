@@ -150,14 +150,10 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().Bool("add-ingress-annotations", false, "Add cloud provider annotations to Ingress or Gateway API")
 	cmd.PersistentFlags().String("license", "", "W&B license string (optional, injected into spec.wandb.license)")
 	cmd.PersistentFlags().String("license-file", "", "Path to W&B license file (optional, injected into spec.wandb.license)")
+	// --observability-mode is persistent: on `wandb deploy` it toggles CR telemetry.enabled,
+	// on `operator` it also drives the chart. The chart-only otel/forwarding knobs below live on
+	// `operator` alone (see operatorDeployCmd) since that is the only command that applies them.
 	cmd.PersistentFlags().String("observability-mode", "off", "Enable observability for applications (off, full, forward)")
-	cmd.PersistentFlags().String("observability-forward-endpoint", "", "OTLP endpoint to forward telemetry to (required when --observability-mode=forward)")
-	cmd.PersistentFlags().String("observability-otel-secret", "", "Name of the OTEL connection secret (telemetry.otel.secretName; defaults to the chart's wandb-otel-connection; applied when --observability-mode=full|forward)")
-	cmd.PersistentFlags().String("observability-otel-protocol", "", "OTEL exporter protocol, e.g. http/protobuf or grpc (telemetry.otel.protocol; chart default if unset)")
-	cmd.PersistentFlags().String("observability-otel-service-name", "", "OTEL service.name resource attribute (telemetry.otel.serviceName; chart default if unset)")
-	cmd.PersistentFlags().String("observability-otel-resource-attributes", "", "Additional OTEL resource attributes, comma-separated key=value (telemetry.otel.resourceAttributes; chart default if unset)")
-	cmd.PersistentFlags().String("observability-forward-protocol", "", "OTLP forwarding protocol, e.g. http/protobuf or grpc (telemetry.forwarding.otlp.protocol; only applied when --observability-mode=forward)")
-	cmd.PersistentFlags().StringToString("observability-forward-headers", nil, "OTLP forwarding headers as key=value pairs, e.g. Authorization=Bearer... (telemetry.forwarding.otlp.headers; only applied when --observability-mode=forward)")
 	cmd.PersistentFlags().String("retention-policy", "detach", "Retention policy for W&B instance (detach, purge) - defaults to detach")
 	cmd.PersistentFlags().String("size", "small", "W&B instance size (dev, micro, small, medium, large, xlarge, xxlarge)")
 	cmd.PersistentFlags().String("object-store-storage-size", "", "Override the managed object store (SeaweedFS) storage size, e.g. 20Gi. Must be < 30Gi: the operator derives SeaweedFS volumeSizeLimitMB from this and the master rejects a limit >= 30000. Leave empty to use the size preset's default.")
@@ -378,13 +374,7 @@ func operatorDeployCmd() *cobra.Command {
 			f := wandbCRFlagsFrom(cmd)
 			createAwsIngressClass, _ := cmd.Flags().GetBool("create-aws-ingress-class")
 			createAwsStorageClass, _ := cmd.Flags().GetBool("create-aws-storage-class")
-			telemetryForwardEndpoint, _ := cmd.Flags().GetString("observability-forward-endpoint")
-			otelSecret, _ := cmd.Flags().GetString("observability-otel-secret")
-			otelProtocol, _ := cmd.Flags().GetString("observability-otel-protocol")
-			otelServiceName, _ := cmd.Flags().GetString("observability-otel-service-name")
-			otelResourceAttrs, _ := cmd.Flags().GetString("observability-otel-resource-attributes")
-			forwardProtocol, _ := cmd.Flags().GetString("observability-forward-protocol")
-			forwardHeaders, _ := cmd.Flags().GetStringToString("observability-forward-headers")
+			telemetry := telemetryConfigFrom(cmd)
 			wait, _ := cmd.Flags().GetBool("wait")
 
 			// The CR only reconciles this run when --include-cr is set; otherwise the
@@ -393,10 +383,10 @@ func operatorDeployCmd() *cobra.Command {
 				return err
 			}
 
-			if err := validateObservabilityMode(f.telemetryMode); err != nil {
+			if err := validateObservabilityMode(telemetry.Mode); err != nil {
 				return err
 			}
-			if f.telemetryMode == operator.TelemetryModeForward && telemetryForwardEndpoint == "" {
+			if telemetry.Mode == operator.TelemetryModeForward && telemetry.ForwardEndpoint == "" {
 				return fmt.Errorf("--observability-mode=forward requires --observability-forward-endpoint")
 			}
 			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), f.gatewayClass, f.ingressClass); err != nil {
@@ -408,17 +398,6 @@ func operatorDeployCmd() *cobra.Command {
 			}
 			if err := validateVersionOverride(crOverrides); err != nil {
 				return err
-			}
-
-			telemetry := operator.TelemetryConfig{
-				Mode:              f.telemetryMode,
-				ForwardEndpoint:   telemetryForwardEndpoint,
-				OtelSecretName:    otelSecret,
-				OtelProtocol:      otelProtocol,
-				OtelServiceName:   otelServiceName,
-				OtelResourceAttrs: otelResourceAttrs,
-				ForwardProtocol:   forwardProtocol,
-				ForwardHeaders:    forwardHeaders,
 			}
 
 			if err := processWandbCR(f); err != nil {
@@ -491,6 +470,16 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().StringVar(&gatewayCRDURL, "gateway-api-crd-url", "", "Fetch the Gateway API CRDs from this URL instead of the GitHub default (use a mirrored copy for air-gapped installs)")
 	cmd.Flags().BoolVar(&skipGatewayCRDs, "skip-gateway-api-crds", false, "Assume the Gateway API CRDs are already installed; fail instead of fetching them from the internet")
 	cmd.Flags().BoolVar(&allowUnsupportedArch, "allow-unsupported-arch", false, "Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is published amd64-only and will crash under emulation on arm64 (e.g. Kind on Apple Silicon); set this only if you know your operator image is multi-arch.")
+
+	// Chart-only telemetry knobs. These configure the operator's telemetry Helm release, so they
+	// belong to `operator` alone — `wandb deploy` only applies the CR and can't honor them.
+	cmd.Flags().String("observability-forward-endpoint", "", "OTLP endpoint to forward telemetry to (required when --observability-mode=forward)")
+	cmd.Flags().String("observability-otel-secret", "", "Name of the OTEL connection secret (telemetry.otel.secretName; defaults to the chart's wandb-otel-connection; applied when --observability-mode=full|forward)")
+	cmd.Flags().String("observability-otel-protocol", "", "OTEL exporter protocol, e.g. http/protobuf or grpc (telemetry.otel.protocol; chart default if unset)")
+	cmd.Flags().String("observability-otel-service-name", "", "OTEL service.name resource attribute (telemetry.otel.serviceName; chart default if unset)")
+	cmd.Flags().String("observability-otel-resource-attributes", "", "Additional OTEL resource attributes, comma-separated key=value (telemetry.otel.resourceAttributes; chart default if unset)")
+	cmd.Flags().String("observability-forward-protocol", "", "OTLP forwarding protocol, e.g. http/protobuf or grpc (telemetry.forwarding.otlp.protocol; only applied when --observability-mode=forward)")
+	cmd.Flags().StringToString("observability-forward-headers", nil, "OTLP forwarding headers as key=value pairs, e.g. Authorization=Bearer... (telemetry.forwarding.otlp.headers; only applied when --observability-mode=forward)")
 	return cmd
 }
 
@@ -1145,6 +1134,23 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 		manifestRepo:           str("manifest-repository"),
 		objectStoreStorageSize: str("object-store-storage-size"),
 		crSet:                  crSet,
+	}
+}
+
+// telemetryConfigFrom reads the operator-chart telemetry flags into the operator domain type.
+// These flags live on `deploy-v2 operator` only (see operatorDeployCmd).
+func telemetryConfigFrom(cmd *cobra.Command) operator.TelemetryConfig {
+	str := func(name string) string { v, _ := cmd.Flags().GetString(name); return v }
+	headers, _ := cmd.Flags().GetStringToString("observability-forward-headers")
+	return operator.TelemetryConfig{
+		Mode:              str("observability-mode"),
+		ForwardEndpoint:   str("observability-forward-endpoint"),
+		OtelSecretName:    str("observability-otel-secret"),
+		OtelProtocol:      str("observability-otel-protocol"),
+		OtelServiceName:   str("observability-otel-service-name"),
+		OtelResourceAttrs: str("observability-otel-resource-attributes"),
+		ForwardProtocol:   str("observability-forward-protocol"),
+		ForwardHeaders:    headers,
 	}
 }
 

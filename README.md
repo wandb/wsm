@@ -1,283 +1,249 @@
 # Weights & Biases Server Manager
 
-WSM is a command-line tool designed to manage W&B server deployments.
-It simplifies the process of deploying, upgrading, and
-maintaining W&B server instances for airgapped environments and local development.
+WSM (`wsm`) is a command-line tool that installs and upgrades W&B Server on
+Kubernetes. It targets local development, on-prem, and air-gapped environments.
+
+The tool carries two command surfaces:
+
+- **v2 (`deploy-v2`, `cluster`, `registry`, …)** — the actively maintained flow.
+  Installs the [wandb/operator](https://github.com/wandb/operator) v2 stack
+  (cert-manager, nginx-gateway-fabric, wandb-operator) via Helm v4 + OCI charts,
+  can create Kind clusters in-process, and applies a typed `apps.wandb.com/v2`
+  `WeightsAndBiases` CR.
+- **v1 (`deploy`, `list`, `download`, `console`)** — the legacy air-gapped flow
+  built around the deployer channel API and the `apps.wandb.com/v1` CR. Frozen;
+  maintained only for existing air-gapped users.
+
+New deployments should use **v2**.
 
 ## Install
 
-Operator v2 compatible builds are only available from source at the moment  
-`pkg-config` is required for installation, run the following command to install it
-```bash
-brew install pkg-config gpgme
-```
-Install WSM from source 
+Requires **Go 1.26+**. Build from source:
+
 ```bash
 git clone https://github.com/wandb/wsm
 cd wsm
-git checkout operator-v2
-go build -o wsm ./cmd/wsm
+make build          # produces ./wsm
 ./wsm --help
-[optional] sudo mv wsm /usr/local/bin/wsm
 ```
-or if you have sudo permissions
-```aiignore
+
+Install onto your `PATH` (needs sudo for the default `/usr/local/bin`):
+
+```bash
 sudo make install
 ```
 
-## Usage
+`make build` builds with `CGO_ENABLED=0 -tags containers_image_openpgp`, so no
+system libraries are required. (Only if you build **without** that tag do you
+need `pkg-config` + `gpgme`: `brew install pkg-config gpgme`.)
 
-WSM provides several commands for managing W&B deployments:
+## Commands
 
-### Commands
+Full flag reference: [`docs/reference/commands.md`](./docs/reference/commands.md).
+CR field reference: [`docs/reference/cr-fields.md`](./docs/reference/cr-fields.md).
 
-- [`wsm list`](#wsm-list): List images required for deployment.
-- [`wsm download`](#wsm-download): Download images and dependencies for airgapped environments.
-- [`wsm deploy`](#wsm-deploy): Deploy W&B operator and resources.
-- [`wsm deploy-v2`](#wsm-deploy-v2): Deploy v2 W&B operator and resources (supports on-prem `--mirror-registry`).
-- [`wsm registry`](#wsm-registry): Mirror W&B install artifacts to a private container registry.
-- [`wsm cluster`](#wsm-cluster): Manage Kubernetes clusters for local testing.
-- [`wsm console`](#wsm-console): Open the W&B console.
+| Command | Surface | Purpose |
+|---|---|---|
+| [`wsm deploy-v2`](#wsm-deploy-v2) | v2 | Install the v2 operator stack and the W&B CR. |
+| [`wsm cluster`](#wsm-cluster) | v2 | Kind cluster lifecycle for local/testing. |
+| [`wsm registry`](#wsm-registry) | v2 | Mirror install artifacts to a private registry (on-prem / air-gapped). |
+| `wsm convert-v2` | v2 | Diff the live v1 CR against the v2 CR the conversion webhook would produce. |
+| `wsm telemetry` | v2 | Open the in-cluster telemetry UIs (Grafana, VictoriaMetrics). |
+| `wsm set-version` | — | Set the version of a wsm-managed W&B instance. |
+| `wsm console` | v1 | Port-forward and open the W&B console in a browser. |
+| `wsm version` | — | Print the wsm version, commit, and build date. |
+| [`wsm deploy`](#wsm-deploy) | v1 | Legacy three-phase install (operator → chart ConfigMap → v1 CR). |
+| [`wsm list`](#wsm-list) | v1 | List the container images a fresh install would pull. |
+| [`wsm download`](#wsm-download) | v1 | Build an air-gapped `./bundle/` (charts + images + spec). |
 
----
-
-### `wsm list`
-
-List the container images required for a Weights & Biases deployment. This is useful for pre-pulling images or preparing for an airgapped installation.
-
-**Usage:**
-```bash
-wsm list [flags]
-```
-
-**Flags:**
-- `-p, --platform string`: Platform to list images for (default "linux/amd64").
-
----
-
-### `wsm download`
-
-Download images and dependencies required for airgapped environments. This command pulls the necessary container images and saves them as a bundle.
-
-**Usage:**
-```bash
-wsm download [flags]
-```
-
-**Flags:**
-- `-p, --platform string`: Platform to download images for (default "linux/amd64").
-
----
-
-### `wsm deploy`
-
-Deploy the Weights & Biases operator and resources to a Kubernetes cluster.
-
-**Usage:**
-```bash
-wsm deploy [command] [flags]
-```
-
-**Subcommands:**
-- `operator`: Deploy the W&B operator.
-- `chart-cm`: Deploy the helm chart as a ConfigMap.
-- `wandb-cr`: Deploy the WeightsAndBiases Custom Resource.
-
-**Flags:**
-- `-a, --airgapped`: Deploy in airgapped mode.
-- `-b, --bundle string`: Path to the bundle to deploy with.
-- `-c, --chart string`: Path to W&B helm chart. If provided along with bundle, this will take precedence.
-- `-n, --namespace string`: Namespace to deploy into (default "wandb").
-- `-v, --values string`: Values file to apply to the helm chart yaml.
+Every `deploy-v2`, `cluster cleanup`, and `convert-v2` invocation requires
+`--context <kubeconfig-context>`.
 
 ---
 
 ### `wsm deploy-v2`
 
-Deploy the v2 W&B operator, server manifest, and custom resources.
+Install the v2 operator, then create a W&B instance. By default the `operator`
+command installs only the operator stack; create the instance separately with
+`wsm deploy-v2 wandb deploy`, or pass `--include-cr` to do both in one run.
 
-**Usage:**
 ```bash
-wsm deploy-v2 [command] [flags]
+wsm deploy-v2 operator --context <ctx> [flags]
+wsm deploy-v2 wandb deploy|destroy|get-ca-cert --context <ctx> [flags]
 ```
 
-**Subcommands:**
-- `operator`: Deploy the v2 operator with specified versions and configuration.
-  - `--operator-chart-version string`: Operator Chart version (e.g., v2.0.0) (default "1.5.2").
-    - Note: The Chart version specified will determine the image tag of operator deployed based on the [values file](https://github.com/wandb/operator/blob/v2/deploy/operator/values.yaml#L11)
-  - `--operator-namespace string`: Namespace for operator (default "wandb-operators").
-  - `--install-cert-manager`: Cert-manager install mode: `auto` (detect and reuse existing), `true` (force install flow), `false` (skip installation) (default "auto").
-  - `--install-nginx-gateway`: Nginx-gateway-fabric install mode: `auto` (detect and reuse existing), `true` (force install flow), `false` (skip installation) (default "false").
-  - `--setup-k8s-cluster`: Setup a Kind cluster before deploying.
-  - `--cluster-name string`: Name of the Kind cluster (only used with `--setup-k8s-cluster`) (default "kind").
-  - `--workers int`: Number of worker nodes (only used with `--setup-k8s-cluster`).
-  - `--mirror-registry string`: Pull every chart and image from this registry (e.g. `harbor.corp:5443`), and retarget the managed-service operator images via per-subchart Helm values. The managed data-plane images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) keep upstream refs and reach the mirror via each node's container-runtime registry mirror — not via this flag. Populate it first with `wsm registry mirror --to <same-host>`. See the [on-prem deployment guide](./docs/deployment/on-prem.md).
-  - `--insecure-registry`: Use plain HTTP / skip TLS verification when fetching from `--mirror-registry`. For local-laptop testing only.
-  - `--include-cr`: Also deploy the WeightsAndBiases CR in this run (default `false`).
-  - **Note:** by default the operator command installs only the operator stack; create the W&B instance separately with `wsm deploy-v2 wandb deploy`, or pass `--include-cr` to do both in one run.
-- `wandb`: Manage Weights & Biases instances.
-  - `deploy`: Deploy a W&B instance.
-    - `--cr-file string`: Path to WeightsAndBiases CR YAML (uses built-in default if not provided).
-    - `--license string`: W&B license string (optional, injected into spec.wandb.license).
-    - `--license-file string`: Path to W&B license file (optional, injected into spec.wandb.license).
-    - `--wandb-name string`: Name of the W&B instance (default "wandb").
-    - `--wandb-namespace string`: Namespace for CR (default "wandb").
-    - `--wandb-version string`: Server manifest version (e.g., 0.76.1).
-    - `--mirror-registry string`: Install the W&B instance from this mirror — defaults `--manifest-repository` to `oci://<mirror>/wandb/server-manifest`. It does **not** set `spec.global.imageRegistry`; the managed data-plane images reach the mirror via each node's container-runtime registry mirror.
-  - `destroy`: Destroy an instance of W&B.
-    - `--wandb-name string`: Name of the W&B instance (default "wandb").
-    - `--wandb-namespace string`: Namespace for CR (default "wandb").
+**`operator` — key flags:**
+- `--operator-chart-version string`: operator chart version, which selects the
+  operator image tag (default `2.0.0-beta.1`).
+- `--operator-namespace string`: operator namespace (default `wandb-operators`).
+- `--install-cert-manager string`: `auto` (detect & reuse), `true` (force
+  install), `false` (skip) (default `auto`).
+- `--install-nginx-gateway string`: same modes as above (default `auto`).
+- `--setup-k8s-cluster`: create a Kind cluster before deploying;
+  `--cluster-name` (default `kind`) and `--workers` tune it.
+- `--include-cr`: also deploy the W&B CR in this run (default `false`).
+- `--mirror-registry string` / `--insecure-registry`: install from a private
+  mirror — see [`wsm registry`](#wsm-registry) and the
+  [on-prem guide](./docs/deployment/on-prem.md).
 
-**Flags:**
-- `--context string`: Name of the kubeconfig context to use (Required).
+**`wandb deploy` — key flags:**
+- `--wandb-name string` / `--wandb-namespace string`: instance name / namespace
+  (both default `wandb`).
+- `--wandb-version string`: server manifest version (defaults to `0.82.2`; must
+  be ≥ `0.80.0`).
+- `--cr-file string`: path to a `WeightsAndBiases` CR YAML (built-in default
+  otherwise).
+- `--cr-set path=value`: set any CR field, e.g. `--cr-set spec.wandb.version=0.82.2`;
+  repeatable, YAML-typed, overrides the template, `--cr-file`, and typed flags.
+- `--license string` / `--license-file string`: inject `spec.wandb.license`.
+- `--manifest-repository string`, `--bucket-proxy`, `--mirror-registry` — see the
+  command reference.
+
+**`wandb get-ca-cert`** reads the `<wandb-name>-root-cert` secret and writes
+`ca.crt` / `tls.crt` locally. **`wandb destroy`** deletes the CR.
 
 ---
 
 ### `wsm cluster`
 
-Manage Kubernetes clusters (Kind) for local development and testing.
+Manage Kind clusters for local development and testing.
 
-**Usage:**
 ```bash
-wsm cluster [command] [flags]
+wsm cluster create|destroy|list|cleanup [flags]
 ```
 
-**Subcommands:**
-- `create`: Create a new Kind cluster.
-  - `--cluster-name string`: Name of the Kind cluster (default "kind").
-  - `--workers int`: Number of worker nodes.
-  - `--http-port int32`: Host port mapped to HTTP ingress (default 8080).
-  - `--https-port int32`: Host port mapped to HTTPS ingress (default 8443).
-  - `--kind-node-image string`: Override the Kind node image (e.g. point at a mirrored `kindest/node` for offline cluster bootstrap).
-  - `--insecure-registry-host string`: Configure containerd to pull from this host over plain HTTP (e.g. `host.docker.internal:5000`). For local on-prem testing against a plain-HTTP `registry:2`.
-- `destroy`: Destroy the Kind cluster and cleanup resources.
-  - `--cluster-name string`: Name of the Kind cluster to delete (default "kind").
-- `cleanup`: Delete all resources deployed by wsm.
-  - `--context string`: Name of the kubeconfig context to use (Required).
+- `create`: `--cluster-name` (default `kind`), `--workers`, `--http-port`
+  (default 8080), `--https-port` (default 8443), `--kind-node-image` (offline
+  bootstrap), `--insecure-registry-host` (trust a plain-HTTP registry).
+- `destroy`: `--cluster-name` (default `kind`).
+- `list`: list Kind clusters wsm created (via its deployment marker).
+- `cleanup`: delete all resources wsm deployed — requires `--context`.
 
 ---
 
 ### `wsm registry`
 
-Mirror W&B's install artifacts to a customer-controlled container registry. Pair with `wsm deploy-v2 operator --mirror-registry <host>` for on-prem / air-gapped installs. See the [on-prem deployment guide](./docs/deployment/on-prem.md) for the full walkthrough.
+Mirror W&B's install artifacts to a customer-controlled registry (Harbor,
+Artifactory, ECR, …) for on-prem / air-gapped installs. Pair with
+`wsm deploy-v2 operator --mirror-registry <host>`. Full walkthrough:
+[on-prem guide](./docs/deployment/on-prem.md).
 
-**Usage:**
 ```bash
-wsm registry [command] [flags]
+wsm registry mirror|check|values|push [flags]
 ```
 
-**Subcommands:**
-- `mirror`: Pull every chart and image needed by `wsm deploy-v2 operator` from its upstream source and re-push to your mirror.
-  - `--to string`: **Required.** Hostname of your mirror (e.g. `harbor.example.com` or `localhost:5000`).
-  - `--insecure`: Skip TLS verification when pushing to the mirror. For local-laptop testing only.
-  - `--dry-run`: Print the source → target mirroring plan without pushing.
-  - `--operator-chart-version string`: Operator chart version; also used as the tag for the operator binary image (default "2.0.0-alpha.2").
-- `check`: Verify that all required images exist in your mirror.
-  - `--registry string`: **Required.** Hostname of your mirror.
-  - `--insecure`: Skip TLS verification.
-  - `--fail-on-missing`: Exit non-zero if any image is missing.
+- `mirror`: pull every chart/image `deploy-v2 operator` needs and re-push to your
+  mirror. `--to <host>` (required), `--insecure`, `--dry-run`,
+  `--operator-chart-version` (default `2.0.0-beta.1`).
+- `check`: verify all required images exist in your mirror. `--registry <host>`
+  (required), `--fail-on-missing`, `--insecure`.
+- `values`: emit a `values.yaml` fragment that re-points images at your registry.
+- `push`: push images from a bundle directory into your mirror.
 
 ---
 
-### `wsm console`
+### `wsm deploy` (v1, legacy)
 
-Open the W&B console in your default browser.
+Legacy three-phase install to a cluster.
 
-**Usage:**
 ```bash
-wsm console
+wsm deploy [operator|chart-cm|wandb-cr] [flags]
+```
+
+- Subcommands: `operator`, `chart-cm` (air-gapped chart ConfigMap), `wandb-cr`
+  (the `apps.wandb.com/v1` CR).
+- Flags: `-a/--airgapped`, `-b/--bundle`, `-c/--chart`, `-n/--namespace`
+  (default `wandb`), `-v/--values`.
+
+---
+
+### `wsm list` (v1, legacy)
+
+List the container images a fresh install would pull — useful for pre-pulling.
+
+```bash
+wsm list [-p linux/amd64]
 ```
 
 ---
 
-### Examples
+### `wsm download` (v1, legacy)
 
-**Local Development Setup:**
+Download images and charts into a `./bundle/` for offline transfer. Requires
+`docker` on `PATH`.
+
 ```bash
-# Create a local Kind cluster
+wsm download [-p linux/amd64]
+```
+
+---
+
+## Examples
+
+**Local development (v2, Kind):**
+```bash
 wsm cluster create --cluster-name wandb-cluster
-
-# Deploy v2 operator
 wsm deploy-v2 operator --context kind-wandb-cluster
-
-# Deploy v2 W&B CR
 wsm deploy-v2 wandb deploy --context kind-wandb-cluster
 ```
 
-**Airgapped Deployment Preparation (v1 — legacy):**
+**On-prem / mirror registry (v2):** install from your own registry. The full
+walkthrough (including a laptop test against a local `registry:2`) is in
+[`docs/deployment/on-prem.md`](./docs/deployment/on-prem.md). TL;DR:
 ```bash
-# List all required images
-wsm list
-
-# Download images for a specific platform
-wsm download --platform linux/amd64
-```
-
-**On-Prem / Mirror Registry Setup (v2):**
-
-For customers who need to install W&B from their own container registry (Harbor, Artifactory, ECR, etc.). The full walkthrough — including the laptop test against a local `registry:2` — lives at [`docs/deployment/on-prem.md`](./docs/deployment/on-prem.md). The TL;DR:
-
-```bash
-# 1. Mirror artifacts from upstream to your registry
-wsm registry mirror \
-  --to harbor.corp.internal \
-  --operator-chart-version 2.0.0-alpha.2
+# 1. Mirror artifacts upstream -> your registry
+wsm registry mirror --to harbor.corp.internal --operator-chart-version 2.0.0-beta.1
 
 # 2. Install pulling only from the mirror
 wsm deploy-v2 operator \
   --context <cluster> \
   --mirror-registry harbor.corp.internal \
-  --operator-chart-version 2.0.0-alpha.2
+  --operator-chart-version 2.0.0-beta.1
 ```
 
-For local laptop testing with a plain-HTTP `registry:2`:
+**Air-gapped bundle prep (v1, legacy):**
+```bash
+wsm list
+wsm download --platform linux/amd64
+```
+
+## Development
 
 ```bash
-# Local mirror container
-docker run -d -p 5000:5000 --name local-registry registry:2
-
-# Kind cluster that trusts the plain-HTTP registry
-wsm cluster create \
-  --cluster-name onprem-test \
-  --http-port 18080 --https-port 18443 \
-  --insecure-registry-host host.docker.internal:5000
-
-# Mirror + install (insecure flags required for plain-HTTP)
-wsm registry mirror --to host.docker.internal:5000 --insecure --operator-chart-version 2.0.0-alpha.2
-wsm deploy-v2 operator \
-  --context kind-onprem-test \
-  --mirror-registry host.docker.internal:5000 \
-  --insecure-registry \
-  --operator-chart-version 2.0.0-alpha.2
+make build   # build ./wsm
+make lint    # go vet + golangci-lint
+make fmt     # gofmt (CI fails if this leaves a diff)
 ```
+
+There is no unit-test suite; CI (`.github/workflows/checks.yaml`) runs build,
+lint, format, and `go mod tidy` checks. `.github/workflows/pr-checks.yml`
+additionally gates every PR on a Conventional-Commit title/commits, a filled-in
+PR body (see [`.github/pull_request_template.md`](./.github/pull_request_template.md)),
+and exactly one `release:*` label. The `/ship` Claude Code skill drives
+branch → commit → PR so the result satisfies that gate.
 
 ## Releasing
 
-Releases are cut automatically when a PR is merged into `main` — no manual tagging needed.
+Releases are cut automatically when a PR is merged into `main` — no manual
+tagging needed. The bump is chosen by a label on the merged PR:
 
-- The version bump is chosen by a label on the merged PR:
-  - `release:major` → `vX+1.0.0`
-  - `release:minor` → `vX.Y+1.0`
-  - `release:patch` (or no label) → `vX.Y.Z+1`
-  - `release:skip` → no release
-- The new tag is pushed and [GoReleaser](https://goreleaser.com) builds the binaries and
-  publishes the GitHub release. The version is baked into the binary — check it with
-  `wsm version`.
-- Need to cut one by hand? Push a tag (`git tag vX.Y.Z && git push origin vX.Y.Z`) and the
-  same build runs.
+- `release:major` → `vX+1.0.0`
+- `release:minor` → `vX.Y+1.0`
+- `release:patch` (or no label) → `vX.Y.Z+1`
+- `release:skip` → no release
+
+The new tag is pushed and [GoReleaser](https://goreleaser.com) builds the
+binaries and publishes the GitHub release. Check the built-in version with
+`wsm version`. To cut one by hand, push a tag
+(`git tag vX.Y.Z && git push origin vX.Y.Z`) and the same build runs.
 
 ## Requirements
 
-- Linux, macOS or Windows
-- Bash shell
-- curl
-- tar
-- kubectl (for deployment)
-- docker (for cluster management and image downloading)
-- pkg-config
+- Linux, macOS, or Windows
+- `kubectl` (for deployment)
+- `docker` / a container runtime (for Kind clusters and v1 image downloads)
 
 ## Support
 
-For issues and questions, please visit create an issue [here](https://github.com/wandb/wsm/issues).
-
-For more information on how to use WSM, see the [WSM documentation](https://docs.wandb.ai/guides/hosting/self-managed/operator-airgapped/#install-wsm).
+File issues at [github.com/wandb/wsm/issues](https://github.com/wandb/wsm/issues).
+See also the [W&B self-managed docs](https://docs.wandb.ai/guides/hosting/self-managed/).

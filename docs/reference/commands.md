@@ -30,17 +30,36 @@ wsm deploy-v2 operator [flags]
 | `--setup-k8s-cluster` | `false` | Create a Kind cluster before deploying |
 | `--cluster-name` | `kind` | Name of the Kind cluster (used with `--setup-k8s-cluster`) |
 | `--workers` | `0` | Number of Kind worker nodes |
-| `--operator-chart-version` | `2.0.0-alpha.2` | Operator Helm chart version |
+| `--operator-chart-version` | `2.0.0-beta.1` | Operator Helm chart version |
 | `--operator-version` | — | Operator image version (defaults to chart value) |
 | `--operator-namespace` | `wandb-operators` | Namespace for the operator |
 | `--install-cert-manager` | `auto` | Cert-manager install mode: `auto`, `true`, `false` |
 | `--install-nginx-gateway` | `auto` | Nginx-gateway-fabric install mode: `auto`, `true`, `false` |
 | `--enable-gateway-api` | `true` | Enable Gateway API support in cert-manager |
+| `--include-cr` | `false` | Also deploy the WeightsAndBiases CR in this run. Left off, this command installs only the operator stack (phase 1) and you run `wsm deploy-v2 wandb deploy` separately (phase 2). When set, all `wsm deploy-v2 wandb deploy` CR flags apply here too. |
 | `--mirror-registry` | — | Pull every chart and image from this registry (e.g. `harbor.corp:5443`), and set the per-subchart Helm image values so the managed-service operators + Kafka broker pull from it. Populate it first with `wsm registry mirror --to <same-host>`. See [On-Prem Deployment](../deployment/on-prem.md). |
 | `--insecure-registry` | `false` | Use plain HTTP / skip TLS verification when fetching from `--mirror-registry`. Required for plain-HTTP `registry:2`; **never** in production. |
+| `--registry-ca-file` | — | PEM CA bundle to trust for an HTTPS `--mirror-registry` with a self-signed / internal-CA cert. Used for chart pulls and mounted into the operator so its server-manifest fetch trusts the registry. |
+| `--gateway-api-crd-url` | — | Fetch the Gateway API CRDs from this URL instead of the GitHub default (use a mirrored copy for air-gapped installs). |
+| `--skip-gateway-api-crds` | `false` | Assume the Gateway API CRDs are already installed; fail instead of fetching them from the internet. |
 | `--allow-unsupported-arch` | `false` | Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is amd64-only and crashes under emulation on arm64 (e.g. Kind on Apple Silicon); WSM fails fast on this by default. |
 
-> **Phase split:** the operator command no longer creates the W&B CR (the old `--include-cr` flag was removed). Install the operator stack here, then run `wsm deploy-v2 wandb deploy`.
+> **Phase split:** by default the operator command installs only the operator stack; it does **not** create the W&B CR. Install the operator stack here, then run `wsm deploy-v2 wandb deploy`. Pass `--include-cr` to do both in one run.
+
+#### Examples
+
+```bash
+# Install just the operator (+ cert-manager, nginx-gateway) into an existing cluster
+wsm deploy-v2 operator --context my-cluster
+
+# One shot: create a local Kind cluster, install the operator, and deploy the CR
+wsm deploy-v2 operator --context kind-wandb \
+  --setup-k8s-cluster --cluster-name wandb --include-cr --size dev
+
+# Air-gapped: pull every chart and image from a mirror registry
+# (populate it first with `wsm registry mirror --to harbor.corp:5443`)
+wsm deploy-v2 operator --context prod --mirror-registry harbor.corp:5443
+```
 
 ---
 
@@ -62,7 +81,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--wandb-namespace` | `wandb` | Kubernetes namespace for the CR |
 | `--wandb-hostname` | `http://localhost:8080` | External URL for accessing W&B |
 | `--wandb-version` | — | Server manifest version (defaults to built-in stable version) |
-| `--mirror-registry` | — | Install the W&B instance from this mirror. Defaults `--manifest-repository` to `oci://<mirror>/wandb/server-manifest` and sets `spec.global.imageRegistry` so the managed data-plane images (ClickHouse/MySQL/Redis/SeaweedFS) pull from the mirror. Populate it first with `wsm registry mirror`. |
+| `--mirror-registry` | — | Install the W&B instance from this mirror. Defaults `--manifest-repository` to `oci://<mirror>/wandb/server-manifest` (charts, operator/infra images, and the rewritten app images come from the mirror). The managed data-plane images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) keep their upstream refs and reach the mirror via each node's container-runtime registry mirror — not `spec.global.imageRegistry`. Populate the mirror first with `wsm registry mirror`. |
 | `--manifest-repository` | — | OCI repository for the server manifest. Auto-set from `--mirror-registry` when that is provided. |
 | `--size` | `small` | Deployment size profile: `dev`, `micro`, `small`, `medium`, `large`, `xlarge`, `xxlarge` |
 | `--license` | — | W&B license string |
@@ -71,6 +90,13 @@ wsm deploy-v2 wandb deploy [flags]
 | `--oidc-client-secret` | — | OIDC client secret as `<secret-name>:<key>` (`spec.wandb.oidc.clientSecret`) |
 | `--oidc-issuer-url` | — | OIDC issuer URL as `<secret-name>:<key>` (`spec.wandb.oidc.issuerUrl`) |
 | `--oidc-auth-method` | — | OIDC auth method as `<secret-name>:<key>` (`spec.wandb.oidc.authMethod`) |
+| `--oidc-session-length` | — | OIDC session length, e.g. `720h` (`spec.wandb.oidc.sessionLength`). Optional; `--cr-file` wins if it already set the value |
+| `--image-registry` | — | **Deprecated.** Retarget container images to this registry (`spec.global.imageRegistry`). Use `--mirror-registry`, or `--cr-set spec.global.imageRegistry=<host>` for a different data-plane registry. |
+| `--custom-ca-cert-file` | — | Path to a PEM CA certificate to trust in W&B workloads; repeatable, each file's contents is appended to `spec.global.customCACerts` |
+| `--custom-ca-configmap` | — | Name of a ConfigMap holding CA certificates to trust in W&B workloads (`spec.global.caCertsConfigMap`) |
+| `--objectstore-copies` | — | Managed object store replica copies (`spec.objectStore.managedObjectStore.copies`). Operator default applies when unset. Applies to the default managed instance only (see note below) |
+| `--bucket-proxy` | — | Route object-store access through the W&B app instead of direct client access (`spec.wandb.bucketProxy`). Operator default applies when unset |
+| `--cr-set` | — | Set an arbitrary CR field as `<path>=<value>`, e.g. `spec.wandb.version=0.82.2`; repeatable. Values are YAML-typed (`3`→number, `true`→bool, `[a,b]`→list). Overrides the built-in template, `--cr-file`, and the typed flags above (see note below) |
 | `--gateway-class` | `nginx` | Gateway class name (selects Gateway API mode; the default). Mutually exclusive with `--ingress-class` |
 | `--ingress-class` | — | Ingress class name (selects Ingress mode). Takes precedence over the default `--gateway-class`; setting both explicitly is an error |
 | `--ingress-name` | — | Override the generated Ingress resource name (defaults to the CR name) |
@@ -90,7 +116,55 @@ wsm deploy-v2 wandb deploy [flags]
 | `--retention-policy` | `detach` | Behavior on CR deletion: `detach` (leave infrastructure running) or `purge` (delete all managed resources and PVCs) |
 | `--wait` | `false` | Wait for the W&B instance to report Ready |
 
+> **Default managed instance.** Managed `mysql`, `redis`, `objectStore`, and `clickHouse` are keyed by instance name; `wsm` builds a single instance under the reserved key `default`. Flags that tune managed infra — `--observability-mode` (per-service telemetry) and `--objectstore-copies` — only affect that `default` instance. To run multiple instances or tune a differently-keyed one, supply the full shape via `--cr-file`.
+
+> **Setting arbitrary CR fields with `--cr-set`.** Rather than adding a dedicated flag for every CR field, `--cr-set <path>=<value>` sets any field on the CR by its dotted path. It applies last — after the built-in template, `--cr-file`, and the typed flags — so it always wins, and the operator's CRD validates the result on apply. Use it for fields without a dedicated flag; use `--cr-file` for large or deeply-nested shapes. Values are parsed as YAML, so types infer automatically. List **indices** are not addressable (set the whole list, or use `--cr-file`). Example:
+>
+> ```bash
+> wsm deploy-v2 wandb deploy --context <ctx> \
+>   --cr-set spec.objectStore.default.managedObjectStore.SeaweedObjectStoreSpec.filerStorageSize=50Gi \
+>   --cr-set spec.wandb.additionalHostnames='[wandb.corp.example.com]'
+> ```
+
 > **Observability.** `--observability-mode` is applied to the operator chart during `wsm deploy-v2 operator` (it enables the `victoria-metrics-operator` and, for `full`, the `grafana-operator` dependencies the chart requires) and also toggles per-service telemetry on the CR. `full` deploys Grafana and the Victoria Metrics/Logs/Traces stack as ClusterIP services in the W&B namespace — view Grafana with [`wsm telemetry grafana`](#wsm-telemetry) and VictoriaMetrics with [`wsm telemetry victoria`](#wsm-telemetry). `forward` ships OTLP data to `--observability-forward-endpoint` and does not run Grafana (VMUI is still available via `wsm telemetry victoria`).
+
+#### Examples
+
+```bash
+# Minimal deploy against an already-installed operator
+wsm deploy-v2 wandb deploy --context prod
+
+# Pin a specific server version (must be >= the minimum supported version)
+wsm deploy-v2 wandb deploy --context prod --wandb-version 0.82.2
+
+# TLS with a self-signed CA (https hostname triggers cert-manager wiring)
+wsm deploy-v2 wandb deploy --context prod \
+  --wandb-hostname https://wandb.example.com --create-ca
+
+# OIDC, each leaf sourced from a Secret as <secret-name>:<key>
+wsm deploy-v2 wandb deploy --context prod \
+  --wandb-hostname https://wandb.example.com --create-ca \
+  --oidc-client-id wandb-oidc:clientId \
+  --oidc-client-secret wandb-oidc:clientSecret \
+  --oidc-issuer-url wandb-oidc:issuerUrl \
+  --oidc-session-length 720h
+
+# Air-gapped: pull everything (app + DB images, server manifest) from one mirror
+wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --wandb-version 0.82.2
+
+# Air-gapped, split registry (replaces the deprecated --image-registry): charts/manifest
+# from the mirror, but the managed data-plane images from a different registry
+wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 \
+  --cr-set spec.global.imageRegistry=other-reg.corp:5443 --wandb-version 0.82.2
+
+# Set a CR field that has no dedicated flag, via --cr-set (repeatable, YAML-typed)
+wsm deploy-v2 wandb deploy --context prod \
+  --cr-set spec.wandb.additionalHostnames='[wandb.corp.example.com]' \
+  --cr-set spec.objectStore.default.managedObjectStore.SeaweedObjectStoreSpec.filerStorageSize=50Gi
+
+# Advanced shapes: hand the whole CR in a file
+wsm deploy-v2 wandb deploy --context prod --cr-file ./my-wandb.yaml
+```
 
 ---
 
@@ -155,6 +229,16 @@ wsm cluster create [flags]
 | `--https-port` | `8443` | Host port mapped to HTTPS ingress |
 | `--kind-node-image` | — | Override the Kind node image (e.g. point at a mirrored `kindest/node` for offline cluster bootstrap) |
 | `--insecure-registry-host` | — | Configure containerd to pull from this host over plain HTTP (e.g. `host.docker.internal:5000`). Pairs with `wsm registry mirror --insecure` for local-laptop testing against a plain-HTTP `registry:2`. See [On-Prem Deployment](../deployment/on-prem.md). |
+
+#### Examples
+
+```bash
+# Single-node cluster with default ports
+wsm cluster create --cluster-name wandb
+
+# Use higher host ports when 8080/8443 are taken (e.g. OrbStack/Docker Desktop proxies)
+wsm cluster create --cluster-name wandb --http-port 18080 --https-port 18443
+```
 
 ---
 
@@ -224,7 +308,7 @@ Scope today: the operator OCI chart + binary image, cert-manager OCI chart + 5 c
 | `--to` | — | **Required.** Hostname of your mirror, e.g. `harbor.example.com` or `localhost:5000`. |
 | `--insecure` | `false` | Skip TLS verification when pushing to the mirror. Use for plain-HTTP registries like a local `registry:2`. **Never** in production. |
 | `--dry-run` | `false` | Print the source → target mirroring plan without pushing. |
-| `--operator-chart-version` | `2.0.0-alpha.2` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
+| `--operator-chart-version` | `2.0.0-beta.1` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
 
 Auth is read from your Docker config (`~/.docker/config.json`). Run `docker login <mirror-host>` before this command for any registry that requires credentials.
 

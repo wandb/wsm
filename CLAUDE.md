@@ -66,9 +66,10 @@ This is the single most important architectural fact about v2. The implication i
 
 ### Hand-bumped per release
 
-Two constants in `cmd/wsm/deploy_v2.go` need updating each W&B/operator release:
-- `defaultWandbVersion` (currently `"0.80.0"`, line 34) — used when `--wandb-version` is unset.
-- The default of `--operator-chart-version` flag (currently `"2.0.0-alpha.1"`, line 419).
+Constants in `cmd/wsm/deploy_v2.go` need updating each W&B/operator release. The two W&B server-version knobs sit together in one commented `const` block near the top of the file (search `W&B server version policy`):
+- `defaultWandbVersion` (currently `"0.82.2"`) — used when `--wandb-version` is unset.
+- `minWandbVersion` (currently `"0.80.0"`) — the oldest server wsm will deploy; a resolved version below it (via `--wandb-version`, `--cr-file`, or `--cr-set spec.wandb.version`) is rejected up front by `validateWandbVersion`. Raise it when dropping support for old servers.
+- The default of `--operator-chart-version` flag (currently `"2.0.0-beta.1"`).
 
 cert-manager (`v1.20.2`) and nginx-gateway-fabric (`2.5.1`) versions are pinned as constants in `pkg/operator/operator.go:53-64`. Gateway API CRDs come from a hardcoded URL at line 66.
 

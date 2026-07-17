@@ -16,8 +16,14 @@ else
 	BINARY = wsm
 endif
 
+# Version stamp for local builds; CI releases are stamped by GoReleaser instead.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+GO_LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
+
 build:
-	CGO_ENABLED=0 go build -tags containers_image_openpgp -o $(BINARY) ./cmd/wsm
+	CGO_ENABLED=0 go build -tags containers_image_openpgp -ldflags "$(GO_LDFLAGS)" -o $(BINARY) ./cmd/wsm
 
 install: build
 	install -d $(INSTALL_DIR)

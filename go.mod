@@ -15,7 +15,7 @@ require (
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/pkg/errors v0.9.1
 	github.com/spf13/cobra v1.10.2
-	github.com/wandb/operator v1.21.3-0.20260611200416-80f51a441d6e
+	github.com/wandb/operator v1.22.1-0.20260715191206-c60e3ac91508
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v3 v3.20.2
 	helm.sh/helm/v4 v4.1.4
@@ -25,7 +25,7 @@ require (
 	k8s.io/kubectl v0.35.4
 	knative.dev/pkg v0.0.0-20260422015212-ec452872dcc1
 	oras.land/oras-go/v2 v2.6.0
-	sigs.k8s.io/controller-runtime v0.23.3
+	sigs.k8s.io/controller-runtime v0.23.1
 	sigs.k8s.io/kind v0.31.0
 	sigs.k8s.io/yaml v1.6.0
 )
@@ -219,5 +219,3 @@ require (
 )
 
 replace sigs.k8s.io/controller-runtime v0.23.1 => sigs.k8s.io/controller-runtime v0.22.4
-
-replace github.com/wandb/operator => /Users/colander/operator

@@ -113,7 +113,8 @@ wsm deploy-v2 [command] [flags]
   - `--workers int`: Number of worker nodes (only used with `--setup-k8s-cluster`).
   - `--mirror-registry string`: Pull every chart and image from this registry (e.g. `harbor.corp:5443`), and retarget the managed-service operator + Kafka images. Populate it first with `wsm registry mirror --to <same-host>`. See the [on-prem deployment guide](./docs/deployment/on-prem.md).
   - `--insecure-registry`: Use plain HTTP / skip TLS verification when fetching from `--mirror-registry`. For local-laptop testing only.
-  - **Note:** the operator command installs only the operator stack. Create the W&B instance separately with `wsm deploy-v2 wandb deploy` (the old `--include-cr` flag was removed).
+  - `--include-cr`: Also deploy the WeightsAndBiases CR in this run (default `false`).
+  - **Note:** by default the operator command installs only the operator stack; create the W&B instance separately with `wsm deploy-v2 wandb deploy`, or pass `--include-cr` to do both in one run.
 - `wandb`: Manage Weights & Biases instances.
   - `deploy`: Deploy a W&B instance.
     - `--cr-file string`: Path to WeightsAndBiases CR YAML (uses built-in default if not provided).
@@ -249,6 +250,21 @@ wsm deploy-v2 operator \
   --insecure-registry \
   --operator-chart-version 2.0.0-alpha.2
 ```
+
+## Releasing
+
+Releases are cut automatically when a PR is merged into `main` — no manual tagging needed.
+
+- The version bump is chosen by a label on the merged PR:
+  - `release:major` → `vX+1.0.0`
+  - `release:minor` → `vX.Y+1.0`
+  - `release:patch` (or no label) → `vX.Y.Z+1`
+  - `release:skip` → no release
+- The new tag is pushed and [GoReleaser](https://goreleaser.com) builds the binaries and
+  publishes the GitHub release. The version is baked into the binary — check it with
+  `wsm version`.
+- Need to cut one by hand? Push a tag (`git tag vX.Y.Z && git push origin vX.Y.Z`) and the
+  same build runs.
 
 ## Requirements
 

@@ -1,0 +1,44 @@
+name: GoReleaser
+
+# Reusable build: builds binaries + archives and cuts a same-repo GitHub
+# release with GoReleaser. Same-repo releases only need the built-in
+# GITHUB_TOKEN (contents: write) — no PAT required. Called by release.yaml
+# (manual tag pushes) and release-on-merge.yaml (auto tags on merge to main).
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref (tag) to build. Empty uses the triggering ref.
+        type: string
+        required: false
+        default: ""
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'wandb'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.ref }}
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Install dependencies
+        run: go mod download
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

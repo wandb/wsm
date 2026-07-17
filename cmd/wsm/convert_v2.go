@@ -70,8 +70,6 @@ what the in-cluster webhook would emit after upgrade.`,
 			}
 
 			return writeSplit(outputPath, wandbName, v1YAML, v2YAML)
-
-			return nil
 		},
 	}
 

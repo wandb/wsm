@@ -43,6 +43,15 @@ wsm deploy-v2 operator [flags]
 | `--gateway-api-crd-url` | — | Fetch the Gateway API CRDs from this URL instead of the GitHub default (use a mirrored copy for air-gapped installs). |
 | `--skip-gateway-api-crds` | `false` | Assume the Gateway API CRDs are already installed; fail instead of fetching them from the internet. |
 | `--allow-unsupported-arch` | `false` | Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is amd64-only and crashes under emulation on arm64 (e.g. Kind on Apple Silicon); WSM fails fast on this by default. |
+| `--observability-forward-endpoint` | — | OTLP endpoint to forward telemetry to. **Required** when `--observability-mode=forward` |
+| `--observability-otel-secret` | — | Name of the OTEL connection secret (`telemetry.otel.secretName`). Chart default `wandb-otel-connection` if unset. Applied when mode is `full` or `forward` |
+| `--observability-otel-protocol` | — | OTEL exporter protocol, e.g. `http/protobuf` or `grpc` (`telemetry.otel.protocol`). Chart default if unset |
+| `--observability-otel-service-name` | — | OTEL `service.name` resource attribute (`telemetry.otel.serviceName`). Chart default if unset |
+| `--observability-otel-resource-attributes` | — | Additional OTEL resource attributes, comma-separated `key=value` (`telemetry.otel.resourceAttributes`). Chart default if unset |
+| `--observability-forward-protocol` | — | OTLP forwarding protocol, e.g. `http/protobuf` or `grpc` (`telemetry.forwarding.otlp.protocol`). Only applied when `--observability-mode=forward` |
+| `--observability-forward-headers` | — | OTLP forwarding headers as repeatable `key=value` pairs, e.g. `Authorization=Bearer …` (`telemetry.forwarding.otlp.headers`). Only applied when `--observability-mode=forward` |
+
+> These `--observability-otel-*` / `--observability-forward-*` flags configure the operator's telemetry Helm release, so they live on `wsm deploy-v2 operator` only. `--observability-mode` is shared (it also toggles per-service telemetry on the CR — see `wsm deploy-v2 wandb deploy`).
 
 > **Phase split:** by default the operator command installs only the operator stack; it does **not** create the W&B CR. Install the operator stack here, then run `wsm deploy-v2 wandb deploy`. Pass `--include-cr` to do both in one run.
 
@@ -105,14 +114,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--create-aws-ingress-class` | `false` | Create an AWS ALB IngressClass (requires `--ingress-class`) |
 | `--create-aws-storage-class` | `false` | Create a default AWS `gp3` StorageClass |
 | `--add-ingress-annotations` | `false` | Add AWS load-balancer annotations to the managed Gateway (**Gateway API mode only**; ignored in Ingress mode) |
-| `--observability-mode` | `off` | Telemetry mode: `off`, `full` (in-cluster Victoria Metrics stack **+ local Grafana**), or `forward` (Victoria stack + forward OTLP externally) |
-| `--observability-forward-endpoint` | — | OTLP endpoint to forward telemetry to. **Required** when `--observability-mode=forward` |
-| `--observability-otel-secret` | — | Name of the OTEL connection secret (`telemetry.otel.secretName`). Chart default `wandb-otel-connection` if unset. Applied when mode is `full` or `forward` |
-| `--observability-otel-protocol` | — | OTEL exporter protocol, e.g. `http/protobuf` or `grpc` (`telemetry.otel.protocol`). Chart default if unset |
-| `--observability-otel-service-name` | — | OTEL `service.name` resource attribute (`telemetry.otel.serviceName`). Chart default if unset |
-| `--observability-otel-resource-attributes` | — | Additional OTEL resource attributes, comma-separated `key=value` (`telemetry.otel.resourceAttributes`). Chart default if unset |
-| `--observability-forward-protocol` | — | OTLP forwarding protocol, e.g. `http/protobuf` or `grpc` (`telemetry.forwarding.otlp.protocol`). Only applied when `--observability-mode=forward` |
-| `--observability-forward-headers` | — | OTLP forwarding headers as repeatable `key=value` pairs, e.g. `Authorization=Bearer …` (`telemetry.forwarding.otlp.headers`). Only applied when `--observability-mode=forward` |
+| `--observability-mode` | `off` | Telemetry mode: `off`, `full` (in-cluster Victoria Metrics stack **+ local Grafana**), or `forward` (Victoria stack + forward OTLP externally). On this command it toggles per-service telemetry on the CR; the chart-level `--observability-otel-*` / `--observability-forward-*` knobs live on [`wsm deploy-v2 operator`](#wsm-deploy-v2-operator). |
 | `--retention-policy` | `detach` | Behavior on CR deletion: `detach` (leave infrastructure running) or `purge` (delete all managed resources and PVCs) |
 | `--wait` | `false` | Wait for the W&B instance to report Ready |
 
@@ -383,37 +385,33 @@ This command port-forwards the `wandb-console` service on `localhost:8082` and o
 
 ### `wsm telemetry`
 
-View the in-cluster telemetry UIs deployed by the v2 operator. The telemetry stack is deployed when the operator is installed with `--observability-mode=full` (Grafana + Victoria stack) or `forward` (Victoria stack only). The services are ClusterIP-only, so each subcommand port-forwards to a service and opens it in your browser.
-
-> **Requires `kubectl` on your PATH.** Unlike the other v2 commands (which talk to the cluster via client-go), `wsm telemetry` shells out to `kubectl port-forward` so kubectl handles Service→Pod resolution and stream negotiation. If kubectl isn't installed, the command errors with the equivalent `kubectl port-forward` invocation you can run manually.
+View the in-cluster telemetry UIs deployed by the v2 operator. The telemetry stack is deployed when the operator is installed with `--observability-mode=full` (Grafana + Victoria stack) or `forward` (Victoria stack only). The services are ClusterIP-only, so each subcommand port-forwards to a service (natively, via client-go — **no `kubectl` binary required**) and opens it in your browser. It first reads the installed telemetry mode from the operator release and prints it; if telemetry is off (or Grafana is requested under `forward`) it exits with a clear message instead of a failed forward. Grafana opens straight to the W&B overview dashboard with anonymous admin — no login.
 
 ```bash
 wsm telemetry grafana  --context <kubeconfig-context>   # Grafana dashboards (localhost:3000)
 wsm telemetry victoria --context <kubeconfig-context>   # VictoriaMetrics VMUI (localhost:8428/vmui/)
+wsm telemetry logs     --context <kubeconfig-context>   # VictoriaLogs VMUI (localhost:9428/select/vmui/)
+wsm telemetry vmagent  --context <kubeconfig-context>   # VMAgent scrape-status UI (localhost:8429/)
 ```
 
-#### Persistent flags (both subcommands)
+#### Persistent flags (all subcommands)
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--context` | — | Name of the kubeconfig context to use |
+| `--context` | — | Name of the kubeconfig context to use (defaults to the current context) |
 | `--wandb-namespace` | `wandb` | Namespace where the telemetry stack is deployed |
+| `--operator-namespace` | `wandb-operators` | Namespace of the operator Helm release (read to report the installed telemetry mode) |
 
-#### `wsm telemetry grafana`
+#### Subcommands
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--service` | `grafana-service` | Grafana service name to forward |
-| `--local-port` / `--remote-port` | `3000` | Local / service port |
-| `--no-browser` | `false` | Do not open a browser automatically |
+| Subcommand | Default service | Port | Path | Mode |
+|------------|-----------------|------|------|------|
+| `grafana` | `grafana-service` | 3000 | | `full` |
+| `victoria` | `vmsingle-victoria-instance` | 8428 | `/vmui/` | `full` or `forward` |
+| `logs` | `vlsingle-victoria-logs` | 9428 | `/select/vmui/` | `full` or `forward` |
+| `vmagent` | `vmagent-victoria-agent` | 8429 | `/` | `full` or `forward` |
 
-#### `wsm telemetry victoria`
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--service` | `vmsingle-victoria-instance` | VictoriaMetrics single service name to forward |
-| `--local-port` / `--remote-port` | `8428` | Local / service port |
-| `--no-browser` | `false` | Do not open a browser automatically |
+Each subcommand takes `--service` (override the resolved Service name), `--local-port` (0 for an OS-assigned port), `--remote-port`, and `--no-browser`. Services are looked up by their well-known names (above); if the operator has renamed one, pass `--service` to point at it.
 
 ---
 

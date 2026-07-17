@@ -54,6 +54,8 @@ wsm deploy-v2 wandb deploy \
 
 ### Operations & Telemetry
 
+The `--observability-otel-*` / `--observability-forward-*` flags configure the operator's telemetry Helm release and live on `wsm deploy-v2 operator` only; `--observability-mode` is available on both commands.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--observability-mode` | `off` | Telemetry mode for managed MySQL, Redis, Kafka, etc.: `off`, `full` (in-cluster Victoria + Grafana), or `forward` (Victoria stack + external OTLP forwarding) |

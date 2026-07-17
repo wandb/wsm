@@ -1,20 +1,26 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"os/exec"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
+	"github.com/wandb/wsm/pkg/kubectl"
+	"github.com/wandb/wsm/pkg/operator"
+	"github.com/wandb/wsm/pkg/telemetry"
 )
 
 func init() {
 	rootCmd.AddCommand(TelemetryCmd())
 }
 
-// TelemetryCmd groups the helpers for viewing the in-cluster telemetry UIs
-// deployed by the v2 operator when installed with --observability-mode=full
-// (or forward). Those services are ClusterIP-only, so each subcommand tunnels
-// to one via kubectl port-forward and opens it in a browser.
+// TelemetryCmd groups the helpers for viewing the in-cluster telemetry UIs deployed by the v2 operator
+// when installed with --observability-mode=full (Grafana + Victoria) or forward (Victoria only). Those
+// services are ClusterIP-only, so each subcommand port-forwards to one (natively, no kubectl binary) and
+// opens it in a browser; press Ctrl+C to stop.
 func TelemetryCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "telemetry",
@@ -25,71 +31,93 @@ The telemetry stack is deployed when the operator is installed with
 --observability-mode=full (Grafana + Victoria stack) or forward (Victoria
 stack only). Its services are ClusterIP-only, so these subcommands port-forward
 to a service and open it in a browser; press Ctrl+C to stop.`,
-		// Fail fast if kubectl isn't available.
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if _, err := exec.LookPath("kubectl"); err != nil {
-				return fmt.Errorf("kubectl not found on PATH: `wsm telemetry` requires kubectl for port-forwarding: %w", err)
-			}
+			kubeContext, _ := cmd.Flags().GetString("context")
+			kubectl.SetContext(kubeContext)
 			return nil
 		},
 	}
 
-	// Shared across every UI subcommand.
 	cmd.PersistentFlags().String("context", "", "name of the kubeconfig context to use")
 	cmd.PersistentFlags().String("wandb-namespace", "wandb", "Namespace where the telemetry stack is deployed")
+	cmd.PersistentFlags().String("operator-namespace", "wandb-operators", "Namespace of the operator Helm release (used to read the installed telemetry mode)")
 
-	cmd.AddCommand(telemetryUICmd(telemetryUI{
-		use:         "grafana",
-		short:       "Port-forward to the Grafana dashboards",
-		service:     "grafana-service",
-		defaultPort: 3000,
-		urlPath:     "",
-		modeHint:    "full",
-	}))
-	cmd.AddCommand(telemetryUICmd(telemetryUI{
-		use:         "victoria",
-		short:       "Port-forward to the VictoriaMetrics UI (VMUI)",
-		service:     "vmsingle-victoria-instance",
-		defaultPort: 8428,
-		urlPath:     "/vmui/",
-		modeHint:    "full or forward",
-	}))
+	for _, ui := range telemetry.Catalog {
+		cmd.AddCommand(telemetryUICmd(ui))
+	}
 
 	return cmd
 }
 
-// telemetryUI describes one viewable telemetry service.
-type telemetryUI struct {
-	use         string
-	short       string
-	service     string
-	defaultPort int
-	urlPath     string
-	modeHint    string
-}
-
-func telemetryUICmd(ui telemetryUI) *cobra.Command {
+func telemetryUICmd(ui telemetry.UI) *cobra.Command {
 	var service string
 	var localPort int
 	var remotePort int
 	var noBrowser bool
 
 	cmd := &cobra.Command{
-		Use:   ui.use,
-		Short: ui.short,
+		Use:   ui.Name,
+		Short: fmt.Sprintf("Port-forward to the %s UI", ui.Name),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			kubeContext, _ := cmd.Flags().GetString("context")
+			ctx := context.Background()
 			namespace, _ := cmd.Flags().GetString("wandb-namespace")
-			if err := portForwardAndOpen(kubeContext, namespace, service, localPort, remotePort, ui.urlPath, !noBrowser); err != nil {
-				return fmt.Errorf("port-forward failed (is the operator installed with --observability-mode=%s?): %w", ui.modeHint, err)
+			operatorNamespace, _ := cmd.Flags().GetString("operator-namespace")
+
+			cfg, cs, err := kubectl.GetClientset()
+			if err != nil {
+				return err
 			}
-			return nil
+
+			// Report the installed mode and guard obvious mismatches before forwarding.
+			tc, err := operator.GetOperatorTelemetryConfig(ctx, operatorNamespace)
+			if err != nil {
+				return fmt.Errorf("failed to read telemetry config from operator namespace %q (set --operator-namespace if the operator is installed elsewhere): %w", operatorNamespace, err)
+			}
+			fmt.Printf("Telemetry mode: %s\n", tc.Mode)
+			if tc.Mode == operator.TelemetryModeOff {
+				return fmt.Errorf("telemetry is not enabled on this install (mode=off); redeploy the operator with --observability-mode=full")
+			}
+			if ui.Name == "grafana" && tc.Mode != operator.TelemetryModeFull {
+				return fmt.Errorf("grafana is only deployed with --observability-mode=full (current mode: %s); try `wsm telemetry victoria`", tc.Mode)
+			}
+
+			if !cmd.Flags().Changed("service") {
+				resolved, err := telemetry.ResolveService(ctx, cs, namespace, ui)
+				if err != nil {
+					return err
+				}
+				service = resolved
+			}
+
+			session, err := kubectl.PortForward(ctx, cfg, cs, namespace, service, remotePort, localPort)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = session.Close() }()
+
+			url := fmt.Sprintf("http://localhost:%d%s", session.LocalPort, ui.URLPath)
+			fmt.Printf("→ Forwarding %s/%s to %s (Ctrl+C to stop)\n", namespace, service, url)
+			if !noBrowser {
+				_ = openBrowser(url)
+			}
+
+			ctxSig, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			select {
+			case <-ctxSig.Done():
+				return nil
+			case err := <-session.Done():
+				if err != nil {
+					return fmt.Errorf("port-forward to %s/%s ended unexpectedly: %w", namespace, service, err)
+				}
+				return nil
+			}
 		},
 	}
 
-	cmd.Flags().StringVar(&service, "service", ui.service, "Service name to forward")
-	cmd.Flags().IntVar(&localPort, "local-port", ui.defaultPort, "Local port to bind")
-	cmd.Flags().IntVar(&remotePort, "remote-port", ui.defaultPort, "Service port")
+	cmd.Flags().StringVar(&service, "service", ui.Service, "Service name to forward")
+	cmd.Flags().IntVar(&localPort, "local-port", ui.Port, "Local port to bind (0 for an OS-assigned port)")
+	cmd.Flags().IntVar(&remotePort, "remote-port", ui.Port, "Service port")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "Do not open a browser automatically")
 
 	return cmd

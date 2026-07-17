@@ -108,13 +108,13 @@ wsm deploy-v2 [command] [flags]
   - `--operator-namespace string`: Namespace for operator (default "wandb-operators").
   - `--install-cert-manager`: Cert-manager install mode: `auto` (detect and reuse existing), `true` (force install flow), `false` (skip installation) (default "auto").
   - `--install-nginx-gateway`: Nginx-gateway-fabric install mode: `auto` (detect and reuse existing), `true` (force install flow), `false` (skip installation) (default "false").
-  - `--include-cr`: Include the WeightsAndBiases Custom Resource in the operator deployment.
   - `--setup-k8s-cluster`: Setup a Kind cluster before deploying.
   - `--cluster-name string`: Name of the Kind cluster (only used with `--setup-k8s-cluster`) (default "kind").
   - `--workers int`: Number of worker nodes (only used with `--setup-k8s-cluster`).
-  - `--mirror-registry string`: Pull every chart and image from this registry (e.g. `harbor.corp:5443`). Populate it first with `wsm registry mirror --to <same-host>`. See the [on-prem deployment guide](./docs/deployment/on-prem.md).
+  - `--mirror-registry string`: Pull every chart and image from this registry (e.g. `harbor.corp:5443`), and retarget the managed-service operator images via per-subchart Helm values. The managed data-plane images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) keep upstream refs and reach the mirror via each node's container-runtime registry mirror — not via this flag. Populate it first with `wsm registry mirror --to <same-host>`. See the [on-prem deployment guide](./docs/deployment/on-prem.md).
   - `--insecure-registry`: Use plain HTTP / skip TLS verification when fetching from `--mirror-registry`. For local-laptop testing only.
-  - *Accepts all flags listed under `wandb deploy` below (Used with `--include-cr`).*
+  - `--include-cr`: Also deploy the WeightsAndBiases CR in this run (default `false`).
+  - **Note:** by default the operator command installs only the operator stack; create the W&B instance separately with `wsm deploy-v2 wandb deploy`, or pass `--include-cr` to do both in one run.
 - `wandb`: Manage Weights & Biases instances.
   - `deploy`: Deploy a W&B instance.
     - `--cr-file string`: Path to WeightsAndBiases CR YAML (uses built-in default if not provided).
@@ -123,6 +123,7 @@ wsm deploy-v2 [command] [flags]
     - `--wandb-name string`: Name of the W&B instance (default "wandb").
     - `--wandb-namespace string`: Namespace for CR (default "wandb").
     - `--wandb-version string`: Server manifest version (e.g., 0.76.1).
+    - `--mirror-registry string`: Install the W&B instance from this mirror — defaults `--manifest-repository` to `oci://<mirror>/wandb/server-manifest`. It does **not** set `spec.global.imageRegistry`; the managed data-plane images reach the mirror via each node's container-runtime registry mirror.
   - `destroy`: Destroy an instance of W&B.
     - `--wandb-name string`: Name of the W&B instance (default "wandb").
     - `--wandb-namespace string`: Namespace for CR (default "wandb").

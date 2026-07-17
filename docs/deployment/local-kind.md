@@ -6,14 +6,18 @@ This guide covers deploying W&B to both WSM-provisioned and user-managed [Kind](
 
 The fastest path. WSM creates the cluster, installs dependencies, deploys the operator, and (optionally) the W&B instance.
 
-### Create and Deploy in One Command
+### Create and Deploy
 
 ```bash
+# Phase 1 — create the cluster and install the operator stack
 wsm deploy-v2 operator \
   --setup-k8s-cluster \
   --cluster-name wandb-local \
   --workers 2 \
-  --include-cr \
+  --context kind-wandb-local
+
+# Phase 2 — deploy the W&B instance
+wsm deploy-v2 wandb deploy \
   --context kind-wandb-local
 ```
 
@@ -27,9 +31,11 @@ wsm cluster create \
   --http-port 9090 \
   --https-port 9443
 
-# Then deploy without --setup-k8s-cluster
-wsm deploy-v2 operator \
-  --include-cr \
+# Then install the operator (no --setup-k8s-cluster) ...
+wsm deploy-v2 operator --context kind-wandb-local
+
+# ... and deploy the instance
+wsm deploy-v2 wandb deploy \
   --context kind-wandb-local \
   --wandb-hostname http://localhost:9090
 ```

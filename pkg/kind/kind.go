@@ -226,20 +226,51 @@ nodeRegistration:
 	return kindConfig
 }
 
+// upstreamRegistryMirrors maps the public registries the managed-service images
+// (ClickHouse/Kafka/MySQL/Redis/object-store operators + their data-plane pods)
+// come from to their canonical server URLs. The operator hardcodes these image
+// refs with no override knob, so the only way to make them pull from the mirror
+// is a transparent containerd registry mirror: containerd requests the
+// host-stripped path (e.g. quay.io/strimzi/kafka → <mirror>/v2/strimzi/kafka),
+// which is exactly where `wsm registry mirror` pushes them.
+//
+// us-docker.pkg.dev is included only for the Bufstream Kafka image
+// (us-docker.pkg.dev/buf-images-1/...), a managed data-plane image the operator
+// emits with its upstream ref. W&B's own charts/operator/app images use
+// mirror-host refs (Helm values + server-manifest rewrite → <mirror>/wandb/*),
+// so they never transit this mirror and its project-stripped path doesn't
+// collide with them.
+var upstreamRegistryMirrors = map[string]string{
+	"docker.io":         "https://registry-1.docker.io",
+	"quay.io":           "https://quay.io",
+	"ghcr.io":           "https://ghcr.io",
+	"us-docker.pkg.dev": "https://us-docker.pkg.dev",
+}
+
 func writeInsecureRegistryHostsConfig(ctx context.Context, clusterName, insecureRegistryHost string) error {
 	nodeName := clusterName + "-control-plane"
-	hostsToml := fmt.Sprintf(`server = "http://%s"
+
+	// 1. The mirror host itself, served over plain HTTP. Covers references that
+	// already point at <mirror>/... (W&B charts/operator/app images).
+	script := hostsTomlScript(insecureRegistryHost, fmt.Sprintf(`server = "http://%s"
 
 [host."http://%s"]
   capabilities = ["pull", "resolve"]
   skip_verify = true
-`, insecureRegistryHost, insecureRegistryHost)
+`, insecureRegistryHost, insecureRegistryHost))
 
-	script := fmt.Sprintf(`set -e
-mkdir -p /etc/containerd/certs.d/%s
-cat > /etc/containerd/certs.d/%s/hosts.toml <<'WSM_EOF'
-%sWSM_EOF
-`, insecureRegistryHost, insecureRegistryHost, hostsToml)
+	// 2. Transparent mirrors for the public registries the managed-service images
+	// live on, so their hardcoded refs resolve to the mirror. The `server` line
+	// keeps online installs working: containerd falls back to upstream for any
+	// image not present in the mirror.
+	for host, server := range upstreamRegistryMirrors {
+		script += hostsTomlScript(host, fmt.Sprintf(`server = "%s"
+
+[host."http://%s"]
+  capabilities = ["pull", "resolve"]
+  skip_verify = true
+`, server, insecureRegistryHost))
+	}
 
 	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", nodeName, "sh", "-c", script)
 	out, err := cmd.CombinedOutput()
@@ -247,6 +278,16 @@ cat > /etc/containerd/certs.d/%s/hosts.toml <<'WSM_EOF'
 		return fmt.Errorf("configure insecure registry %s on %s: %w (%s)", insecureRegistryHost, nodeName, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// hostsTomlScript returns a shell snippet that writes hosts.toml for one
+// registry host under containerd's certs.d directory.
+func hostsTomlScript(registryHost, hostsToml string) string {
+	return fmt.Sprintf(`set -e
+mkdir -p /etc/containerd/certs.d/%s
+cat > /etc/containerd/certs.d/%s/hosts.toml <<'WSM_EOF'
+%sWSM_EOF
+`, registryHost, registryHost, hostsToml)
 }
 
 // InstallIngressNGINX installs the nginx ingress controller for Kind clusters and waits

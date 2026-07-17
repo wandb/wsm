@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,12 +29,11 @@ func RegistryCmd() *cobra.Command {
 		Short: "Check and describe how to mirror W&B images to a private registry",
 		Long: `Tools for working with a mirrored container registry.
 
-    wsm registry check   Verify each required W&B image is present in your registry.
+    wsm registry mirror  Push every chart and image a v2 install needs to your registry.
+    wsm registry check   Verify each artifact 'wsm registry mirror' pushes is present.
+    wsm registry push    Push a pre-downloaded bundle to your registry.
     wsm registry values  Emit a values.yaml fragment that points the chart at
-                         your registry instead of the public sources.
-
-  Both subcommands re-use the same image discovery as 'wsm list' and 'wsm download',
-  so they write a chart cache to ./bundle/charts as a side effect.`,
+                         your registry instead of the public sources.`,
 	}
 
 	cmd.PersistentFlags().BoolVar(
@@ -95,43 +95,85 @@ func translate(image, registry string) string {
 
 func registryCheckCmd() *cobra.Command {
 	var (
-		registry      string
-		insecure      bool
-		failOnMissing bool
+		registry             string
+		insecure             bool
+		failOnMissing        bool
+		operatorChartVersion string
+		wandbVersion         string
+		skipManaged          bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "check",
-		Short: "Check that all required images exist in your mirrored registry",
-		Long: `For each image required by W&B, do a manifest check against --registry
-  and report whether the image is present, missing, or unauthorized.
+		Short: "Check that everything 'wsm registry mirror' pushes is present in your registry",
+		Long: `Validate a mirror for an air-gapped v2 install. check computes the exact same
+  set of destination references that 'wsm registry mirror' pushes — the operator
+  chart + image, cert-manager, nginx-gateway, the managed-service operator and
+  data-plane images, and (with --wandb-version) the server manifest plus every
+  application image it references — and does a manifest check for each against
+  --registry.
+
+  Pass the SAME --operator-chart-version / --wandb-version / --skip-managed-images
+  you mirrored with, so check and mirror agree on the expected set.
+
+  The server manifest and its application images are read back out of the mirror
+  itself, so this works from an air-gapped host with access only to the registry.
 
   Auth is read from your Docker config (~/.docker/config.json) by default.
-  Use --insecure for plain-HTTP or self-signed registries.`,
-		Example: `  wsm registry check --registry myreg.example.com
+  Use --insecure for self-signed registries.`,
+		Example: `  wsm registry check --registry myreg.example.com --wandb-version 0.81.0
     wsm registry check --registry myreg.example.com --insecure
-    wsm registry check --registry myreg.example.com --fail-on-missing`,
+    wsm registry check --registry myreg.example.com --wandb-version 0.81.0 --fail-on-missing`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !registryKeepCache {
-				defer cleanupChartCache()
-			}
 			if registry == "" {
 				return fmt.Errorf("--registry is required")
 			}
+			registry = strings.TrimRight(registry, "/")
+			ctx := context.Background()
 
-			fmt.Println("Discovering required images…")
-			images, err := discoverImages()
-			if err != nil {
-				return err
+			// Build the same destination set 'wsm registry mirror' pushes, so
+			// check and mirror always agree. (The old path discovered a different,
+			// v1-derived image set under different names, so it reported every
+			// freshly-mirrored image as "missing".)
+			var targets []string
+			for _, it := range buildMirrorPlan(registry, operatorChartVersion) {
+				targets = append(targets, it.dst)
+			}
+			if !skipManaged {
+				for _, it := range buildManagedImagePlan(registry) {
+					targets = append(targets, it.dst)
+				}
 			}
 
-			fmt.Printf("Checking %d images against %s\n\n", len(images), registry)
-			fmt.Printf("%-9s  %-65s  %s\n", "STATUS", "TARGET", "SOURCE")
+			// The application images are listed inside the mirrored server
+			// manifest. Read it back FROM THE MIRROR (refs already rewritten to
+			// point at the registry) so we validate exactly what the operator
+			// will pull, using only registry access.
+			var manifestWarn string
+			if wandbVersion != "" {
+				manifestRepo := registry + "/wandb/server-manifest"
+				targets = append(targets, manifestRepo+":"+wandbVersion)
+
+				files, err := pullManifestYAMLFrom(ctx, manifestRepo, wandbVersion, insecure)
+				if err != nil {
+					manifestWarn = fmt.Sprintf("could not read server manifest %s:%s — application images not checked (%v)", manifestRepo, wandbVersion, err)
+				} else if refs, err := collectManifestImages(files); err != nil {
+					manifestWarn = fmt.Sprintf("could not parse server manifest %s:%s — application images not checked (%v)", manifestRepo, wandbVersion, err)
+				} else {
+					for _, r := range refs {
+						targets = append(targets, r.GetImage(""))
+					}
+				}
+			}
+
+			targets = utils.RemoveDuplicates(targets)
+			sort.Strings(targets)
+
+			fmt.Printf("Checking %d artifacts against %s\n\n", len(targets), registry)
+			fmt.Printf("%-12s  %s\n", "STATUS", "REFERENCE")
 
 			var present, missing, unauth, errs int
-			ctx := context.Background()
-			for _, src := range images {
-				tgt := translate(src, registry)
+			for _, tgt := range targets {
 				status, msg := checkOne(ctx, tgt, insecure)
 				switch status {
 				case "present":
@@ -143,17 +185,23 @@ func registryCheckCmd() *cobra.Command {
 				default:
 					errs++
 				}
-				fmt.Printf("%-9s  %-65s  %s\n", status, tgt, src)
+				fmt.Printf("%-12s  %s\n", status, tgt)
 				if msg != "" {
-					fmt.Printf("           └─ %s\n", msg)
+					fmt.Printf("              └─ %s\n", msg)
 				}
 			}
 
 			fmt.Printf("\n%d total — %d present, %d missing, %d auth issues, %d errors\n",
-				len(images), present, missing, unauth, errs)
+				len(targets), present, missing, unauth, errs)
+			if manifestWarn != "" {
+				fmt.Printf("⚠ %s\n", manifestWarn)
+			}
+			if wandbVersion == "" {
+				fmt.Println("Note: pass --wandb-version to also check the server manifest and W&B application images.")
+			}
 
 			if failOnMissing && (missing+errs) > 0 {
-				return fmt.Errorf("%d image(s) not present in %s", missing+errs, registry)
+				return fmt.Errorf("%d artifact(s) not present in %s", missing+errs, registry)
 			}
 			return nil
 		},
@@ -161,7 +209,10 @@ func registryCheckCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&registry, "registry", "", "Target registry to check against, e.g. myreg.example.com (required)")
 	cmd.Flags().BoolVar(&insecure, "insecure", false, "Skip TLS verification when contacting the registry")
-	cmd.Flags().BoolVar(&failOnMissing, "fail-on-missing", false, "Exit non-zero if any image is missing")
+	cmd.Flags().BoolVar(&failOnMissing, "fail-on-missing", false, "Exit non-zero if any artifact is missing")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.1", "Operator chart version that was mirrored (must match 'wsm registry mirror')")
+	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version that was mirrored; when set, also check the server manifest and every application image it references")
+	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Don't check the managed-service operator + data-plane images (match the flag you mirrored with)")
 	return cmd
 }
 

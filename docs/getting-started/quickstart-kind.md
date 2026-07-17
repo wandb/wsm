@@ -17,16 +17,21 @@ Running the quick-start command will automatically create and configure:
 - [WSM installed](./installation.md)
 - [Docker](https://docs.docker.com/get-docker/) running
 - Port `8080` and `8443` available on your machine
+- An **amd64 (x86_64) host**. The wandb-operator image is currently published amd64-only, so a Kind cluster on an Apple Silicon (arm64) Mac runs it under emulation and the operator crashes (SIGSEGV). WSM detects non-amd64 nodes and fails fast with a clear message. Use an amd64 machine or point `--context` at a remote amd64 cluster.
 
 ## Deploy
 
-Run the following single command:
+Installing is two phases — first the operator stack, then the W&B instance:
 
 ```bash
+# Phase 1 — create the Kind cluster and install the operator stack
 wsm deploy-v2 operator \
   --setup-k8s-cluster \
   --cluster-name wandb \
-  --include-cr \
+  --context kind-wandb
+
+# Phase 2 — deploy the W&B instance
+wsm deploy-v2 wandb deploy \
   --size dev \
   --context kind-wandb
 ```
@@ -35,8 +40,8 @@ wsm deploy-v2 operator \
 
 | Flag | Description |
 |------|-------------|
-| `--setup-k8s-cluster` | Creates a new Kind cluster named `kind` before deploying |
-| `--include-cr` | Also deploys the `WeightsAndBiases` custom resource (the actual W&B instance) |
+| `--setup-k8s-cluster` | Creates a new Kind cluster named `kind` before deploying (phase 1) |
+| `wandb deploy` | Deploys the `WeightsAndBiases` custom resource — the actual W&B instance (phase 2) |
 | `--size dev` | Sets the size of the `WeightsAndBiases` deployment to dev |
 | `--context kind-wandb` | Uses the `kind-wandb` kubectl context (auto-created by Kind) |
 

@@ -1247,6 +1247,14 @@ func oidcConfigured(obj *unstructured.Unstructured) bool {
 	return false
 }
 
+// weightsAndBiasesV2GVR is the dynamic-client resource for the v2 CR, kept in
+// one place so the apply/list/delete helpers can't drift.
+var weightsAndBiasesV2GVR = schema.GroupVersionResource{
+	Group:    "apps.wandb.com",
+	Version:  "v2",
+	Resource: "weightsandbiases",
+}
+
 // DeleteCR deletes a WeightsAndBiases CR from the cluster
 func DeleteCR(ctx context.Context, name, namespace string) error {
 	_, dyn, err := kubectl.GetDynamicClientset()
@@ -1254,13 +1262,7 @@ func DeleteCR(ctx context.Context, name, namespace string) error {
 		return err
 	}
 
-	gvr := schema.GroupVersionResource{
-		Group:    "apps.wandb.com",
-		Version:  "v2",
-		Resource: "weightsandbiases",
-	}
-
-	err = dyn.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	err = dyn.Resource(weightsAndBiasesV2GVR).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return nil
@@ -1278,13 +1280,7 @@ func ListCRs(ctx context.Context, namespace string) ([]string, error) {
 		return nil, err
 	}
 
-	gvr := schema.GroupVersionResource{
-		Group:    "apps.wandb.com",
-		Version:  "v2",
-		Resource: "weightsandbiases",
-	}
-
-	list, err := dyn.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	list, err := dyn.Resource(weightsAndBiasesV2GVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return nil, nil
@@ -1305,13 +1301,7 @@ func GetCR(ctx context.Context, name, namespace string) (*v2.WeightsAndBiases, e
 		return nil, err
 	}
 
-	gvr := schema.GroupVersionResource{
-		Group:    "apps.wandb.com",
-		Version:  "v2",
-		Resource: "weightsandbiases",
-	}
-
-	obj, err := dyn.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	obj, err := dyn.Resource(weightsAndBiasesV2GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return nil, fmt.Errorf("WeightsAndBiases %s/%s not found", namespace, name)
@@ -1400,14 +1390,8 @@ func WaitForCR(ctx context.Context, name, namespace string, timeout time.Duratio
 		return err
 	}
 
-	gvr := schema.GroupVersionResource{
-		Group:    "apps.wandb.com",
-		Version:  "v2",
-		Resource: "weightsandbiases",
-	}
-
 	return wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-		cr, err := dyn.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		cr, err := dyn.Resource(weightsAndBiasesV2GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return false, nil
 		}

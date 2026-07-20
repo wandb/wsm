@@ -18,6 +18,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"knative.dev/pkg/ptr"
@@ -1669,7 +1670,9 @@ func performCleanup() error {
 
 	for _, ns := range wandbNamespaces {
 		crs, err := operator.ListCRs(ctx, ns)
-		if err != nil {
+		if apierrors.IsNotFound(err) {
+			crs = nil
+		} else if err != nil {
 			fmt.Printf("✗ Failed to list W&B CRs in namespace %s: %v\n", ns, err)
 			continue
 		}

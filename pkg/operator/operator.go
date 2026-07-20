@@ -1312,11 +1312,12 @@ func listCRRefs(ctx context.Context, namespace string) ([]CRRef, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A NotFound here means the v2 CRD isn't installed (wrong cluster / no
+	// operator), which is distinct from "installed but zero CRs" (an empty list,
+	// no error). Return it so callers can tell the two apart; tolerant callers
+	// opt into ignoring it.
 	list, err := dyn.Resource(weightsAndBiasesV2GVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		if errors.IsNotFound(err) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("failed to list WeightsAndBiases CRs: %w", err)
 	}
 

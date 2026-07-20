@@ -760,6 +760,11 @@ func DeployOperator(
 		if err != nil {
 			return fmt.Errorf("failed to load chart: %w", err)
 		}
+		if telemetry.Mode == TelemetryModeFull {
+			if err := patchGrafanaNotificationPolicyCRDs(chartRequested); err != nil {
+				return fmt.Errorf("failed to patch operator chart telemetry CRDs: %w", err)
+			}
+		}
 
 		// Run the upgrade
 		_, err = upgradeClient.RunWithContext(ctx, releaseName, chartRequested, releaseValues)
@@ -784,6 +789,11 @@ func DeployOperator(
 		chartRequested, err := loader.Load(cp)
 		if err != nil {
 			return fmt.Errorf("failed to load chart: %w", err)
+		}
+		if telemetry.Mode == TelemetryModeFull {
+			if err := patchGrafanaNotificationPolicyCRDs(chartRequested); err != nil {
+				return fmt.Errorf("failed to patch operator chart telemetry CRDs: %w", err)
+			}
 		}
 
 		// Run the install

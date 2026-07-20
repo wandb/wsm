@@ -1070,7 +1070,17 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases, overrides []CROv
 	// flags, and the strip — so a set field always wins and is never removed. The
 	// CRD validates the result server-side on apply.
 	for _, o := range overrides {
-		if err := unstructured.SetNestedField(obj.Object, o.Value, o.Path...); err != nil {
+		val := o.Value
+		// A number parsed for a string field (e.g. version=1.0) is set from the
+		// raw text instead, so it lands as "1.0" and not a number.
+		if _, isStr := o.Value.(string); !isStr {
+			if cur, found, _ := unstructured.NestedFieldNoCopy(obj.Object, o.Path...); found {
+				if _, ok := cur.(string); ok {
+					val = o.Raw
+				}
+			}
+		}
+		if err := unstructured.SetNestedField(obj.Object, val, o.Path...); err != nil {
 			return fmt.Errorf("failed to apply --cr-set %s: %w", strings.Join(o.Path, "."), err)
 		}
 	}
@@ -1088,6 +1098,9 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases, overrides []CROv
 type CROverride struct {
 	Path  []string
 	Value interface{}
+	// Raw is the literal RHS text, used to set string fields whose value parsed
+	// as a number (e.g. 1.0).
+	Raw string
 }
 
 // ParseCROverrides parses `path=value` entries. The value is interpreted as
@@ -1110,9 +1123,18 @@ func ParseCROverrides(sets []string) ([]CROverride, error) {
 		if err != nil {
 			return nil, fmt.Errorf("--cr-set %q: %w", s, err)
 		}
-		overrides = append(overrides, CROverride{Path: strings.Split(path, "."), Value: value})
+		overrides = append(overrides, CROverride{Path: strings.Split(path, "."), Value: value, Raw: rawValue})
 	}
 	return overrides, nil
+}
+
+// OverrideStringValue returns the override as a string: the parsed value if it's
+// already a string, else the raw literal (e.g. 1.0, parsed as a float).
+func OverrideStringValue(o CROverride) string {
+	if s, ok := o.Value.(string); ok {
+		return s
+	}
+	return o.Raw
 }
 
 // toJSONCompatible converts a yaml.Unmarshal result into the types

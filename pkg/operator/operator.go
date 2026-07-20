@@ -1247,6 +1247,27 @@ func oidcConfigured(obj *unstructured.Unstructured) bool {
 	return false
 }
 
+// weightsAndBiasesV2GVR is the dynamic-client resource for the v2 CR, kept in
+// one place so the apply/list/delete/reconcile helpers can't drift.
+var weightsAndBiasesV2GVR = schema.GroupVersionResource{
+	Group:    "apps.wandb.com",
+	Version:  "v2",
+	Resource: "weightsandbiases",
+}
+
+// reconcileRequestedAtAnnotation is bumped to force the operator to re-reconcile
+// a CR. The controller watches the CR without a generation-changed predicate, so
+// an annotation-only change is enough to enqueue a reconcile. Callers use
+// ReconcileCR rather than writing this key themselves.
+const reconcileRequestedAtAnnotation = "apps.wandb.com/reconcile-requested-at"
+
+// CRRef identifies a WeightsAndBiases CR by namespace and name, so cluster-wide
+// callers can tell which namespace each CR is in.
+type CRRef struct {
+	Namespace string
+	Name      string
+}
+
 // DeleteCR deletes a WeightsAndBiases CR from the cluster
 func DeleteCR(ctx context.Context, name, namespace string) error {
 	_, dyn, err := kubectl.GetDynamicClientset()
@@ -1254,13 +1275,7 @@ func DeleteCR(ctx context.Context, name, namespace string) error {
 		return err
 	}
 
-	gvr := schema.GroupVersionResource{
-		Group:    "apps.wandb.com",
-		Version:  "v2",
-		Resource: "weightsandbiases",
-	}
-
-	err = dyn.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	err = dyn.Resource(weightsAndBiasesV2GVR).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return nil
@@ -1271,32 +1286,78 @@ func DeleteCR(ctx context.Context, name, namespace string) error {
 	return nil
 }
 
-// ListCRs lists all WeightsAndBiases CRs in a namespace
+// ListCRs lists the names of WeightsAndBiases CRs in a namespace. Pass "" to
+// list across all namespaces; use ListAllCRs when you also need the namespace.
 func ListCRs(ctx context.Context, namespace string) ([]string, error) {
-	_, dyn, err := kubectl.GetDynamicClientset()
+	refs, err := listCRRefs(ctx, namespace)
 	if err != nil {
 		return nil, err
 	}
 
-	gvr := schema.GroupVersionResource{
-		Group:    "apps.wandb.com",
-		Version:  "v2",
-		Resource: "weightsandbiases",
+	var names []string
+	for _, ref := range refs {
+		names = append(names, ref.Name)
 	}
+	return names, nil
+}
 
-	list, err := dyn.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+// ListAllCRs lists every WeightsAndBiases CR across all namespaces as
+// namespace+name pairs.
+func ListAllCRs(ctx context.Context) ([]CRRef, error) {
+	return listCRRefs(ctx, metav1.NamespaceAll)
+}
+
+func listCRRefs(ctx context.Context, namespace string) ([]CRRef, error) {
+	_, dyn, err := kubectl.GetDynamicClientset()
 	if err != nil {
-		if errors.IsNotFound(err) {
-			return nil, nil
-		}
+		return nil, err
+	}
+	// A NotFound here means the v2 CRD isn't installed (wrong cluster / no
+	// operator), which is distinct from "installed but zero CRs" (an empty list,
+	// no error). Return it so callers can tell the two apart; tolerant callers
+	// opt into ignoring it.
+	list, err := dyn.Resource(weightsAndBiasesV2GVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
 		return nil, fmt.Errorf("failed to list WeightsAndBiases CRs: %w", err)
 	}
 
-	var names []string
+	var refs []CRRef
 	for _, item := range list.Items {
-		names = append(names, item.GetName())
+		refs = append(refs, CRRef{Namespace: item.GetNamespace(), Name: item.GetName()})
 	}
-	return names, nil
+	return refs, nil
+}
+
+// ReconcileCR forces the operator to re-reconcile a CR by bumping the
+// reconcile-requested-at annotation to the current time.
+func ReconcileCR(ctx context.Context, name, namespace string) error {
+	_, dyn, err := kubectl.GetDynamicClientset()
+	if err != nil {
+		return err
+	}
+
+	patch, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]string{
+				reconcileRequestedAtAnnotation: time.Now().UTC().Format(time.RFC3339Nano),
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to build reconcile patch: %w", err)
+	}
+
+	_, err = dyn.Resource(weightsAndBiasesV2GVR).Namespace(namespace).Patch(
+		ctx, name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: "wsm"},
+	)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return fmt.Errorf("WeightsAndBiases %s/%s not found", namespace, name)
+		}
+		return fmt.Errorf("failed to request reconcile for WeightsAndBiases %s/%s: %w", namespace, name, err)
+	}
+
+	return nil
 }
 
 func GetCR(ctx context.Context, name, namespace string) (*v2.WeightsAndBiases, error) {
@@ -1305,13 +1366,7 @@ func GetCR(ctx context.Context, name, namespace string) (*v2.WeightsAndBiases, e
 		return nil, err
 	}
 
-	gvr := schema.GroupVersionResource{
-		Group:    "apps.wandb.com",
-		Version:  "v2",
-		Resource: "weightsandbiases",
-	}
-
-	obj, err := dyn.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	obj, err := dyn.Resource(weightsAndBiasesV2GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return nil, fmt.Errorf("WeightsAndBiases %s/%s not found", namespace, name)
@@ -1400,14 +1455,8 @@ func WaitForCR(ctx context.Context, name, namespace string, timeout time.Duratio
 		return err
 	}
 
-	gvr := schema.GroupVersionResource{
-		Group:    "apps.wandb.com",
-		Version:  "v2",
-		Resource: "weightsandbiases",
-	}
-
 	return wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-		cr, err := dyn.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		cr, err := dyn.Resource(weightsAndBiasesV2GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return false, nil
 		}

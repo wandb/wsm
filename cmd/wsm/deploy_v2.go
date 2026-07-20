@@ -313,6 +313,12 @@ func wandbCreateCmd() *cobra.Command {
 			if err := validateVersionOverride(crOverrides); err != nil {
 				return err
 			}
+			if err := validateRetentionOverride(crOverrides); err != nil {
+				return err
+			}
+			if err := validateSizeOverride(crOverrides); err != nil {
+				return err
+			}
 
 			// The CR is applied on this path, so an unusable manifest source is fatal.
 			if err := normalizeMirrorManifestSource(&f, true); err != nil {
@@ -398,6 +404,12 @@ func operatorDeployCmd() *cobra.Command {
 				return err
 			}
 			if err := validateVersionOverride(crOverrides); err != nil {
+				return err
+			}
+			if err := validateRetentionOverride(crOverrides); err != nil {
+				return err
+			}
+			if err := validateSizeOverride(crOverrides); err != nil {
 				return err
 			}
 
@@ -1179,11 +1191,39 @@ func validateVersionOverride(overrides []operator.CROverride) error {
 		if strings.Join(o.Path, ".") != "spec.wandb.version" {
 			continue
 		}
-		version, ok := o.Value.(string)
-		if !ok {
-			return fmt.Errorf("--cr-set spec.wandb.version must be a string, got %T", o.Value)
+		// Check the literal text: a bare 1.0 parses as a float but is a valid version.
+		// Every match is checked, since a later override wins on apply.
+		if err := validateWandbVersion(operator.OverrideStringValue(o)); err != nil {
+			return err
 		}
-		return validateWandbVersion(version)
+	}
+	return nil
+}
+
+// validateRetentionOverride guards `--cr-set spec.retentionPolicy.onDelete=…`,
+// which the CRD doesn't validate.
+func validateRetentionOverride(overrides []operator.CROverride) error {
+	for _, o := range overrides {
+		if strings.Join(o.Path, ".") != "spec.retentionPolicy.onDelete" {
+			continue
+		}
+		if err := validateRetentionPolicy(operator.OverrideStringValue(o)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateSizeOverride guards `--cr-set spec.size=…`. The CRD enum also rejects a
+// bad value on apply; this just fails fast with the same message as --size.
+func validateSizeOverride(overrides []operator.CROverride) error {
+	for _, o := range overrides {
+		if strings.Join(o.Path, ".") != "spec.size" {
+			continue
+		}
+		if err := validateSize(operator.OverrideStringValue(o)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1236,6 +1276,14 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 	}
 	if cmd.Flags().Changed("retention-policy") || wandbCR.Spec.RetentionPolicy.OnDelete == "" {
 		wandbCR.Spec.RetentionPolicy.OnDelete = v2.OnDeletePolicy(f.retentionPolicy)
+	}
+
+	// --cr-set is validated separately, like the version floor below.
+	if err := validateSize(string(wandbCR.Spec.Size)); err != nil {
+		return err
+	}
+	if err := validateRetentionPolicy(string(wandbCR.Spec.RetentionPolicy.OnDelete)); err != nil {
+		return err
 	}
 
 	if wandbCR.Spec.Wandb.Version == "" && f.wandbVersion == "" {

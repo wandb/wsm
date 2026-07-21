@@ -200,6 +200,7 @@ wsm cluster create --cluster-name wandb-cluster
 wsm deploy-v2 operator --context kind-wandb-cluster
 wsm deploy-v2 wandb deploy --context kind-wandb-cluster
 ```
+The wandb-operator image is published amd64-only. Pass `--allow-unsupported-arch` if you are running Kind cluster on non-amd64 nodes.  
 
 **On-prem / mirror registry (v2):** install from your own registry. The full
 walkthrough (including a laptop test against a local `registry:2`) is in

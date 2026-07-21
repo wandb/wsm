@@ -653,6 +653,111 @@ func applyOpenShiftValues(releaseValues map[string]interface{}) {
 	mergeValues(releaseValues, "grafana-operator", map[string]interface{}{"isOpenShift": true})
 }
 
+// OpenShiftConfig reports how OpenShift mode is configured on the operator release.
+type OpenShiftConfig struct {
+	Enabled           bool     // openshift.enabled on the operator release
+	OperatorEnvSet    bool     // OPENSHIFT=true env on the operator container
+	AdjustedOperators []string // managed-service operators whose fixed IDs were nulled
+}
+
+// GetOperatorOpenShiftConfig reads the installed operator release and reports its
+// OpenShift settings. Returns nil when the operator is not installed in namespace.
+func GetOperatorOpenShiftConfig(namespace string) (*OpenShiftConfig, error) {
+	const releaseName = "wandb-operator"
+
+	settings := cli.New()
+	settings.SetNamespace(namespace)
+	settings.KubeContext = kubectl.GetContext()
+
+	actionConfig, err := initActionConfig(settings)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize action config: %w", err)
+	}
+
+	exists, err := checkReleaseExists(actionConfig, releaseName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check operator release: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
+
+	rel, err := action.NewGet(actionConfig).Run(releaseName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read operator release %q: %w", releaseName, err)
+	}
+	release, ok := rel.(*v1.Release)
+	if !ok {
+		return nil, fmt.Errorf("unexpected release type for %q", releaseName)
+	}
+
+	return openShiftConfigFromValues(release.Config), nil
+}
+
+// openShiftConfigFromValues mirrors applyOpenShiftValues in reverse: it inspects the
+// operator release values for the OpenShift settings that flag writes.
+func openShiftConfigFromValues(values map[string]interface{}) *OpenShiftConfig {
+	cfg := &OpenShiftConfig{}
+	if v, ok := nestedValue(values, "openshift", "enabled"); ok {
+		cfg.Enabled, _ = v.(bool)
+	}
+	if v, ok := nestedValue(values, "wandb-operator", "containers", "operator", "env", "OPENSHIFT", "value"); ok {
+		s, _ := v.(string)
+		cfg.OperatorEnvSet = s == "true"
+	}
+	scFields := []string{"runAsUser", "runAsGroup", "fsGroup", "fsGroupChangePolicy"}
+	adjustments := []struct {
+		name   string
+		fields []string
+	}{
+		{"wandb-operator", scFields},
+		{"redis-operator", scFields},
+		{"altinity-clickhouse-operator", scFields},
+		{"seaweedfs-operator", []string{"runAsUser", "runAsGroup", "fsGroup"}},
+	}
+	for _, adj := range adjustments {
+		if podSecurityContextNulled(values, adj.name, adj.fields) {
+			cfg.AdjustedOperators = append(cfg.AdjustedOperators, adj.name)
+		}
+	}
+	if v, ok := nestedValue(values, "moco", "extraArgs"); ok {
+		if args, ok := v.([]interface{}); ok {
+			for _, a := range args {
+				if s, _ := a.(string); s == "--disable-default-security-context" {
+					cfg.AdjustedOperators = append(cfg.AdjustedOperators, "moco")
+				}
+			}
+		}
+	}
+	return cfg
+}
+
+// podSecurityContextNulled reports whether every named field under the operator's
+// podSecurityContext exists and is nil — the signature applyOpenShiftValues writes.
+func podSecurityContextNulled(values map[string]interface{}, operator string, fields []string) bool {
+	for _, f := range fields {
+		if v, ok := nestedValue(values, operator, "podSecurityContext", f); !ok || v != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// nestedValue walks a chain of string keys through nested value maps.
+func nestedValue(values map[string]interface{}, keys ...string) (interface{}, bool) {
+	var cur interface{} = values
+	for _, k := range keys {
+		m, ok := cur.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		if cur, ok = m[k]; !ok {
+			return nil, false
+		}
+	}
+	return cur, true
+}
+
 // DeployOperator deploys the W&B operator chart version specified.  The chart is called operator and is available in oci://us-docker.pkg.dev/wandb-production/public/wandb/charts
 func DeployOperator(
 	ctx context.Context,

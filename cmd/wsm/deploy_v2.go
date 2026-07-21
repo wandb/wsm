@@ -497,6 +497,37 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().String("observability-otel-resource-attributes", "", "Additional OTEL resource attributes, comma-separated key=value (telemetry.otel.resourceAttributes; chart default if unset)")
 	cmd.Flags().String("observability-forward-protocol", "", "OTLP forwarding protocol, e.g. http/protobuf or grpc (telemetry.forwarding.otlp.protocol; only applied when --observability-mode=forward)")
 	cmd.Flags().StringToString("observability-forward-headers", nil, "OTLP forwarding headers as key=value pairs, e.g. Authorization=Bearer... (telemetry.forwarding.otlp.headers; only applied when --observability-mode=forward)")
+
+	cmd.AddCommand(operatorOpenShiftStatusCmd())
+	return cmd
+}
+
+func operatorOpenShiftStatusCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "openshift-status",
+		Short: "Report whether OpenShift mode is enabled on the installed operator",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			operatorNamespace, _ := cmd.Flags().GetString("operator-namespace")
+
+			cfg, err := operator.GetOperatorOpenShiftConfig(operatorNamespace)
+			if err != nil {
+				return err
+			}
+			if cfg == nil {
+				fmt.Printf("Operator is not installed in namespace %q.\n", operatorNamespace)
+				return nil
+			}
+
+			fmt.Printf("OpenShift mode: %v\n", cfg.Enabled)
+			fmt.Printf("  Operator OPENSHIFT env set: %v\n", cfg.OperatorEnvSet)
+			if len(cfg.AdjustedOperators) > 0 {
+				fmt.Printf("  Adjusted operators: %s\n", strings.Join(cfg.AdjustedOperators, ", "))
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().String("operator-namespace", "wandb-operators", "Namespace where the operator is installed")
 	return cmd
 }
 

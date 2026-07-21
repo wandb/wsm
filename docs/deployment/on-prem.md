@@ -267,6 +267,7 @@ Even with everything mirrored, a few things default to an online source. Each ha
 
 **Before / during the deploy**
 - **Gateway API CRDs** — carry in `standard-install.yaml` and `kubectl apply` it (then `--skip-gateway-api-crds`), or host it internally and use `--gateway-api-crd-url`.
+- **OpenShift** — pass `--openshift` so the managed-service operators are admitted under `restricted-v2`. This does **not** fix the frontend nginx pod (it rewrites root-owned files at startup, which an arbitrary UID can't write); that still requires BYO ingress / an upstream operator fix.
 - **Node container-runtime registry mirror** — how the managed DB images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) reach the mirror on **every** path (see the Phase 2 diagrams): each node mirrors `docker.io`/`quay.io`/`ghcr.io`/`us-docker.pkg.dev` → `$REG/<host-stripped>`. `wsm cluster create --insecure-registry-host $REG` sets this up for Kind; on a real cluster you configure `certs.d` per node. `--mirror-registry` does not retarget these (see the Tier-3 note above).
 - **Registry pull credentials** — for an auth'd registry, `docker login` + `helm registry login` for `wsm`, and create an `imagePullSecret` for the operator + W&B namespaces so in-cluster pulls and the manifest fetch authenticate.
 

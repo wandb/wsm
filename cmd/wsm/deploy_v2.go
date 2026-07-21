@@ -368,6 +368,7 @@ func operatorDeployCmd() *cobra.Command {
 	var gatewayCRDURL string
 	var skipGatewayCRDs bool
 	var allowUnsupportedArch bool
+	var openshift bool
 
 	cmd := &cobra.Command{
 		Use:   "operator",
@@ -444,6 +445,7 @@ func operatorDeployCmd() *cobra.Command {
 				gatewayCRDURL,
 				skipGatewayCRDs,
 				allowUnsupportedArch,
+				openshift,
 				crOverrides,
 			); err != nil {
 				fmt.Printf("\n✗ Operator install failed: %v\n", err)
@@ -484,6 +486,7 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().StringVar(&gatewayCRDURL, "gateway-api-crd-url", "", "Fetch the Gateway API CRDs from this URL instead of the GitHub default (use a mirrored copy for air-gapped installs)")
 	cmd.Flags().BoolVar(&skipGatewayCRDs, "skip-gateway-api-crds", false, "Assume the Gateway API CRDs are already installed; fail instead of fetching them from the internet")
 	cmd.Flags().BoolVar(&allowUnsupportedArch, "allow-unsupported-arch", false, "Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is published amd64-only and will crash under emulation on arm64 (e.g. Kind on Apple Silicon); set this only if you know your operator image is multi-arch.")
+	cmd.Flags().BoolVar(&openshift, "openshift", false, "Enable OpenShift compatibility for the operator and bundled managed-service pods")
 
 	// Chart-only telemetry knobs. These configure the operator's telemetry Helm release, so they
 	// belong to `operator` alone — `wandb deploy` only applies the CR and can't honor them.
@@ -566,6 +569,7 @@ func performDeploy(
 	gatewayCRDURL string,
 	skipGatewayCRDs bool,
 	allowUnsupportedArch bool,
+	openshift bool,
 	crOverrides []operator.CROverride,
 ) error {
 	ctx := context.Background()
@@ -692,7 +696,7 @@ func performDeploy(
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
 	start := time.Now()
 
-	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetry, wandbNamespace); err != nil {
+	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetry, wandbNamespace, openshift); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}

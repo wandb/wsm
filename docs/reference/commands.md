@@ -43,6 +43,7 @@ wsm deploy-v2 operator [flags]
 | `--gateway-api-crd-url` | — | Fetch the Gateway API CRDs from this URL instead of the GitHub default (use a mirrored copy for air-gapped installs). |
 | `--skip-gateway-api-crds` | `false` | Assume the Gateway API CRDs are already installed; fail instead of fetching them from the internet. |
 | `--allow-unsupported-arch` | `false` | Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is amd64-only and crashes under emulation on arm64 (e.g. Kind on Apple Silicon); WSM fails fast on this by default. |
+| `--openshift` | `false` | Enable OpenShift compatibility for the operator and bundled managed-service pods (MySQL/moco, Redis, ClickHouse, SeaweedFS). The bundled frontend still can't run on OpenShift, so bring your own ingress — see [On-Prem Deployment](../deployment/on-prem.md). |
 | `--observability-forward-endpoint` | — | OTLP endpoint to forward telemetry to. **Required** when `--observability-mode=forward` |
 | `--observability-otel-secret` | — | Name of the OTEL connection secret (`telemetry.otel.secretName`). Chart default `wandb-otel-connection` if unset. Applied when mode is `full` or `forward` |
 | `--observability-otel-protocol` | — | OTEL exporter protocol, e.g. `http/protobuf` or `grpc` (`telemetry.otel.protocol`). Chart default if unset |

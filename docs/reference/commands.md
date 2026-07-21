@@ -69,6 +69,32 @@ wsm deploy-v2 operator --context kind-wandb \
 # Air-gapped: pull every chart and image from a mirror registry
 # (populate it first with `wsm registry mirror --to harbor.corp:5443`)
 wsm deploy-v2 operator --context prod --mirror-registry harbor.corp:5443
+
+# Deploy the operator configured for OpenShift's restricted-v2 SCC
+wsm deploy-v2 operator --context ocp --openshift
+```
+
+---
+
+### `wsm deploy-v2 operator openshift-status`
+
+Reports whether the installed operator was deployed with `--openshift`. OpenShift mode isn't reconciled from the CR, so re-running `operator` without `--openshift` silently reverts it — use this to check the current state before an upgrade.
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | — | **Required.** Name of the kubeconfig context to use |
+| `--operator-namespace` | `wandb-operators` | Namespace where the operator is installed |
+
+#### Examples
+
+```bash
+# Check whether OpenShift mode is enabled on the installed operator
+wsm deploy-v2 operator openshift-status --context ocp
+
+# Point at a non-default operator namespace
+wsm deploy-v2 operator openshift-status --context ocp --operator-namespace wandb-operators
 ```
 
 ---

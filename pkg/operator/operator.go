@@ -610,6 +610,49 @@ func installGatewayApiCRDs(ctx context.Context, crdURL string) error {
 	return nil
 }
 
+// mergeValues shallow-merges add into releaseValues[key], creating it if absent.
+func mergeValues(releaseValues map[string]interface{}, key string, add map[string]interface{}) {
+	existing, ok := releaseValues[key].(map[string]interface{})
+	if !ok {
+		existing = map[string]interface{}{}
+		releaseValues[key] = existing
+	}
+	for k, v := range add {
+		existing[k] = v
+	}
+}
+
+// applyOpenShiftValues mirrors the operator's profiles/openshift.yaml so the
+// operator and bundled managed-service pods deploy cleanly on OpenShift.
+func applyOpenShiftValues(releaseValues map[string]interface{}) {
+	nullSC := map[string]interface{}{
+		"runAsUser":           nil,
+		"runAsGroup":          nil,
+		"fsGroup":             nil,
+		"fsGroupChangePolicy": nil,
+	}
+	releaseValues["openshift"] = map[string]interface{}{"enabled": true}
+	mergeValues(releaseValues, "wandb-operator", map[string]interface{}{
+		"podSecurityContext": nullSC,
+		"containers": map[string]interface{}{
+			"operator": map[string]interface{}{
+				"env": map[string]interface{}{
+					"OPENSHIFT": map[string]interface{}{"value": "true"},
+				},
+			},
+		},
+	})
+	mergeValues(releaseValues, "redis-operator", map[string]interface{}{"podSecurityContext": nullSC})
+	mergeValues(releaseValues, "altinity-clickhouse-operator", map[string]interface{}{"podSecurityContext": nullSC})
+	mergeValues(releaseValues, "seaweedfs-operator", map[string]interface{}{"podSecurityContext": map[string]interface{}{
+		"runAsUser":  nil,
+		"runAsGroup": nil,
+		"fsGroup":    nil,
+	}})
+	mergeValues(releaseValues, "moco", map[string]interface{}{"extraArgs": []interface{}{"--disable-default-security-context"}})
+	mergeValues(releaseValues, "grafana-operator", map[string]interface{}{"isOpenShift": true})
+}
+
 // DeployOperator deploys the W&B operator chart version specified.  The chart is called operator and is available in oci://us-docker.pkg.dev/wandb-production/public/wandb/charts
 func DeployOperator(
 	ctx context.Context,
@@ -618,6 +661,7 @@ func DeployOperator(
 	mirror *MirrorConfig,
 	telemetry TelemetryConfig,
 	wandbNamespace string,
+	openshift bool,
 ) error {
 	const chartName = "operator"
 	const releaseName = "wandb-operator"
@@ -739,6 +783,10 @@ func DeployOperator(
 		releaseValues["grafana-operator"] = map[string]interface{}{"enabled": true}
 	case TelemetryModeForward:
 		releaseValues["victoria-metrics-operator"] = map[string]interface{}{"enabled": true}
+	}
+
+	if openshift {
+		applyOpenShiftValues(releaseValues)
 	}
 
 	if releaseExists {

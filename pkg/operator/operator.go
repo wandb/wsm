@@ -276,14 +276,16 @@ func certManagerDeploymentExists(ctx context.Context) (bool, error) {
 }
 
 // DeleteCertManager deletes the cert-manager resources
-func DeleteCertManager(ctx context.Context) error {
+// DeleteCertManager uninstalls the cert-manager Helm release. removed is false when
+// there was no release to uninstall.
+func DeleteCertManager(ctx context.Context) (removed bool, err error) {
 	settings := cli.New()
 	settings.SetNamespace(certManagerNamespace)
 	settings.KubeContext = kubectl.GetContext()
 
 	actionConfig, err := initActionConfig(settings)
 	if err != nil {
-		return fmt.Errorf("failed to initialize action config: %w", err)
+		return false, fmt.Errorf("failed to initialize action config: %w", err)
 	}
 
 	uninstallClient := action.NewUninstall(actionConfig)
@@ -293,12 +295,12 @@ func DeleteCertManager(ctx context.Context) error {
 	_, err = uninstallClient.Run(certManagerReleaseName)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("failed to uninstall cert-manager: %w", err)
+		return false, fmt.Errorf("failed to uninstall cert-manager: %w", err)
 	}
 
-	return nil
+	return true, nil
 }
 
 // InstallNginxGateway installs nginx-gateway-fabric.
@@ -488,15 +490,16 @@ func nginxGatewayDeploymentExists(ctx context.Context) (bool, error) {
 	return false, fmt.Errorf("failed to check nginx-gateway deployment %q: %w", nginxGatewayDeploymentName, err)
 }
 
-// DeleteNginxGateway deletes the nginx-gateway-fabric resources
-func DeleteNginxGateway(ctx context.Context) error {
+// DeleteNginxGateway uninstalls the nginx-gateway-fabric Helm release. removed is false
+// when there was no release to uninstall.
+func DeleteNginxGateway(ctx context.Context) (removed bool, err error) {
 	settings := cli.New()
 	settings.SetNamespace(nginxGatewayNamespace)
 	settings.KubeContext = kubectl.GetContext()
 
 	actionConfig, err := initActionConfig(settings)
 	if err != nil {
-		return fmt.Errorf("failed to initialize action config: %w", err)
+		return false, fmt.Errorf("failed to initialize action config: %w", err)
 	}
 
 	uninstallClient := action.NewUninstall(actionConfig)
@@ -506,12 +509,12 @@ func DeleteNginxGateway(ctx context.Context) error {
 	_, err = uninstallClient.Run(nginxGatewayReleaseName)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("failed to uninstall nginx-gateway: %w", err)
+		return false, fmt.Errorf("failed to uninstall nginx-gateway: %w", err)
 	}
 
-	return nil
+	return true, nil
 }
 
 // gatewayApiCRDsExist checks if Gateway API CRDs exist in the cluster
@@ -1023,8 +1026,9 @@ func WaitForOperator(ctx context.Context, namespace string, timeout time.Duratio
 	return nil
 }
 
-// DeleteOperator uninstalls the W&B operator Helm release
-func DeleteOperator(ctx context.Context, namespace string) error {
+// DeleteOperator uninstalls the W&B operator Helm release. removed is false when there
+// was no release to uninstall.
+func DeleteOperator(ctx context.Context, namespace string) (removed bool, err error) {
 	const releaseName = "wandb-operator"
 
 	settings := cli.New()
@@ -1033,7 +1037,7 @@ func DeleteOperator(ctx context.Context, namespace string) error {
 
 	actionConfig, err := initActionConfig(settings)
 	if err != nil {
-		return fmt.Errorf("failed to initialize action config: %w", err)
+		return false, fmt.Errorf("failed to initialize action config: %w", err)
 	}
 
 	uninstallClient := action.NewUninstall(actionConfig)
@@ -1043,12 +1047,12 @@ func DeleteOperator(ctx context.Context, namespace string) error {
 	_, err = uninstallClient.Run(releaseName)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("failed to uninstall operator: %w", err)
+		return false, fmt.Errorf("failed to uninstall operator: %w", err)
 	}
 
-	return nil
+	return true, nil
 }
 
 // checkReleaseExists checks if a Helm release exists

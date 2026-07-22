@@ -99,6 +99,35 @@ wsm deploy-v2 operator openshift-status --context ocp --operator-namespace wandb
 
 ---
 
+### `wsm deploy-v2 operator destroy`
+
+Uninstalls the `wandb-operator` Helm release. cert-manager and nginx-gateway are shared infrastructure and are left in place by default; opt into removing them with `--include-cert-manager` / `--include-nginx-gateway`. To remove everything `wsm` deployed (operator, cert-manager, nginx-gateway, **and** any W&B CRs) in one shot, use [`wsm cluster cleanup`](#wsm-cluster) instead. This command does not delete the W&B instance; destroy it first with [`wsm deploy-v2 wandb destroy`](#wsm-deploy-v2-wandb-destroy).
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | — | **Required.** Name of the kubeconfig context to use |
+| `--operator-namespace` | `wandb-operators` | Namespace where the operator is installed |
+| `--include-cert-manager` | `false` | Also uninstall the cert-manager Helm release (shared infra — only if nothing else in the cluster relies on it) |
+| `--include-nginx-gateway` | `false` | Also uninstall the nginx-gateway-fabric Helm release (shared infra) |
+
+#### Examples
+
+```bash
+# Uninstall the operator only, keeping cert-manager and nginx-gateway
+wsm deploy-v2 operator destroy --context prod
+
+# Point at a non-default operator namespace
+wsm deploy-v2 operator destroy --context prod --operator-namespace wandb-operators
+
+# Also tear down the shared infra wsm installed (operator + cert-manager + nginx-gateway)
+wsm deploy-v2 operator destroy --context prod \
+  --include-cert-manager --include-nginx-gateway
+```
+
+---
+
 ### `wsm deploy-v2 wandb deploy`
 
 Deploys a W&B instance (WeightsAndBiases CR).

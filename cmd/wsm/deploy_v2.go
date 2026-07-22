@@ -499,6 +499,78 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().StringToString("observability-forward-headers", nil, "OTLP forwarding headers as key=value pairs, e.g. Authorization=Bearer... (telemetry.forwarding.otlp.headers; only applied when --observability-mode=forward)")
 
 	cmd.AddCommand(operatorOpenShiftStatusCmd())
+	cmd.AddCommand(operatorDestroyCmd())
+	return cmd
+}
+
+// operatorDestroyCmd uninstalls the operator; the --include-* flags opt into removing
+// the shared cert-manager and nginx-gateway releases too.
+func operatorDestroyCmd() *cobra.Command {
+	var includeCertManager bool
+	var includeNginxGateway bool
+
+	cmd := &cobra.Command{
+		Use:   "destroy",
+		Short: "Uninstall the v2 operator (optionally cert-manager and nginx-gateway too)",
+		Long:  `Uninstall the wandb-operator Helm release. cert-manager and nginx-gateway are shared infrastructure and are left in place unless --include-cert-manager / --include-nginx-gateway are set. Use 'wsm cluster cleanup' to remove everything wsm deployed, including W&B CRs.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			operatorNamespace, _ := cmd.Flags().GetString("operator-namespace")
+			ctx := context.Background()
+
+			fmt.Printf("→ Deleting W&B operator in namespace '%s'...\n", operatorNamespace)
+			removed, err := operator.DeleteOperator(ctx, operatorNamespace)
+			if err != nil {
+				return err
+			}
+			if err := kubectl.DeleteDeploymentMarker(ctx, operatorNamespace, "operator"); err != nil {
+				fmt.Printf("  ✗ Failed to remove operator marker in %s: %v\n", operatorNamespace, err)
+			}
+			if removed {
+				fmt.Println("✓ Operator uninstalled")
+			} else {
+				fmt.Printf("! No W&B operator found in namespace '%s'; nothing to uninstall\n", operatorNamespace)
+			}
+
+			// All markers live in the operator namespace's ConfigMap.
+			if includeCertManager {
+				fmt.Println("→ Deleting cert-manager...")
+				cmRemoved, err := operator.DeleteCertManager(ctx)
+				if err != nil {
+					return err
+				}
+				if err := kubectl.DeleteDeploymentMarker(ctx, operatorNamespace, "cert-manager"); err != nil {
+					return fmt.Errorf("failed to remove cert-manager marker in %s: %w", operatorNamespace, err)
+				}
+				if cmRemoved {
+					fmt.Println("✓ cert-manager uninstalled")
+				} else {
+					fmt.Println("! No cert-manager release found; nothing to uninstall")
+				}
+			}
+
+			if includeNginxGateway {
+				fmt.Println("→ Deleting nginx-gateway...")
+				ngRemoved, err := operator.DeleteNginxGateway(ctx)
+				if err != nil {
+					return err
+				}
+				if err := kubectl.DeleteDeploymentMarker(ctx, operatorNamespace, "nginx-gateway"); err != nil {
+					return fmt.Errorf("failed to remove nginx-gateway marker in %s: %w", operatorNamespace, err)
+				}
+				if ngRemoved {
+					fmt.Println("✓ nginx-gateway uninstalled")
+				} else {
+					fmt.Println("! No nginx-gateway release found; nothing to uninstall")
+				}
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().String("operator-namespace", "wandb-operators", "Namespace where the operator is installed")
+	cmd.Flags().BoolVar(&includeCertManager, "include-cert-manager", false, "Also uninstall the cert-manager Helm release")
+	cmd.Flags().BoolVar(&includeNginxGateway, "include-nginx-gateway", false, "Also uninstall the nginx-gateway-fabric Helm release")
 	return cmd
 }
 
@@ -1737,7 +1809,7 @@ func performCleanup() error {
 
 	for _, ns := range operatorNamespaces {
 		fmt.Printf("→ Deleting W&B operator in namespace '%s'...\n", ns)
-		if err := operator.DeleteOperator(ctx, ns); err != nil {
+		if _, err := operator.DeleteOperator(ctx, ns); err != nil {
 			fmt.Printf("  ✗ Failed to delete operator in %s: %v\n", ns, err)
 			return err
 		}
@@ -1751,7 +1823,7 @@ func performCleanup() error {
 
 	// 3. Delete cert-manager
 	fmt.Println("→ Deleting cert-manager...")
-	if err := operator.DeleteCertManager(ctx); err != nil {
+	if _, err := operator.DeleteCertManager(ctx); err != nil {
 		fmt.Printf("  ✗ Failed to delete cert-manager: %v\n", err)
 	}
 
@@ -1766,7 +1838,7 @@ func performCleanup() error {
 
 	// 4. Delete nginx-gateway
 	fmt.Println("→ Deleting nginx-gateway...")
-	if err := operator.DeleteNginxGateway(ctx); err != nil {
+	if _, err := operator.DeleteNginxGateway(ctx); err != nil {
 		fmt.Printf("  ✗ Failed to delete nginx-gateway: %v\n", err)
 	}
 

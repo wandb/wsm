@@ -82,7 +82,7 @@ The quick-start deployment uses these defaults:
 | **Instance Name** | `wandb` |
 | **Namespace** | `wandb` |
 | **Operator Namespace** | `wandb-operators` |
-| **Size** | `small` |
+| **Size** | `dev` |
 | **Version** | `0.79.2` (latest stable) |
 | **Gateway Class** | `nginx` |
 

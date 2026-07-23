@@ -43,7 +43,11 @@ wsm deploy-v2 operator [flags]
 | `--gateway-api-crd-url` | — | Fetch the Gateway API CRDs from this URL instead of the GitHub default (use a mirrored copy for air-gapped installs). |
 | `--skip-gateway-api-crds` | `false` | Assume the Gateway API CRDs are already installed; fail instead of fetching them from the internet. |
 | `--allow-unsupported-arch` | `false` | Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is amd64-only and crashes under emulation on arm64 (e.g. Kind on Apple Silicon); WSM fails fast on this by default. |
-| `--openshift` | `false` | Enable OpenShift compatibility for the operator and bundled managed-service pods (MySQL/moco, Redis, ClickHouse, SeaweedFS). The bundled frontend still can't run on OpenShift, so bring your own ingress — see [On-Prem Deployment](../deployment/on-prem.md). |
+| `--openshift` | `false` | Enable OpenShift compatibility for the operator and bundled managed-service pods (MySQL/MOCO, Redis, ClickHouse, SeaweedFS). The bundled frontend still can't run on OpenShift, so bring your own ingress — see [On-Prem Deployment](../deployment/on-prem.md). |
+| `--enable-moco-operator` | `true` | Install the bundled MOCO MySQL operator subchart. Set `false` to bring your own MySQL. |
+| `--enable-redis-operator` | `true` | Install the bundled Redis operator subchart. Set `false` to bring your own Redis. |
+| `--enable-seaweedfs-operator` | `true` | Install the bundled SeaweedFS (object store) operator subchart. Set `false` to bring your own object store. Also disables the `prometheus-operator-crds` subchart, which shares the same condition. |
+| `--enable-clickhouse-operator` | `true` | Install the bundled Altinity ClickHouse operator subchart. Set `false` to bring your own ClickHouse. |
 | `--observability-forward-endpoint` | — | OTLP endpoint to forward telemetry to. **Required** when `--observability-mode=forward` |
 | `--observability-otel-secret` | — | Name of the OTEL connection secret (`telemetry.otel.secretName`). Chart default `wandb-otel-connection` if unset. Applied when mode is `full` or `forward` |
 | `--observability-otel-protocol` | — | OTEL exporter protocol, e.g. `http/protobuf` or `grpc` (`telemetry.otel.protocol`). Chart default if unset |
@@ -72,7 +76,17 @@ wsm deploy-v2 operator --context prod --mirror-registry harbor.corp:5443
 
 # Deploy the operator configured for OpenShift's restricted-v2 SCC
 wsm deploy-v2 operator --context ocp --openshift
+
+# Bring your own MySQL and object store: skip the bundled MOCO / SeaweedFS operators
+wsm deploy-v2 operator --context my-cluster \
+  --enable-moco-operator=false \
+  --enable-seaweedfs-operator=false
 ```
+
+> **Subchart choices persist.** The `--enable-*-operator` flags are remembered in
+> the `wsm-deployment-marker` ConfigMap, so a later flag-less `wsm deploy-v2 operator`
+> upgrade keeps a previously disabled subchart disabled. Pass the flag again with
+> `=true` to re-enable it. `wsm deploy-v2 operator destroy` clears the saved state.
 
 ---
 

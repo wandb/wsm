@@ -50,6 +50,9 @@ const (
 	minWandbVersion     = "0.80.0"
 )
 
+// defaultWandbSize is stamped into spec.size when --size is unset.
+const defaultWandbSize = v2.SizeDev
+
 const (
 	certManagerInstallModeAuto  = "auto"
 	certManagerInstallModeTrue  = "true"
@@ -157,7 +160,7 @@ func DeployV2Cmd() *cobra.Command {
 	// `operator` alone (see operatorDeployCmd) since that is the only command that applies them.
 	cmd.PersistentFlags().String("observability-mode", "off", "Enable observability for applications (off, full, forward)")
 	cmd.PersistentFlags().String("retention-policy", "detach", "Retention policy for W&B instance (detach, purge) - defaults to detach")
-	cmd.PersistentFlags().String("size", "small", "W&B instance size (dev, micro, small, medium, large, xlarge, xxlarge)")
+	cmd.PersistentFlags().String("size", string(defaultWandbSize), "W&B instance size (dev, micro, small, medium, large, xlarge, xxlarge)")
 	cmd.PersistentFlags().String("object-store-storage-size", "", "Override the managed object store (SeaweedFS) storage size, e.g. 20Gi. Must be < 30Gi: the operator derives SeaweedFS volumeSizeLimitMB from this and the master rejects a limit >= 30000. Leave empty to use the size preset's default.")
 	cmd.PersistentFlags().String("wandb-hostname", "http://localhost:8080", "Hostname to use for the W&B instance")
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")

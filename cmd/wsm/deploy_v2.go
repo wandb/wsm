@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -369,6 +370,10 @@ func operatorDeployCmd() *cobra.Command {
 	var skipGatewayCRDs bool
 	var allowUnsupportedArch bool
 	var openshift bool
+	var enableMocoOperator bool
+	var enableRedisOperator bool
+	var enableSeaweedfsOperator bool
+	var enableClickhouseOperator bool
 
 	cmd := &cobra.Command{
 		Use:   "operator",
@@ -419,6 +424,24 @@ func operatorDeployCmd() *cobra.Command {
 				return err
 			}
 
+			// Resolve which bundled operator subcharts stay enabled. An explicit
+			// --enable-* flag on this run wins; otherwise honor the choice persisted
+			// in the deployment marker so a flag-less upgrade preserves it.
+			savedDisabled, err := kubectl.LoadDisabledSubcharts(context.Background(), operatorNamespace)
+			if err != nil {
+				return err
+			}
+			resolveEnabled := func(flag, subchartKey string, flagValue bool) bool {
+				if cmd.Flags().Changed(flag) {
+					return flagValue
+				}
+				return !slices.Contains(savedDisabled, subchartKey)
+			}
+			wantMocoOperator := resolveEnabled("enable-moco-operator", "moco", enableMocoOperator)
+			wantRedisOperator := resolveEnabled("enable-redis-operator", "redis-operator", enableRedisOperator)
+			wantSeaweedfsOperator := resolveEnabled("enable-seaweedfs-operator", "seaweedfs-operator", enableSeaweedfsOperator)
+			wantClickhouseOperator := resolveEnabled("enable-clickhouse-operator", "altinity-clickhouse-operator", enableClickhouseOperator)
+
 			// Perform the deployment
 			deployStart := time.Now()
 			if err := performDeploy(
@@ -447,6 +470,10 @@ func operatorDeployCmd() *cobra.Command {
 				allowUnsupportedArch,
 				openshift,
 				crOverrides,
+				wantMocoOperator,
+				wantRedisOperator,
+				wantSeaweedfsOperator,
+				wantClickhouseOperator,
 			); err != nil {
 				fmt.Printf("\n✗ Operator install failed: %v\n", err)
 				return err
@@ -487,6 +514,10 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&skipGatewayCRDs, "skip-gateway-api-crds", false, "Assume the Gateway API CRDs are already installed; fail instead of fetching them from the internet")
 	cmd.Flags().BoolVar(&allowUnsupportedArch, "allow-unsupported-arch", false, "Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is published amd64-only and will crash under emulation on arm64 (e.g. Kind on Apple Silicon); set this only if you know your operator image is multi-arch.")
 	cmd.Flags().BoolVar(&openshift, "openshift", false, "Enable OpenShift compatibility for the operator and bundled managed-service pods")
+	cmd.Flags().BoolVar(&enableMocoOperator, "enable-moco-operator", true, "Enable the MOCO MySQL operator subchart within the wandb-operator Helm release. Set to false if you are bringing your own MySQL.")
+	cmd.Flags().BoolVar(&enableRedisOperator, "enable-redis-operator", true, "Enable the Redis operator subchart within the wandb-operator Helm release. Set to false if you are bringing your own Redis.")
+	cmd.Flags().BoolVar(&enableSeaweedfsOperator, "enable-seaweedfs-operator", true, "Enable the SeaweedFS operator subchart within the wandb-operator Helm release. Set to false if you are bringing your own object store. Also disables the prometheus-operator-crds subchart, which shares the same condition.")
+	cmd.Flags().BoolVar(&enableClickhouseOperator, "enable-clickhouse-operator", true, "Enable the Altinity ClickHouse operator subchart within the wandb-operator Helm release. Set to false if you are bringing your own ClickHouse.")
 
 	// Chart-only telemetry knobs. These configure the operator's telemetry Helm release, so they
 	// belong to `operator` alone — `wandb deploy` only applies the CR and can't honor them.
@@ -524,6 +555,11 @@ func operatorDestroyCmd() *cobra.Command {
 			}
 			if err := kubectl.DeleteDeploymentMarker(ctx, operatorNamespace, "operator"); err != nil {
 				fmt.Printf("  ✗ Failed to remove operator marker in %s: %v\n", operatorNamespace, err)
+			}
+			// Clear any persisted subchart-disable state so a future reinstall starts
+			// fresh (no-op if the marker ConfigMap was already removed above).
+			if err := kubectl.SaveDisabledSubcharts(ctx, operatorNamespace, nil); err != nil {
+				fmt.Printf("  ✗ Failed to clear disabled-subcharts state in %s: %v\n", operatorNamespace, err)
 			}
 			if removed {
 				fmt.Println("✓ Operator uninstalled")
@@ -674,6 +710,10 @@ func performDeploy(
 	allowUnsupportedArch bool,
 	openshift bool,
 	crOverrides []operator.CROverride,
+	enableMocoOperator bool,
+	enableRedisOperator bool,
+	enableSeaweedfsOperator bool,
+	enableClickhouseOperator bool,
 ) error {
 	ctx := context.Background()
 	installNginxGatewayMode = strings.ToLower(strings.TrimSpace(installNginxGatewayMode))
@@ -796,10 +836,19 @@ func performDeploy(
 	}
 
 	// Step 4: Deploy W&B operator
-	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
+	subchartState := func(enabled bool) string {
+		if enabled {
+			return "✓"
+		}
+		return "✗"
+	}
+	fmt.Printf("[%d/%d] Deploying wandb-operator (moco-operator %s, redis-operator %s, seaweedfs-operator %s, clickhouse-operator %s)...",
+		currentStep, totalSteps,
+		subchartState(enableMocoOperator), subchartState(enableRedisOperator),
+		subchartState(enableSeaweedfsOperator), subchartState(enableClickhouseOperator))
 	start := time.Now()
 
-	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetry, wandbNamespace, openshift); err != nil {
+	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetry, wandbNamespace, openshift, enableMocoOperator, enableRedisOperator, enableSeaweedfsOperator, enableClickhouseOperator); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -824,6 +873,27 @@ func performDeploy(
 		markers += ",nginx-gateway"
 	}
 	if err := kubectl.CreateDeploymentMarker(ctx, "", operatorNamespace, markers); err != nil {
+		fmt.Println(" ✗")
+		return err
+	}
+
+	// Persist which subcharts were disabled so a later flag-less upgrade keeps them
+	// off. Written after the marker ConfigMap exists (created just above).
+	var disabledSubcharts []string
+	for _, s := range []struct {
+		enabled bool
+		key     string
+	}{
+		{enableMocoOperator, "moco"},
+		{enableRedisOperator, "redis-operator"},
+		{enableSeaweedfsOperator, "seaweedfs-operator"},
+		{enableClickhouseOperator, "altinity-clickhouse-operator"},
+	} {
+		if !s.enabled {
+			disabledSubcharts = append(disabledSubcharts, s.key)
+		}
+	}
+	if err := kubectl.SaveDisabledSubcharts(ctx, operatorNamespace, disabledSubcharts); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}

@@ -770,6 +770,10 @@ func DeployOperator(
 	telemetry TelemetryConfig,
 	wandbNamespace string,
 	openshift bool,
+	enableMocoOperator bool,
+	enableRedisOperator bool,
+	enableSeaweedfsOperator bool,
+	enableClickhouseOperator bool,
 ) error {
 	const chartName = "operator"
 	const releaseName = "wandb-operator"
@@ -895,6 +899,30 @@ func DeployOperator(
 
 	if openshift {
 		applyOpenShiftValues(releaseValues)
+	}
+
+	// Disable any bundled managed-service operator subcharts the caller opted out of
+	// (e.g. bring-your-own MySQL). Applied after the mirror and openshift blocks so
+	// these win. Each disable sets two values: the subchart's own condition
+	// (<subchart>.enabled=false, stops the pod) and the W&B controller's per-service
+	// toggle (wandb-operator.operators.<key>=false, stops it managing that service).
+	// setNested writes the leaf without clobbering sibling keys (e.g. the mirror-set
+	// image repositories), so multiple disables compose correctly.
+	if !enableMocoOperator {
+		setNested(releaseValues, false, "moco", "enabled")
+		setNested(releaseValues, false, "wandb-operator", "operators", "mysql")
+	}
+	if !enableRedisOperator {
+		setNested(releaseValues, false, "redis-operator", "enabled")
+		setNested(releaseValues, false, "wandb-operator", "operators", "redis")
+	}
+	if !enableSeaweedfsOperator {
+		setNested(releaseValues, false, "seaweedfs-operator", "enabled")
+		setNested(releaseValues, false, "wandb-operator", "operators", "objectStore")
+	}
+	if !enableClickhouseOperator {
+		setNested(releaseValues, false, "altinity-clickhouse-operator", "enabled")
+		setNested(releaseValues, false, "wandb-operator", "operators", "clickhouse")
 	}
 
 	if releaseExists {

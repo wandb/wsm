@@ -63,9 +63,6 @@ const (
 	nginxGatewayInstallModeFalse = "false"
 )
 
-// KSM install-mode consts live in pkg/operator (operator.KubeStateMetricsInstallMode*)
-// so external consumers can vendor them; cmd references them from there.
-
 var (
 	wandbCR = &v2.WeightsAndBiases{
 		TypeMeta: metav1.TypeMeta{
@@ -2029,8 +2026,7 @@ func performCleanup() error {
 		}
 	}
 
-	// 5. Delete kube-state-metrics only when a wsm marker claims it. A customer's KSM is
-	// never marked, so FindNamespacesWithMarker returns nothing and we skip the delete.
+	// Delete kube-state-metrics only when a wsm marker claims it, and skip the delete for non-marked KSM.
 	ksmNamespaces, err := kubectl.FindNamespacesWithMarker(ctx, "kube-state-metrics")
 	if err == nil && len(ksmNamespaces) > 0 {
 		fmt.Println("→ Deleting kube-state-metrics...")

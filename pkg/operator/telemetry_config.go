@@ -37,6 +37,10 @@ type TelemetryConfig struct {
 	OtelResourceAttrs string
 	ForwardProtocol   string
 	ForwardHeaders    map[string]string
+	// The operator chart defaults telemetry.scrape.kubeStateMetrics to false; wsm
+	// flips it on when it's managing KSM under full mode, else the installed KSM
+	// emits kube_* metrics that nothing scrapes.
+	ScrapeKubeStateMetrics bool
 }
 
 // buildTelemetryValues renders a TelemetryConfig into the operator chart's telemetry.* values block.
@@ -61,6 +65,11 @@ func buildTelemetryValues(t TelemetryConfig) map[string]interface{} {
 	}
 	if len(otel) > 0 {
 		values["otel"] = otel
+	}
+
+	// Written only when true so the chart default is preserved otherwise.
+	if t.ScrapeKubeStateMetrics {
+		values["scrape"] = map[string]interface{}{"kubeStateMetrics": true}
 	}
 
 	if t.Mode == TelemetryModeForward {
@@ -96,6 +105,9 @@ func parseTelemetryValues(values map[string]interface{}) TelemetryConfig {
 		t.OtelProtocol, _ = otel["protocol"].(string)
 		t.OtelServiceName, _ = otel["serviceName"].(string)
 		t.OtelResourceAttrs, _ = otel["resourceAttributes"].(string)
+	}
+	if scrape, ok := values["scrape"].(map[string]interface{}); ok {
+		t.ScrapeKubeStateMetrics, _ = scrape["kubeStateMetrics"].(bool)
 	}
 	if fwd, ok := values["forwarding"].(map[string]interface{}); ok {
 		if otlp, ok := fwd["otlp"].(map[string]interface{}); ok {

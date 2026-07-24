@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 )
 
 // CreateDeploymentMarker creates a ConfigMap marker to track wsm-managed deployments
@@ -25,6 +27,46 @@ func CreateDeploymentMarker(ctx context.Context, clusterName, namespace string, 
 	}
 
 	return nil
+}
+
+// AddDeploymentMarker records a single component in the marker, creating it if
+// absent and preserving components already listed. It lets a component claim
+// ownership the moment it's installed, so a later step failing can't strand it
+// unmarked. The read-merge-write retries on conflict, re-reading current components
+// each attempt, so concurrent writers don't drop each other's entries; the Update
+// targets the fetched object's resourceVersion, which is what surfaces a conflict.
+func AddDeploymentMarker(ctx context.Context, namespace, component string) error {
+	_, cs, err := GetClientset()
+	if err != nil {
+		return err
+	}
+	cms := cs.CoreV1().ConfigMaps(namespace)
+
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		cm, err := cms.Get(ctx, "wsm-deployment-marker", metav1.GetOptions{})
+		if err != nil {
+			if errors.IsNotFound(err) {
+				return CreateDeploymentMarker(ctx, "", namespace, component)
+			}
+			return fmt.Errorf("failed to check for deployment marker: %w", err)
+		}
+		if cm.Data == nil {
+			cm.Data = map[string]string{}
+		}
+		existing := cm.Data["components"]
+		for c := range strings.SplitSeq(existing, ",") {
+			if strings.TrimSpace(c) == component {
+				return nil
+			}
+		}
+		if existing == "" {
+			cm.Data["components"] = component
+		} else {
+			cm.Data["components"] = existing + "," + component
+		}
+		_, err = cms.Update(ctx, cm, metav1.UpdateOptions{})
+		return err
+	})
 }
 
 // HasDeploymentMarker checks if a deployment marker exists

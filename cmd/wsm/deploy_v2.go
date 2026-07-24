@@ -63,6 +63,9 @@ const (
 	nginxGatewayInstallModeFalse = "false"
 )
 
+// KSM install-mode consts live in pkg/operator (operator.KubeStateMetricsInstallMode*)
+// so external consumers can vendor them; cmd references them from there.
+
 var (
 	wandbCR = &v2.WeightsAndBiases{
 		TypeMeta: metav1.TypeMeta{
@@ -361,6 +364,7 @@ func operatorDeployCmd() *cobra.Command {
 	var setupCluster bool
 	var installCertManagerMode string
 	var installNginxGatewayMode string
+	var installKubeStateMetricsMode string
 	var enableGatewayAPI bool
 	var clusterName string
 	var workers int
@@ -398,6 +402,9 @@ func operatorDeployCmd() *cobra.Command {
 			if err := validateObservabilityMode(telemetry.Mode); err != nil {
 				return err
 			}
+			if err := validateKubeStateMetricsInstallMode(installKubeStateMetricsMode); err != nil {
+				return err
+			}
 			if telemetry.Mode == operator.TelemetryModeForward && telemetry.ForwardEndpoint == "" {
 				return fmt.Errorf("--observability-mode=forward requires --observability-forward-endpoint")
 			}
@@ -428,6 +435,7 @@ func operatorDeployCmd() *cobra.Command {
 				setupCluster,
 				installCertManagerMode,
 				installNginxGatewayMode,
+				installKubeStateMetricsMode,
 				enableGatewayAPI,
 				includeCR,
 				wait,
@@ -483,6 +491,7 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
 	cmd.Flags().StringVar(&installCertManagerMode, "install-cert-manager", certManagerInstallModeAuto, "Cert-manager install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
 	cmd.Flags().StringVar(&installNginxGatewayMode, "install-nginx-gateway", nginxGatewayInstallModeAuto, "Nginx-gateway-fabric install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
+	cmd.Flags().StringVar(&installKubeStateMetricsMode, "install-kube-state-metrics", operator.KubeStateMetricsInstallModeFalse, "kube-state-metrics install mode, applied only when --observability-mode=full: false (default; wsm won't install or remove KSM), auto (detect and reuse existing, else install), true (force install)")
 
 	cmd.Flags().BoolVar(&enableGatewayAPI, "enable-gateway-api", true, "Enable Gateway API support for cert-manager")
 	cmd.Flags().BoolVar(&includeCR, "include-cr", false, "Also deploy the WeightsAndBiases CR in this run instead of leaving it to 'wsm deploy-v2 wandb deploy'")
@@ -502,20 +511,22 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().StringToString("observability-forward-headers", nil, "OTLP forwarding headers as key=value pairs, e.g. Authorization=Bearer... (telemetry.forwarding.otlp.headers; only applied when --observability-mode=forward)")
 
 	cmd.AddCommand(operatorOpenShiftStatusCmd())
+	cmd.AddCommand(operatorKubeStateMetricsStatusCmd())
 	cmd.AddCommand(operatorDestroyCmd())
 	return cmd
 }
 
 // operatorDestroyCmd uninstalls the operator; the --include-* flags opt into removing
-// the shared cert-manager and nginx-gateway releases too.
+// the shared cert-manager, nginx-gateway, and kube-state-metrics releases too.
 func operatorDestroyCmd() *cobra.Command {
 	var includeCertManager bool
 	var includeNginxGateway bool
+	var includeKubeStateMetrics bool
 
 	cmd := &cobra.Command{
 		Use:   "destroy",
-		Short: "Uninstall the v2 operator (optionally cert-manager and nginx-gateway too)",
-		Long:  `Uninstall the wandb-operator Helm release. cert-manager and nginx-gateway are shared infrastructure and are left in place unless --include-cert-manager / --include-nginx-gateway are set. Use 'wsm cluster cleanup' to remove everything wsm deployed, including W&B CRs.`,
+		Short: "Uninstall the v2 operator (optionally cert-manager, nginx-gateway, and kube-state-metrics too)",
+		Long:  `Uninstall the wandb-operator Helm release. cert-manager, nginx-gateway, and kube-state-metrics are shared infrastructure and are left in place unless --include-cert-manager / --include-nginx-gateway / --include-kube-state-metrics are set. Use 'wsm cluster cleanup' to remove everything wsm deployed, including W&B CRs.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			operatorNamespace, _ := cmd.Flags().GetString("operator-namespace")
 			ctx := context.Background()
@@ -567,6 +578,32 @@ func operatorDestroyCmd() *cobra.Command {
 				}
 			}
 
+			// Only remove KSM if wsm installed it (marker present) — never a customer's
+			// pre-existing instance, which is never marked.
+			if includeKubeStateMetrics {
+				hasMarker, err := kubectl.HasDeploymentMarker(ctx, operatorNamespace, "kube-state-metrics")
+				if err != nil {
+					return err
+				}
+				if !hasMarker {
+					fmt.Println("! kube-state-metrics is not wsm-managed in this operator namespace; leaving it in place")
+				} else {
+					fmt.Println("→ Deleting kube-state-metrics...")
+					ksmRemoved, err := operator.DeleteKubeStateMetrics(ctx)
+					if err != nil {
+						return err
+					}
+					if err := kubectl.DeleteDeploymentMarker(ctx, operatorNamespace, "kube-state-metrics"); err != nil {
+						return fmt.Errorf("failed to remove kube-state-metrics marker in %s: %w", operatorNamespace, err)
+					}
+					if ksmRemoved {
+						fmt.Println("✓ kube-state-metrics uninstalled")
+					} else {
+						fmt.Println("! No kube-state-metrics release found; nothing to uninstall")
+					}
+				}
+			}
+
 			return nil
 		},
 	}
@@ -574,6 +611,7 @@ func operatorDestroyCmd() *cobra.Command {
 	cmd.Flags().String("operator-namespace", "wandb-operators", "Namespace where the operator is installed")
 	cmd.Flags().BoolVar(&includeCertManager, "include-cert-manager", false, "Also uninstall the cert-manager Helm release")
 	cmd.Flags().BoolVar(&includeNginxGateway, "include-nginx-gateway", false, "Also uninstall the nginx-gateway-fabric Helm release")
+	cmd.Flags().BoolVar(&includeKubeStateMetrics, "include-kube-state-metrics", false, "Also uninstall the kube-state-metrics Helm release (only if wsm installed it)")
 	return cmd
 }
 
@@ -603,6 +641,63 @@ func operatorOpenShiftStatusCmd() *cobra.Command {
 	}
 
 	cmd.Flags().String("operator-namespace", "wandb-operators", "Namespace where the operator is installed")
+	return cmd
+}
+
+// operatorKubeStateMetricsStatusCmd reports every KSM in the cluster and whether wsm
+// installed it, so an operator can confirm the telemetry stack has its kube_* source.
+func operatorKubeStateMetricsStatusCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "kube-state-metrics-status",
+		Short: "Report kube-state-metrics installs in the cluster and whether wsm manages them",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			operatorNamespace, _ := cmd.Flags().GetString("operator-namespace")
+			ctx := context.Background()
+
+			status, err := operator.GetKubeStateMetricsStatus(ctx)
+			if err != nil {
+				return err
+			}
+
+			// A specific --operator-namespace scopes the ownership check to that
+			// namespace; unset, scan every namespace so a KSM installed by an operator
+			// anywhere (or none) is still attributed correctly.
+			var ownerNamespaces []string
+			if operatorNamespace != "" {
+				has, err := kubectl.HasDeploymentMarker(ctx, operatorNamespace, "kube-state-metrics")
+				if err != nil {
+					return err
+				}
+				if has {
+					ownerNamespaces = []string{operatorNamespace}
+				}
+			} else if ownerNamespaces, err = kubectl.FindNamespacesWithMarker(ctx, "kube-state-metrics"); err != nil {
+				return err
+			}
+
+			fmt.Printf("Installed: %v\n", status.Installed)
+			if !status.Installed {
+				fmt.Println("  No kube-state-metrics found in any namespace.")
+				return nil
+			}
+			if len(status.Instances) > 1 {
+				fmt.Printf("  ⚠ %d instances found — duplicate kube_* metrics likely double-count series.\n", len(status.Instances))
+			}
+			for _, in := range status.Instances {
+				fmt.Printf("  • %s/%s\n", in.Namespace, in.Name)
+				fmt.Printf("      image:    %s\n", in.Image)
+				fmt.Printf("      ready:    %v (%s)\n", in.Ready, in.Replicas)
+			}
+			if len(ownerNamespaces) > 0 {
+				fmt.Printf("Managed by wsm: yes (marker in namespace %s)\n", strings.Join(ownerNamespaces, ", "))
+			} else {
+				fmt.Println("Managed by wsm: no (pre-existing / not installed by wsm)")
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().String("operator-namespace", "", "Operator namespace to check for the wsm ownership marker; empty scans all namespaces")
 	return cmd
 }
 
@@ -655,6 +750,7 @@ func performDeploy(
 	setupCluster bool,
 	installCertManagerMode string,
 	installNginxGatewayMode string,
+	installKubeStateMetricsMode string,
 	enableGatewayAPI bool,
 	includeCR bool,
 	wait bool,
@@ -681,6 +777,7 @@ func performDeploy(
 	ctx := context.Background()
 	installNginxGatewayMode = strings.ToLower(strings.TrimSpace(installNginxGatewayMode))
 	installCertManagerMode = strings.ToLower(strings.TrimSpace(installCertManagerMode))
+	installKubeStateMetricsMode = strings.ToLower(strings.TrimSpace(installKubeStateMetricsMode))
 
 	var mirror *operator.MirrorConfig
 	if mirrorRegistry != "" {
@@ -691,12 +788,24 @@ func performDeploy(
 		}
 	}
 
+	// KSM only makes sense with the in-cluster telemetry stack (full). A bare =false
+	// is hands-off: wsm neither installs nor removes it.
+	manageKubeStateMetrics := installKubeStateMetricsMode != operator.KubeStateMetricsInstallModeFalse
+	installKubeStateMetrics := manageKubeStateMetrics && telemetry.Mode == operator.TelemetryModeFull
+
+	// Turn on the operator chart's KSM scrape (off by default) whenever we're
+	// managing KSM under full, so its kube_* metrics actually get collected.
+	telemetry.ScrapeKubeStateMetrics = installKubeStateMetrics
+
 	// Calculate total steps based on flags
 	totalSteps := 2 // Always: ensure cert-manager, deploy operator
 	if setupCluster {
 		totalSteps++
 	}
 	if installNginxGatewayMode != nginxGatewayInstallModeFalse {
+		totalSteps++
+	}
+	if installKubeStateMetrics {
 		totalSteps++
 	}
 	currentStep := 1
@@ -787,9 +896,72 @@ func performDeploy(
 		currentStep++
 	}
 
+	// ksmOwned is seeded from the marker so a prior install's ownership survives re-runs;
+	// a customer's own KSM is never marked, so never owned.
+	ksmOwned, err := kubectl.HasDeploymentMarker(ctx, operatorNamespace, "kube-state-metrics")
+	if err != nil {
+		return err
+	}
+	if installKubeStateMetrics {
+		fmt.Printf("[%d/%d] Ensuring kube-state-metrics...", currentStep, totalSteps)
+		start := time.Now()
+
+		var installed bool
+		switch installKubeStateMetricsMode {
+		case operator.KubeStateMetricsInstallModeAuto:
+			installed, err = operator.InstallKubeStateMetrics(ctx, true, mirror, openshift)
+		case operator.KubeStateMetricsInstallModeTrue:
+			installed, err = operator.InstallKubeStateMetrics(ctx, false, mirror, openshift)
+		default:
+			fmt.Println(" ✗")
+			return fmt.Errorf("invalid --install-kube-state-metrics value %q (expected: auto, true, false)", installKubeStateMetricsMode)
+		}
+		if err != nil {
+			fmt.Println(" ✗")
+			return err
+		}
+		if installed {
+			if err := operator.WaitForKubeStateMetrics(ctx, 5*time.Minute); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+			ksmOwned = true
+		}
+
+		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
+		currentStep++
+	} else if manageKubeStateMetrics && ksmOwned {
+		// Downgraded from full: uninstall the KSM wsm installed so no orphan remains.
+		// Gated on ownership, so a customer's own KSM is never touched.
+		fmt.Print("→ Removing kube-state-metrics (observability-mode no longer full)...")
+		if _, err := operator.DeleteKubeStateMetrics(ctx); err != nil {
+			fmt.Println(" ✗")
+			return err
+		}
+		// Release ownership right away so a later step failing can't leave the marker
+		// claiming a KSM we already uninstalled.
+		if err := kubectl.DeleteDeploymentMarker(ctx, operatorNamespace, "kube-state-metrics"); err != nil {
+			fmt.Println(" ✗")
+			return err
+		}
+		ksmOwned = false
+		fmt.Println(" ✓")
+	} else if telemetry.Mode == operator.TelemetryModeFull {
+		// full telemetry but KSM disabled: warn that kube_* metrics won't be collected.
+		fmt.Println("→ Skipping kube-state-metrics (--install-kube-state-metrics=false); kube_* metrics won't be collected")
+	}
+
 	// Step: Create infra-operators wandbNamespace
 	if err := operator.CreateNamespace(ctx, operatorNamespace); err != nil {
 		return err
+	}
+
+	// Mark KSM before the operator install (which can fail on the webhook race), so a
+	// crash can't strand a wsm-installed KSM unmarked and thus unremovable later.
+	if ksmOwned {
+		if err := kubectl.AddDeploymentMarker(ctx, operatorNamespace, "kube-state-metrics"); err != nil {
+			return err
+		}
 	}
 
 	// Fail fast on an arch the operator image can't run on, before we start the
@@ -825,6 +997,9 @@ func performDeploy(
 	markers := "cert-manager,operator"
 	if installNginxGatewayMode != nginxGatewayInstallModeFalse {
 		markers += ",nginx-gateway"
+	}
+	if ksmOwned {
+		markers += ",kube-state-metrics"
 	}
 	if err := kubectl.CreateDeploymentMarker(ctx, "", operatorNamespace, markers); err != nil {
 		fmt.Println(" ✗")
@@ -1850,6 +2025,21 @@ func performCleanup() error {
 		for _, ns := range ngNamespaces {
 			if err := kubectl.DeleteDeploymentMarker(ctx, ns, "nginx-gateway"); err != nil {
 				fmt.Printf("  ✗ Failed to remove nginx-gateway marker in %s: %v\n", ns, err)
+			}
+		}
+	}
+
+	// 5. Delete kube-state-metrics only when a wsm marker claims it. A customer's KSM is
+	// never marked, so FindNamespacesWithMarker returns nothing and we skip the delete.
+	ksmNamespaces, err := kubectl.FindNamespacesWithMarker(ctx, "kube-state-metrics")
+	if err == nil && len(ksmNamespaces) > 0 {
+		fmt.Println("→ Deleting kube-state-metrics...")
+		if _, err := operator.DeleteKubeStateMetrics(ctx); err != nil {
+			fmt.Printf("  ✗ Failed to delete kube-state-metrics: %v\n", err)
+		}
+		for _, ns := range ksmNamespaces {
+			if err := kubectl.DeleteDeploymentMarker(ctx, ns, "kube-state-metrics"); err != nil {
+				fmt.Printf("  ✗ Failed to remove kube-state-metrics marker in %s: %v\n", ns, err)
 			}
 		}
 	}

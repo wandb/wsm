@@ -195,6 +195,21 @@ func buildMirrorPlan(target, operatorChartVersion string) []mirrorItem {
 		},
 	)
 
+	// kube-state-metrics chart + image. The install rewrites image.registry to the
+	// mirror host, keeping the repository path — so the image dst must match that.
+	ksmChartVersion := operator.KubeStateMetricsVersion
+	ksmImageTag := operator.KubeStateMetricsImageTag
+	plan = append(plan,
+		mirrorItem{
+			src: "ghcr.io/prometheus-community/charts/kube-state-metrics:" + ksmChartVersion,
+			dst: target + "/prometheus-community/charts/kube-state-metrics:" + ksmChartVersion,
+		},
+		mirrorItem{
+			src: "registry.k8s.io/kube-state-metrics/kube-state-metrics:" + ksmImageTag,
+			dst: target + "/kube-state-metrics/kube-state-metrics:" + ksmImageTag,
+		},
+	)
+
 	return plan
 }
 

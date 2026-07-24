@@ -35,6 +35,7 @@ wsm deploy-v2 operator [flags]
 | `--operator-namespace` | `wandb-operators` | Namespace for the operator |
 | `--install-cert-manager` | `auto` | Cert-manager install mode: `auto`, `true`, `false` |
 | `--install-nginx-gateway` | `auto` | Nginx-gateway-fabric install mode: `auto`, `true`, `false` |
+| `--install-kube-state-metrics` | `false` | kube-state-metrics install mode, applied **only when `--observability-mode=full`**: `false` (default — wsm won't install or remove KSM, and `kube_*` metrics aren't collected), `auto` (detect an existing KSM anywhere in the cluster and reuse it, otherwise install one), `true` (force install). When wsm manages KSM (`auto`/`true`) it installs into its own `kube-state-metrics` namespace and also enables the operator chart's KSM scrape (`telemetry.scrape.kubeStateMetrics`, off by default in the chart) so the `kube_*` metrics are actually collected. `false` is fully hands-off: if a prior `auto`/`true` run installed KSM, switching back to `false` leaves it in place — remove it with `destroy --include-kube-state-metrics` or `cluster cleanup`. Automatic teardown of a wsm-installed KSM only happens when a later run drops the observability mode below `full` (the scrape is also turned back off then). A customer's own KSM is never touched. |
 | `--enable-gateway-api` | `true` | Enable Gateway API support in cert-manager |
 | `--include-cr` | `false` | Also deploy the WeightsAndBiases CR in this run. Left off, this command installs only the operator stack (phase 1) and you run `wsm deploy-v2 wandb deploy` separately (phase 2). When set, all `wsm deploy-v2 wandb deploy` CR flags apply here too. |
 | `--mirror-registry` | — | Pull every chart and image from this registry (e.g. `harbor.corp:5443`), and set the per-subchart Helm image values so the managed-service operators pull from it. The managed data-plane images (incl. the Kafka/Bufstream broker) keep upstream refs and reach the mirror via each node's container-runtime registry mirror — not this flag. Populate it first with `wsm registry mirror --to <same-host>`. See [On-Prem Deployment](../deployment/on-prem.md). |
@@ -72,6 +73,15 @@ wsm deploy-v2 operator --context prod --mirror-registry harbor.corp:5443
 
 # Deploy the operator configured for OpenShift's restricted-v2 SCC
 wsm deploy-v2 operator --context ocp --openshift
+
+# Full in-cluster observability, opting in to kube-state-metrics (detect-and-reuse,
+# else install) so kube_* dashboards get data — KSM is off by default
+wsm deploy-v2 operator --context prod --observability-mode full \
+  --install-kube-state-metrics auto
+
+# Force-install kube-state-metrics even if auto-detect would reuse an existing one
+wsm deploy-v2 operator --context prod --observability-mode full \
+  --install-kube-state-metrics true
 ```
 
 ---
@@ -99,9 +109,34 @@ wsm deploy-v2 operator openshift-status --context ocp --operator-namespace wandb
 
 ---
 
+### `wsm deploy-v2 operator kube-state-metrics-status`
+
+Reports every kube-state-metrics install found in the cluster (across all namespaces, Deployments and StatefulSets) — namespace, image/version, and readiness — and whether `wsm` manages it (via the deployment marker). Works even with no operator installed. More than one instance is flagged, since duplicate KSMs double-count `kube_*` series.
+
+Ownership is determined from the wsm deployment marker: with `--operator-namespace` unset (the default) every namespace is scanned for a marker claiming KSM; pass `--operator-namespace` to scope the check to one operator's namespace.
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | — | **Required.** Name of the kubeconfig context to use |
+| `--operator-namespace` | — | Operator namespace to check for the wsm ownership marker; empty scans all namespaces |
+
+#### Examples
+
+```bash
+# Any cluster: list every KSM (namespace, version, readiness) and whether wsm owns it
+wsm deploy-v2 operator kube-state-metrics-status --context prod
+
+# Scope the ownership check to a specific operator namespace
+wsm deploy-v2 operator kube-state-metrics-status --context prod --operator-namespace wandb-operators
+```
+
+---
+
 ### `wsm deploy-v2 operator destroy`
 
-Uninstalls the `wandb-operator` Helm release. cert-manager and nginx-gateway are shared infrastructure and are left in place by default; opt into removing them with `--include-cert-manager` / `--include-nginx-gateway`. To remove everything `wsm` deployed (operator, cert-manager, nginx-gateway, **and** any W&B CRs) in one shot, use [`wsm cluster cleanup`](#wsm-cluster) instead. This command does not delete the W&B instance; destroy it first with [`wsm deploy-v2 wandb destroy`](#wsm-deploy-v2-wandb-destroy).
+Uninstalls the `wandb-operator` Helm release. cert-manager, nginx-gateway, and kube-state-metrics are shared infrastructure and are left in place by default; opt into removing them with `--include-cert-manager` / `--include-nginx-gateway` / `--include-kube-state-metrics`. To remove everything `wsm` deployed (operator, cert-manager, nginx-gateway, kube-state-metrics, **and** any W&B CRs) in one shot, use [`wsm cluster cleanup`](#wsm-cluster) instead. This command does not delete the W&B instance; destroy it first with [`wsm deploy-v2 wandb destroy`](#wsm-deploy-v2-wandb-destroy).
 
 #### Flags
 
@@ -111,6 +146,7 @@ Uninstalls the `wandb-operator` Helm release. cert-manager and nginx-gateway are
 | `--operator-namespace` | `wandb-operators` | Namespace where the operator is installed |
 | `--include-cert-manager` | `false` | Also uninstall the cert-manager Helm release (shared infra — only if nothing else in the cluster relies on it) |
 | `--include-nginx-gateway` | `false` | Also uninstall the nginx-gateway-fabric Helm release (shared infra) |
+| `--include-kube-state-metrics` | `false` | Also uninstall the kube-state-metrics Helm release (shared infra — only if `wsm` installed it and nothing else in the cluster relies on it; a customer's own KSM is never removed) |
 
 #### Examples
 

@@ -51,6 +51,17 @@ func validateObservabilityMode(mode string) error {
 	return nil
 }
 
+// Rejects any --install-kube-state-metrics that isn't a known install mode. The valid
+// set is owned by pkg/operator (performDeploy's switch acts on it); this wrapper adds
+// the CLI-flag-specific error message.
+func validateKubeStateMetricsInstallMode(mode string) error {
+	if !operator.ValidKubeStateMetricsInstallMode(strings.ToLower(strings.TrimSpace(mode))) {
+		return fmt.Errorf("invalid --install-kube-state-metrics %q (expected: %s, %s, %s)",
+			mode, operator.KubeStateMetricsInstallModeAuto, operator.KubeStateMetricsInstallModeTrue, operator.KubeStateMetricsInstallModeFalse)
+	}
+	return nil
+}
+
 // Rejects specifying both an explicit gateway class and an ingress class. --gateway-class has a non-empty default
 // ("nginx"), so a bare --ingress-class is allowed and takes precedence.
 func validateNetworkingFlags(gatewayClassChanged bool, gatewayClass, ingressClass string) error {

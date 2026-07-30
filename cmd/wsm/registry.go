@@ -46,6 +46,7 @@ func RegistryCmd() *cobra.Command {
 	cmd.AddCommand(registryValuesCmd())
 	cmd.AddCommand(registryPushCmd())
 	cmd.AddCommand(registryMirrorCmd())
+	cmd.AddCommand(registryCreateReposCmd())
 	return cmd
 }
 

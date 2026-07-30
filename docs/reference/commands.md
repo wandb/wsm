@@ -30,7 +30,7 @@ wsm deploy-v2 operator [flags]
 | `--setup-k8s-cluster` | `false` | Create a Kind cluster before deploying |
 | `--cluster-name` | `kind` | Name of the Kind cluster (used with `--setup-k8s-cluster`) |
 | `--workers` | `0` | Number of Kind worker nodes |
-| `--operator-chart-version` | `2.0.0-beta.1` | Operator Helm chart version |
+| `--operator-chart-version` | `2.0.0-beta.3` | Operator Helm chart version |
 | `--operator-version` | — | Operator image version (defaults to chart value) |
 | `--operator-namespace` | `wandb-operators` | Namespace for the operator |
 | `--install-cert-manager` | `auto` | Cert-manager install mode: `auto`, `true`, `false` |
@@ -195,6 +195,11 @@ wsm deploy-v2 wandb deploy [flags]
 | `--image-registry` | — | **Deprecated.** Retarget container images to this registry (`spec.global.imageRegistry`). Use `--mirror-registry`, or `--cr-set spec.global.imageRegistry=<host>` for a different data-plane registry. |
 | `--custom-ca-cert-file` | — | Path to a PEM CA certificate to trust in W&B workloads; repeatable, each file's contents is appended to `spec.global.customCACerts` |
 | `--custom-ca-configmap` | — | Name of a ConfigMap holding CA certificates to trust in W&B workloads (`spec.global.caCertsConfigMap`) |
+| `--proxy-http-url` | — | Literal `HTTP_PROXY` URL, no credentials (`spec.global.proxy.httpProxy.value`). Mutually exclusive with `--proxy-http-secret` |
+| `--proxy-https-url` | — | Literal `HTTPS_PROXY` URL, no credentials (`spec.global.proxy.httpsProxy.value`). Mutually exclusive with `--proxy-https-secret` |
+| `--proxy-http-secret` | — | Secret ref `<name>:<key>` for a credentialed `HTTP_PROXY` URL (`spec.global.proxy.httpProxy.valueFrom`). Use this rather than `--proxy-http-url` when the URL embeds `user:pass@` — the operator rejects credentials in a literal value |
+| `--proxy-https-secret` | — | Secret ref `<name>:<key>` for a credentialed `HTTPS_PROXY` URL (`spec.global.proxy.httpsProxy.valueFrom`) |
+| `--no-proxy` | — | Extra `NO_PROXY` entry appended to the operator's in-cluster exclusions (`spec.global.proxy.noProxy`); repeatable. Use for external endpoints (e.g. a BYOB object store) that must bypass the proxy |
 | `--objectstore-copies` | — | Managed object store replica copies (`spec.objectStore.managedObjectStore.copies`). Operator default applies when unset. Applies to the default managed instance only (see note below) |
 | `--bucket-proxy` | — | Route object-store access through the W&B app instead of direct client access (`spec.wandb.bucketProxy`). Operator default applies when unset |
 | `--cr-set` | — | Set an arbitrary CR field as `<path>=<value>`, e.g. `spec.wandb.version=0.82.2`; repeatable. Values are YAML-typed (`3`→number, `true`→bool, `[a,b]`→list). Overrides the built-in template, `--cr-file`, and the typed flags above (see note below) |
@@ -210,9 +215,9 @@ wsm deploy-v2 wandb deploy [flags]
 | `--retention-policy` | `detach` | Behavior on CR deletion: `detach` (leave infrastructure running) or `purge` (delete all managed resources and PVCs) |
 | `--wait` | `false` | Wait for the W&B instance to report Ready |
 
-> **Default managed instance.** Managed `mysql`, `redis`, `objectStore`, and `clickHouse` are keyed by instance name; `wsm` builds a single instance under the reserved key `default`. Flags that tune managed infra — `--observability-mode` (per-service telemetry) and `--objectstore-copies` — only affect that `default` instance. To run multiple instances or tune a differently-keyed one, supply the full shape via `--cr-file`.
-
-> **Setting arbitrary CR fields with `--cr-set`.** Rather than adding a dedicated flag for every CR field, `--cr-set <path>=<value>` sets any field on the CR by its dotted path. It applies last — after the built-in template, `--cr-file`, and the typed flags — so it always wins, and the operator's CRD validates the result on apply. Use it for fields without a dedicated flag; use `--cr-file` for large or deeply-nested shapes. Values are parsed as YAML, so types infer automatically; a numeric-looking value targeting a string field (e.g. `spec.wandb.version=1.0`) is applied as the string. List **indices** are not addressable (set the whole list, or use `--cr-file`). Example:
+> **Default managed instance.** Managed `mysql`, `redis`, `objectStore`, and `clickhouse` are keyed by instance name; `wsm` builds a single instance under the reserved key `default`. Flags that tune managed infra — `--observability-mode` (per-service telemetry) and `--objectstore-copies` — only affect that `default` instance. To run multiple instances or tune a differently-keyed one, supply the full shape via `--cr-file`.
+>
+> **Setting arbitrary CR fields with `--cr-set`.** Rather than adding a dedicated flag for every CR field, `--cr-set <path>=<value>` sets any field on the CR by its dotted path. It applies last — after the built-in template, `--cr-file`, and the typed flags — so it always wins, and the operator's CRD validates the result on apply. Use it for fields without a dedicated flag; use `--cr-file` for large or deeply-nested shapes. Values are parsed as YAML, so types infer automatically; a numeric-looking value targeting a string field (e.g. `spec.wandb.version=1.0`) is applied as the string. List **indices** are not addressable, and map **keys containing dots** (e.g. annotation keys like `eks.amazonaws.com/role-arn`) can't be targeted because the path splits on every dot — use `--cr-file` for both. Example:
 >
 > ```bash
 > wsm deploy-v2 wandb deploy --context <ctx> \
@@ -406,7 +411,7 @@ Scope today: the operator OCI chart + binary image, cert-manager OCI chart + 5 c
 | `--to` | — | **Required.** Hostname of your mirror, e.g. `harbor.example.com` or `localhost:5000`. |
 | `--insecure` | `false` | Skip TLS verification when pushing to the mirror. Use for plain-HTTP registries like a local `registry:2`. **Never** in production. |
 | `--dry-run` | `false` | Print the source → target mirroring plan without pushing. |
-| `--operator-chart-version` | `2.0.0-beta.1` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
+| `--operator-chart-version` | `2.0.0-beta.3` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
 
 Auth is read from your Docker config (`~/.docker/config.json`). Run `docker login <mirror-host>` before this command for any registry that requires credentials.
 
@@ -426,7 +431,7 @@ wsm registry check --registry <host> --wandb-version <version> [flags]
 |------|---------|-------------|
 | `--registry` | — | **Required.** Hostname of your mirror to check against. |
 | `--wandb-version` | — | W&B server version that was mirrored; when set, also check the server manifest and every application image it references. |
-| `--operator-chart-version` | `2.0.0-alpha.2` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
+| `--operator-chart-version` | `2.0.0-beta.3` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
 | `--skip-managed-images` | `false` | Don't check the managed-service operator + data-plane images (match the flag you mirrored with). |
 | `--insecure` | `false` | Skip TLS verification when contacting the registry. |
 | `--fail-on-missing` | `false` | Exit non-zero if any artifact is missing. |

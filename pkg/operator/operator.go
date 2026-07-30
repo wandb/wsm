@@ -1368,6 +1368,19 @@ func stripFieldsNotInCRDSchema(obj *unstructured.Unstructured) {
 	if isEmptyNestedMap(obj, "spec", "wandb", "probes") {
 		unstructured.RemoveNestedField(obj.Object, "spec", "wandb", "probes")
 	}
+
+	// ManagedServiceAccountSpec is a by-value struct on managed Kafka/ClickHouse,
+	// so an unconfigured one serializes as serviceAccount: {}. Strip when empty.
+	if isEmptyNestedMap(obj, "spec", "kafka", "managedKafka", "serviceAccount") {
+		unstructured.RemoveNestedField(obj.Object, "spec", "kafka", "managedKafka", "serviceAccount")
+	}
+	if clickhouse, found, _ := unstructured.NestedMap(obj.Object, "spec", "clickhouse"); found {
+		for name := range clickhouse {
+			if isEmptyNestedMap(obj, "spec", "clickhouse", name, "managedClickhouse", "serviceAccount") {
+				unstructured.RemoveNestedField(obj.Object, "spec", "clickhouse", name, "managedClickhouse", "serviceAccount")
+			}
+		}
+	}
 }
 
 // isEmptyNestedMap reports whether the field at the given path is absent or an

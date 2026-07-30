@@ -130,9 +130,9 @@ spec:
       managedObjectStore:
         telemetry:
           enabled: true
-  clickHouse:
+  clickhouse:
     default:
-      managedClickHouse:
+      managedClickhouse:
         telemetry:
           enabled: true
 ```

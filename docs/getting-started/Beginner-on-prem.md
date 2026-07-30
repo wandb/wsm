@@ -52,11 +52,10 @@ application image into your registry.
 ```bash
 wsm cluster create --cluster-name wandb --insecure-registry-host $REG
 
-kubectl --context kind-wandb apply -f \
-  https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml
+kubectl --context kind-wandb apply -f  https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml
 
-wsm deploy-v2 operator --context kind-wandb \
-  --mirror-registry $REG --insecure-registry --skip-gateway-api-crds
+wsm deploy-v2 operator --context kind-wandb --mirror-registry $REG --insecure-registry --skip-gateway-api-crds 
+# include --allow-unsupported-arch if running on a mac
 ```
 
 `--insecure-registry-host` wires the cluster's nodes to pull from your plain-HTTP registry.
@@ -65,21 +64,20 @@ wsm deploy-v2 operator --context kind-wandb \
 
 ```bash
 # grab the published server manifest, point its image refs at your registry
-docker pull --platform linux/amd64 us-docker.pkg.dev/wandb-production/public/wandb/server-manifest:$VER
-cid=$(docker create --platform linux/amd64 us-docker.pkg.dev/wandb-production/public/wandb/server-manifest:$VER x)
+# (it's just YAML in a scratch image — architecture doesn't matter, so no --platform)
+docker pull us-docker.pkg.dev/wandb-production/public/wandb/server-manifest:$VER
+cid=$(docker create us-docker.pkg.dev/wandb-production/public/wandb/server-manifest:$VER x)
 docker cp "$cid:/manifest.yaml" . && docker cp "$cid:/sizing.yaml" . && docker rm "$cid"
 sed -i '' "s#us-docker.pkg.dev/wandb-production/public/#$REG/#g" manifest.yaml   # Linux: sed -i (no '')
 
 # mount it onto the operator so it reads the manifest from disk (file://)
 kubectl create configmap wandb-manifest -n wandb-operators --from-file=manifest.yaml --from-file=sizing.yaml
 CTR=$(kubectl get deploy wandb-operator -n wandb-operators -o jsonpath='{.spec.template.spec.containers[0].name}')
-kubectl patch deployment wandb-operator -n wandb-operators --type strategic -p \
-  "{\"spec\":{\"template\":{\"spec\":{\"volumes\":[{\"name\":\"m\",\"configMap\":{\"name\":\"wandb-manifest\"}}],\"containers\":[{\"name\":\"$CTR\",\"volumeMounts\":[{\"name\":\"m\",\"mountPath\":\"/manifests/$VER\"}]}]}}}}"
+kubectl patch deployment wandb-operator -n wandb-operators --type strategic -p "{\"spec\":{\"template\":{\"spec\":{\"volumes\":[{\"name\":\"m\",\"configMap\":{\"name\":\"wandb-manifest\"}}],\"containers\":[{\"name\":\"$CTR\",\"volumeMounts\":[{\"name\":\"m\",\"mountPath\":\"/manifests/$VER\"}]}]}}}}"
 kubectl rollout status deploy/wandb-operator -n wandb-operators
 
 # deploy the W&B instance, reading the manifest from disk
-wsm deploy-v2 wandb deploy --context kind-wandb \
-  --manifest-repository file:///manifests --wandb-version $VER
+wsm deploy-v2 wandb deploy --context kind-wandb --manifest-repository file:///manifests --wandb-version $VER
 ```
 
 ### 5. Watch it come up

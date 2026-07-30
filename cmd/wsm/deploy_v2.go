@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,7 +47,7 @@ func init() {
 // TODO once an official release publishes a manifest, we should switch to looking
 // up the most recent non-dev release and not have a default.
 const (
-	defaultWandbVersion = "0.82.2"
+	defaultWandbVersion = "0.83.1"
 	minWandbVersion     = "0.80.0"
 )
 
@@ -181,6 +182,12 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("custom-ca-configmap", "", "Name of a ConfigMap holding CA certificates to trust in W&B workloads (spec.global.caCertsConfigMap; optional)")
 	cmd.PersistentFlags().Int32("objectstore-copies", 0, "Managed object store replica copies (spec.objectStore.managedObjectStore.copies; optional, operator default when unset)")
 	cmd.PersistentFlags().Bool("bucket-proxy", false, "Route object-store access through the W&B app instead of direct client access (spec.wandb.bucketProxy; optional, operator default when unset)")
+	// Forward-proxy egress (spec.global.proxy).
+	cmd.PersistentFlags().String("proxy-http-url", "", "Literal HTTP_PROXY URL, no credentials (spec.global.proxy.httpProxy.value; optional)")
+	cmd.PersistentFlags().String("proxy-https-url", "", "Literal HTTPS_PROXY URL, no credentials (spec.global.proxy.httpsProxy.value; optional)")
+	cmd.PersistentFlags().String("proxy-http-secret", "", "Secret ref <name>:<key> for a credentialed HTTP_PROXY URL (spec.global.proxy.httpProxy.valueFrom; optional)")
+	cmd.PersistentFlags().String("proxy-https-secret", "", "Secret ref <name>:<key> for a credentialed HTTPS_PROXY URL (spec.global.proxy.httpsProxy.valueFrom; optional)")
+	cmd.PersistentFlags().StringArray("no-proxy", nil, "Extra NO_PROXY entry appended to the operator's in-cluster exclusions; repeatable (spec.global.proxy.noProxy; optional)")
 	cmd.PersistentFlags().StringArray("cr-set", nil, "Set an arbitrary CR field as <path>=<value>, e.g. spec.wandb.version=0.82.2; repeatable, YAML-typed, overrides the built-in template, --cr-file, and the typed flags above")
 	// TODO readd this when the CR reports ready properly
 	//cmd.Flags().Bool("wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
@@ -484,7 +491,7 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
 	cmd.Flags().StringVar(&kindNodeImage, "kind-node-image", "", "Kind node image to use, e.g. myreg.example.com/kindest/node:v1.35.1@sha256:... (defaults to the upstream pinned image; only used with --setup-k8s-cluster)")
 
-	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.1", "Operator Chart version (e.g., v2.0.0)")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.3", "Operator Chart version (e.g., v2.0.0)")
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
 	cmd.Flags().StringVar(&installCertManagerMode, "install-cert-manager", certManagerInstallModeAuto, "Cert-manager install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
 	cmd.Flags().StringVar(&installNginxGatewayMode, "install-nginx-gateway", nginxGatewayInstallModeAuto, "Nginx-gateway-fabric install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
@@ -1374,8 +1381,14 @@ type wandbCRFlags struct {
 	imageRegistry         string
 	customCACertFiles     []string
 	customCAConfigMap     string
-	objectStoreCopies     *int32
-	bucketProxy           *bool
+	// spec.global.proxy: literal URL or <secret>:<key> per http/https.
+	proxyHTTPURL      string
+	proxyHTTPSURL     string
+	proxyHTTPSecret   string
+	proxyHTTPSSecret  string
+	noProxy           []string
+	objectStoreCopies *int32
+	bucketProxy       *bool
 	// Air-gap install fields. mirrorRegistry is the one-stop mirror flag: it
 	// points the operator/subchart charts + images and the server manifest at the
 	// mirror (defaults manifestRepo). It does NOT set spec.global.imageRegistry.
@@ -1397,6 +1410,7 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 
 	certFiles, _ := cmd.Flags().GetStringArray("custom-ca-cert-file")
 	crSet, _ := cmd.Flags().GetStringArray("cr-set")
+	noProxy, _ := cmd.Flags().GetStringArray("no-proxy")
 	return wandbCRFlags{
 		crFile:                 str("cr-file"),
 		wandbVersion:           str("wandb-version"),
@@ -1422,6 +1436,11 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 		imageRegistry:          str("image-registry"),
 		customCACertFiles:      certFiles,
 		customCAConfigMap:      str("custom-ca-configmap"),
+		proxyHTTPURL:           str("proxy-http-url"),
+		proxyHTTPSURL:          str("proxy-https-url"),
+		proxyHTTPSecret:        str("proxy-http-secret"),
+		proxyHTTPSSecret:       str("proxy-https-secret"),
+		noProxy:                noProxy,
 		objectStoreCopies:      changedInt32(cmd, "objectstore-copies"),
 		bucketProxy:            changedBool(cmd, "bucket-proxy"),
 		mirrorRegistry:         str("mirror-registry"),
@@ -1691,6 +1710,32 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 		wandbCR.Spec.Global.CustomCACerts = append(wandbCR.Spec.Global.CustomCACerts, string(pem))
 	}
 
+	// spec.global.proxy: a proxy flag overrides the --cr-file value for that leaf
+	// (documented precedence: flags > --cr-file); an unset leaf keeps the file's.
+	httpProxy, err := proxyValueFromFlags(f.proxyHTTPURL, f.proxyHTTPSecret, "--proxy-http-url", "--proxy-http-secret")
+	if err != nil {
+		return err
+	}
+	httpsProxy, err := proxyValueFromFlags(f.proxyHTTPSURL, f.proxyHTTPSSecret, "--proxy-https-url", "--proxy-https-secret")
+	if err != nil {
+		return err
+	}
+	if httpProxy != nil || httpsProxy != nil || len(f.noProxy) > 0 {
+		if wandbCR.Spec.Global.Proxy == nil {
+			wandbCR.Spec.Global.Proxy = &v2.ProxySpec{}
+		}
+		p := wandbCR.Spec.Global.Proxy
+		if httpProxy != nil {
+			p.HTTPProxy = httpProxy
+		}
+		if httpsProxy != nil {
+			p.HTTPSProxy = httpsProxy
+		}
+		if len(f.noProxy) > 0 {
+			p.NoProxy = append(p.NoProxy, f.noProxy...)
+		}
+	}
+
 	// --ingress-class and --gateway-class select mutually exclusive networking
 	// modes. --gateway-class has a non-empty default ("nginx"), so an explicit
 	// --ingress-class must take precedence and suppress the Gateway API config.
@@ -1779,6 +1824,47 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 
 	wandbCR.Namespace = f.wandbNamespace
 	return nil
+}
+
+// proxyValueFromFlags builds a *v2.ProxyValue from a literal-URL flag and a
+// <secret>:<key> flag. The two are mutually exclusive; nil when neither is set.
+func proxyValueFromFlags(urlVal, secretVal, urlFlag, secretFlag string) (*v2.ProxyValue, error) {
+	if urlVal != "" && secretVal != "" {
+		return nil, fmt.Errorf("%s and %s are mutually exclusive", urlFlag, secretFlag)
+	}
+	switch {
+	case urlVal != "":
+		u, err := url.Parse(urlVal)
+		if err != nil {
+			return nil, fmt.Errorf("%s %q is not a valid URL: %w", urlFlag, urlVal, err)
+		}
+		if u.Scheme == "" || u.Host == "" {
+			return nil, fmt.Errorf("%s %q must be an absolute URL, e.g. http://proxy:3128", urlFlag, urlVal)
+		}
+		if u.User != nil {
+			return nil, fmt.Errorf("%s must not embed credentials; use %s (a Secret ref) for a credentialed proxy URL", urlFlag, secretFlag)
+		}
+		return &v2.ProxyValue{Value: urlVal}, nil
+	case secretVal != "":
+		ref, err := parseSecretKeyRef(secretVal, secretFlag)
+		if err != nil {
+			return nil, err
+		}
+		return &v2.ProxyValue{ValueFrom: &v2.ProxyValueSource{SecretKeyRef: &ref}}, nil
+	}
+	return nil, nil
+}
+
+// parseSecretKeyRef parses a <secret-name>:<key> flag value into a selector.
+func parseSecretKeyRef(value, flag string) (corev1.SecretKeySelector, error) {
+	name, key, ok := strings.Cut(value, ":")
+	if !ok || name == "" || key == "" {
+		return corev1.SecretKeySelector{}, fmt.Errorf("%s must be in <secret-name>:<key> form, got %q", flag, value)
+	}
+	return corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: name},
+		Key:                  key,
+	}, nil
 }
 
 func readCRFile(crPath string) (*v2.WeightsAndBiases, error) {

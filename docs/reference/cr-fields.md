@@ -19,12 +19,12 @@ kind: WeightsAndBiases
 | `spec.retentionPolicy.onDelete` | string | No | `detach` (leave infrastructure running) or `purge` (delete all managed resources) |
 | `spec.wandb` | object | Yes | Core W&B application configuration |
 | `spec.networking` | object | Yes | Networking and TLS configuration |
-| `spec.global` | object | No | Settings shared across all managed components (image registry, custom CA trust) |
+| `spec.global` | object | No | Settings shared across all managed components (image registry, custom CA trust, forward proxy) |
 | `spec.mysql` | map[string]object | No | MySQL instances keyed by instance name (reserved key `default`) |
 | `spec.redis` | map[string]object | No | Redis instances keyed by instance name (reserved key `default`) |
 | `spec.kafka` | object | No | Kafka configuration (single instance; not keyed) |
 | `spec.objectStore` | map[string]object | No | Object store instances keyed by instance name (reserved key `default`) |
-| `spec.clickHouse` | map[string]object | No | ClickHouse instances keyed by instance name (reserved key `default`) |
+| `spec.clickhouse` | map[string]object | No | ClickHouse instances keyed by instance name (reserved key `default`) |
 
 ---
 
@@ -86,11 +86,14 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 | `imageRegistry` | string | Retarget container images to this registry for air-gapped installs (`--image-registry`) |
 | `customCACerts` | []string | PEM-encoded CA certificates to trust in W&B workloads (`--custom-ca-cert-file`, repeatable) |
 | `caCertsConfigMap` | string | Name of a ConfigMap holding CA certificates to trust (`--custom-ca-configmap`) |
+| `proxy.httpProxy` | object | Forward proxy for HTTP egress: `value` (literal URL, `--proxy-http-url`) or `valueFrom.secretKeyRef` (`--proxy-http-secret`, for a credentialed URL) |
+| `proxy.httpsProxy` | object | Forward proxy for HTTPS egress (`--proxy-https-url` / `--proxy-https-secret`) |
+| `proxy.noProxy` | []string | Extra `NO_PROXY` entries appended to the operator's in-cluster exclusions (`--no-proxy`, repeatable) |
 
 ---
 
 > **Instance keying.** `spec.mysql`, `spec.redis`, `spec.objectStore`, and
-> `spec.clickHouse` are maps keyed by instance name. `wsm` writes a single
+> `spec.clickhouse` are maps keyed by instance name. `wsm` writes a single
 > instance under the reserved key `default`. `spec.kafka` is a single object and
 > is **not** keyed. When authoring a `--cr-file`, nest each infra block under its
 > instance key (see the Complete Example).
@@ -121,6 +124,7 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 |-------|------|-------------|
 | `managedKafka` | object | Configuration for operator-managed Kafka |
 | `managedKafka.telemetry.enabled` | bool | Enable Kafka telemetry |
+| `managedKafka.serviceAccount` | object | ServiceAccount for the Kafka pods — set `annotations` for IRSA / GKE Workload Identity, `serviceAccountName` / `create` to reuse an existing identity. No dedicated flag; use `--cr-file` (dotted annotation keys) or `--cr-set …serviceAccount.serviceAccountName=…` |
 
 ---
 
@@ -135,12 +139,13 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 
 ---
 
-## `spec.clickHouse.<instance>`
+## `spec.clickhouse.<instance>`
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `managedClickHouse` | object | Configuration for operator-managed ClickHouse |
-| `managedClickHouse.telemetry.enabled` | bool | Enable ClickHouse telemetry |
+| `managedClickhouse` | object | Configuration for operator-managed ClickHouse |
+| `managedClickhouse.telemetry.enabled` | bool | Enable ClickHouse telemetry |
+| `managedClickhouse.serviceAccount` | object | ServiceAccount for the ClickHouse pods — `annotations` for IRSA / GKE Workload Identity, `serviceAccountName` / `create` to reuse an existing identity. Same authoring path as Kafka (see above) |
 | `external` | object | (Alternative) External ClickHouse connection details |
 
 ---
@@ -159,7 +164,7 @@ spec:
     onDelete: detach
   wandb:
     hostname: https://wandb.example.com
-    version: "0.79.2"
+    version: "0.83.1"
     license: "YOUR_LICENSE_HERE"
     features:
       artifacts: true
@@ -197,9 +202,9 @@ spec:
       managedObjectStore:
         telemetry:
           enabled: true
-  clickHouse:
+  clickhouse:
     default:
-      managedClickHouse:
+      managedClickhouse:
         telemetry:
           enabled: true
 ```

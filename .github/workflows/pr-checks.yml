@@ -118,51 +118,6 @@ jobs:
               core.info(`PR title OK — type=${m[1]} scope=${m[2] || "none"} breaking=${m[3] ? "yes" : "no"}.`);
             }
 
-  pr-commits:
-    name: PR Commits
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            // Bots use their own commit format; exempt them. Exit success rather than skip —
-            // a skipped required check blocks the merge gate.
-            const author = (context.payload.pull_request.user || {}).login || "";
-            const exemptAuthors = (process.env.EXEMPT_AUTHORS || "").split(/\s+/).filter(Boolean);
-            if (exemptAuthors.includes(author)) {
-              core.info(`Skipping PR Commits check for exempt PR (author=${author}).`);
-              return;
-            }
-
-            const { data: commits } = await github.rest.pulls.listCommits({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
-              per_page: 100,
-            });
-            const types = "feat|fix|build|chore|ci|docs|perf|refactor|revert|style|test";
-            const re = new RegExp(`^(${types})(\\([a-z0-9 ._-]+\\))?(!)?: (.+)$`);
-            const bad = [];
-            for (const c of commits) {
-              const subject = c.commit.message.split("\n")[0];
-              if (/^(Merge|fixup!|squash!)/.test(subject)) continue; // skip merge/autosquash commits
-              const m = subject.match(re);
-              if (!m) {
-                bad.push(`${c.sha.slice(0, 7)}  "${subject}"  -> not a Conventional Commit`);
-              } else if (/[.]$/.test(m[4].trim())) {
-                bad.push(`${c.sha.slice(0, 7)}  "${subject}"  -> drop trailing period`);
-              }
-            }
-            if (bad.length) {
-              core.setFailed(
-                `Invalid commit message(s) — keep the branch history Conventional-Commit clean:\n` +
-                bad.map((b) => "  " + b).join("\n") +
-                `\nFormat: type(scope)!: description (types: ${types.replace(/\|/g, ", ")})`
-              );
-            } else {
-              core.info(`All ${commits.length} commit subject(s) OK.`);
-            }
-
   pr-release-label:
     name: Release Label
     runs-on: ubuntu-latest

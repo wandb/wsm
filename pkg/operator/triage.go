@@ -256,6 +256,9 @@ func deleteTriageRun(
 	if err != nil {
 		return fmt.Errorf("failed to read TriageRun %s/%s phase: %w", namespace, name, err)
 	}
+	if phase == "" {
+		phase = "Pending"
+	}
 	if phase != "Succeeded" && phase != "Failed" {
 		return fmt.Errorf("%w: %s/%s has phase %q", ErrTriageRunNotTerminal, namespace, name, phase)
 	}

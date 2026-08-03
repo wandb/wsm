@@ -299,6 +299,32 @@ func TestDeleteTriageRunRequiresTerminalPhase(t *testing.T) {
 	}
 }
 
+func TestDeleteTriageRunDefaultsEmptyPhaseToPending(t *testing.T) {
+	pending := testTriageRun(
+		t,
+		"weave-trace-triage-pending",
+		"weave-trace",
+		"",
+		"2026-07-28T19:00:00Z",
+	)
+	client := newTriageRunFakeClient(pending)
+
+	err := deleteTriageRun(context.Background(), client, "wandb", pending.GetName())
+	if !errors.Is(err, ErrTriageRunNotTerminal) {
+		t.Fatalf("error = %v, want ErrTriageRunNotTerminal", err)
+	}
+	if !strings.Contains(err.Error(), `phase "Pending"`) {
+		t.Fatalf("error = %q, want normalized Pending phase", err)
+	}
+	if _, err := client.Resource(triageRunsV2GVR).Namespace("wandb").Get(
+		context.Background(),
+		pending.GetName(),
+		metav1.GetOptions{},
+	); err != nil {
+		t.Fatalf("pending TriageRun was deleted: %v", err)
+	}
+}
+
 func TestDeleteTerminalTriageRun(t *testing.T) {
 	completed := testTriageRun(
 		t,

@@ -256,24 +256,24 @@ func listTriageActions(
 			actionMap, ok := item.(map[string]any)
 			if !ok {
 				return nil, fmt.Errorf(
-					"Application %s/%s triage action %d is %T, want object",
+					"application %s/%s triage action %d is %T, want object",
 					namespace, applicationName, i, item)
 			}
 			name, _, nameErr := unstructured.NestedString(actionMap, "name")
 			if nameErr != nil {
 				return nil, fmt.Errorf(
-					"Application %s/%s triage action %d has invalid name: %w",
+					"application %s/%s triage action %d has invalid name: %w",
 					namespace, applicationName, i, nameErr)
 			}
 			if strings.TrimSpace(name) == "" {
 				return nil, fmt.Errorf(
-					"Application %s/%s triage action %d has an empty name",
+					"application %s/%s triage action %d has an empty name",
 					namespace, applicationName, i)
 			}
 			description, _, descriptionErr := unstructured.NestedString(actionMap, "description")
 			if descriptionErr != nil {
 				return nil, fmt.Errorf(
-					"Application %s/%s triage action %q has invalid description: %w",
+					"application %s/%s triage action %q has invalid description: %w",
 					namespace, applicationName, name, descriptionErr)
 			}
 			actions = append(actions, TriageAction{Name: name, Description: description})
@@ -290,7 +290,7 @@ func listTriageActions(
 		}
 	default:
 		return nil, fmt.Errorf(
-			"Application %s/%s triage actions are %T, want array", namespace, applicationName, rawActions)
+			"application %s/%s triage actions are %T, want array", namespace, applicationName, rawActions)
 	}
 	sort.Slice(actions, func(i, j int) bool { return actions[i].Name < actions[j].Name })
 	return actions, nil

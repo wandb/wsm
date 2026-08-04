@@ -36,12 +36,22 @@ var triageRunsV2GVR = schema.GroupVersionResource{
 	Resource: "triageruns",
 }
 
+var applicationsV2GVR = schema.GroupVersionResource{
+	Group:    "apps.wandb.com",
+	Version:  "v2",
+	Resource: "applications",
+}
+
 // TriageRunRequest describes one immutable request to diagnose an Application.
-// Namespace and ApplicationName are required; Action defaults to "default".
+// Namespace and ApplicationName are required; Actions defaults to ["default"].
 type TriageRunRequest struct {
-	Namespace       string `json:"namespace"`
-	ApplicationName string `json:"applicationName"`
-	Action          string `json:"action,omitempty"`
+	Namespace       string   `json:"namespace"`
+	ApplicationName string   `json:"applicationName"`
+	Actions         []string `json:"actions,omitempty"`
+
+	// Action is retained for source compatibility with clients of the initial
+	// single-action SDK. New callers should use Actions; setting both is invalid.
+	Action string `json:"action,omitempty"`
 }
 
 // TriageRunRef identifies the newly created TriageRun. It is intentionally
@@ -84,19 +94,35 @@ type TriageCheckResult struct {
 	DurationMilliseconds int64  `json:"durationMs,omitempty"`
 }
 
+// TriageActionStatus contains the execution and results for one selected
+// Application action.
+type TriageActionStatus struct {
+	Action      string              `json:"action"`
+	Phase       string              `json:"phase,omitempty"`
+	JobName     string              `json:"jobName,omitempty"`
+	StartedAt   string              `json:"startedAt,omitempty"`
+	CompletedAt string              `json:"completedAt,omitempty"`
+	Summary     *TriageRunSummary   `json:"summary,omitempty"`
+	Results     []TriageCheckResult `json:"results,omitempty"`
+}
+
 // TriageRun is the caller-facing view of an immutable TriageRun and its latest
 // operator-reported status.
 type TriageRun struct {
-	Namespace       string              `json:"namespace"`
-	Name            string              `json:"name"`
-	ApplicationName string              `json:"applicationName"`
-	Action          string              `json:"action"`
-	Phase           string              `json:"phase,omitempty"`
-	CreatedAt       string              `json:"createdAt,omitempty"`
-	StartedAt       string              `json:"startedAt,omitempty"`
-	CompletedAt     string              `json:"completedAt,omitempty"`
-	Summary         *TriageRunSummary   `json:"summary,omitempty"`
-	Results         []TriageCheckResult `json:"results,omitempty"`
+	Namespace       string   `json:"namespace"`
+	Name            string   `json:"name"`
+	ApplicationName string   `json:"applicationName"`
+	Actions         []string `json:"actions"`
+	// Action mirrors the selected action for legacy single-action consumers.
+	Action         string               `json:"action,omitempty"`
+	Phase          string               `json:"phase,omitempty"`
+	CreatedAt      string               `json:"createdAt,omitempty"`
+	StartedAt      string               `json:"startedAt,omitempty"`
+	CompletedAt    string               `json:"completedAt,omitempty"`
+	Summary        *TriageRunSummary    `json:"summary,omitempty"`
+	ActionStatuses []TriageActionStatus `json:"actionStatuses,omitempty"`
+	// Results is a flattened compatibility view of all action results.
+	Results []TriageCheckResult `json:"results,omitempty"`
 }
 
 // CreateTriageRun creates a fresh TriageRun through wsm's configured dynamic
@@ -108,6 +134,15 @@ func CreateTriageRun(ctx context.Context, request TriageRunRequest) (TriageRunRe
 		return TriageRunRef{}, err
 	}
 	return createTriageRun(ctx, dynamicClient, request)
+}
+
+// ListTriageActions returns the sorted action names declared by one Application.
+func ListTriageActions(ctx context.Context, namespace, applicationName string) ([]string, error) {
+	_, dynamicClient, err := kubectl.GetDynamicClientset()
+	if err != nil {
+		return nil, err
+	}
+	return listTriageActions(ctx, dynamicClient, namespace, applicationName)
 }
 
 // ListTriageRuns returns newest-first run history in one namespace. Supplying
@@ -149,9 +184,7 @@ func createTriageRun(
 	if err := validateTriageRunRequest(request); err != nil {
 		return TriageRunRef{}, err
 	}
-	if request.Action == "" {
-		request.Action = DefaultTriageAction
-	}
+	request.Actions = normalizedTriageActions(request)
 
 	created, err := dynamicClient.Resource(triageRunsV2GVR).Namespace(request.Namespace).Create(
 		ctx,
@@ -171,6 +204,43 @@ func createTriageRun(
 		Namespace: created.GetNamespace(),
 		Name:      created.GetName(),
 	}, nil
+}
+
+func listTriageActions(
+	ctx context.Context,
+	dynamicClient dynamic.Interface,
+	namespace string,
+	applicationName string,
+) ([]string, error) {
+	if err := validateTriageRunNamespace(namespace); err != nil {
+		return nil, err
+	}
+	if err := validateTriageApplicationName(applicationName); err != nil {
+		return nil, err
+	}
+	application, err := dynamicClient.Resource(applicationsV2GVR).Namespace(namespace).Get(
+		ctx,
+		applicationName,
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Application %s/%s: %w", namespace, applicationName, err)
+	}
+	actionMap, found, err := unstructured.NestedMap(
+		application.Object, "spec", "triage", "actions")
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to read Application %s/%s triage actions: %w", namespace, applicationName, err)
+	}
+	if !found {
+		return []string{}, nil
+	}
+	actions := make([]string, 0, len(actionMap))
+	for action := range actionMap {
+		actions = append(actions, action)
+	}
+	sort.Strings(actions)
+	return actions, nil
 }
 
 func listTriageRuns(
@@ -286,12 +356,20 @@ func parseTriageRun(obj *unstructured.Unstructured) (TriageRun, error) {
 	if err != nil {
 		return TriageRun{}, fmt.Errorf("failed to read TriageRun %s/%s application: %w", obj.GetNamespace(), obj.GetName(), err)
 	}
-	action, _, err := unstructured.NestedString(obj.Object, "spec", "action")
+	actions, foundActions, err := unstructured.NestedStringSlice(obj.Object, "spec", "actions")
 	if err != nil {
-		return TriageRun{}, fmt.Errorf("failed to read TriageRun %s/%s action: %w", obj.GetNamespace(), obj.GetName(), err)
+		return TriageRun{}, fmt.Errorf("failed to read TriageRun %s/%s actions: %w", obj.GetNamespace(), obj.GetName(), err)
 	}
-	if action == "" {
-		action = DefaultTriageAction
+	if !foundActions {
+		legacyAction, _, legacyErr := unstructured.NestedString(obj.Object, "spec", "action")
+		if legacyErr != nil {
+			return TriageRun{}, fmt.Errorf(
+				"failed to read TriageRun %s/%s legacy action: %w", obj.GetNamespace(), obj.GetName(), legacyErr)
+		}
+		if legacyAction == "" {
+			legacyAction = DefaultTriageAction
+		}
+		actions = []string{legacyAction}
 	}
 	phase, _, err := unstructured.NestedString(obj.Object, "status", "phase")
 	if err != nil {
@@ -314,11 +392,14 @@ func parseTriageRun(obj *unstructured.Unstructured) (TriageRun, error) {
 		Namespace:       obj.GetNamespace(),
 		Name:            obj.GetName(),
 		ApplicationName: applicationName,
-		Action:          action,
+		Actions:         actions,
 		Phase:           phase,
 		CreatedAt:       creationTimestamp.UTC().Format("2006-01-02T15:04:05Z07:00"),
 		StartedAt:       startedAt,
 		CompletedAt:     completedAt,
+	}
+	if len(actions) == 1 {
+		run.Action = actions[0]
 	}
 	if creationTimestamp.IsZero() {
 		run.CreatedAt = ""
@@ -335,25 +416,91 @@ func parseTriageRun(obj *unstructured.Unstructured) (TriageRun, error) {
 		}
 	}
 
-	resultItems, found, err := unstructured.NestedSlice(obj.Object, "status", "results")
+	actionStatusItems, found, err := unstructured.NestedSlice(obj.Object, "status", "actionStatuses")
 	if err != nil {
-		return TriageRun{}, fmt.Errorf("failed to read TriageRun %s/%s results: %w", obj.GetNamespace(), obj.GetName(), err)
+		return TriageRun{}, fmt.Errorf("failed to read TriageRun %s/%s action statuses: %w", obj.GetNamespace(), obj.GetName(), err)
 	}
 	if found {
-		run.Results = make([]TriageCheckResult, 0, len(resultItems))
-		for i, item := range resultItems {
-			resultMap, ok := item.(map[string]any)
+		run.ActionStatuses = make([]TriageActionStatus, 0, len(actionStatusItems))
+		for i, item := range actionStatusItems {
+			statusMap, ok := item.(map[string]any)
 			if !ok {
-				return TriageRun{}, fmt.Errorf("TriageRun %s/%s result %d is %T, want object", obj.GetNamespace(), obj.GetName(), i, item)
+				return TriageRun{}, fmt.Errorf(
+					"TriageRun %s/%s action status %d is %T, want object",
+					obj.GetNamespace(), obj.GetName(), i, item)
 			}
-			result, err := parseTriageCheckResult(resultMap)
+			status, err := parseTriageActionStatus(statusMap)
 			if err != nil {
-				return TriageRun{}, fmt.Errorf("failed to parse TriageRun %s/%s result %d: %w", obj.GetNamespace(), obj.GetName(), i, err)
+				return TriageRun{}, fmt.Errorf(
+					"failed to parse TriageRun %s/%s action status %d: %w",
+					obj.GetNamespace(), obj.GetName(), i, err)
 			}
-			run.Results = append(run.Results, result)
+			run.ActionStatuses = append(run.ActionStatuses, status)
+			run.Results = append(run.Results, status.Results...)
 		}
+	} else {
+		legacyResults, resultErr := parseTriageCheckResults(obj.Object, "status", "results")
+		if resultErr != nil {
+			return TriageRun{}, fmt.Errorf(
+				"failed to parse TriageRun %s/%s legacy results: %w",
+				obj.GetNamespace(), obj.GetName(), resultErr)
+		}
+		run.Results = legacyResults
 	}
 	return run, nil
+}
+
+func parseTriageActionStatus(item map[string]any) (TriageActionStatus, error) {
+	status := TriageActionStatus{}
+	var err error
+	if status.Action, _, err = unstructured.NestedString(item, "action"); err != nil {
+		return TriageActionStatus{}, err
+	}
+	if status.Phase, _, err = unstructured.NestedString(item, "phase"); err != nil {
+		return TriageActionStatus{}, err
+	}
+	if status.JobName, _, err = unstructured.NestedString(item, "jobRef", "name"); err != nil {
+		return TriageActionStatus{}, err
+	}
+	if status.StartedAt, _, err = unstructured.NestedString(item, "startedAt"); err != nil {
+		return TriageActionStatus{}, err
+	}
+	if status.CompletedAt, _, err = unstructured.NestedString(item, "completedAt"); err != nil {
+		return TriageActionStatus{}, err
+	}
+	if summary, found, summaryErr := unstructured.NestedMap(item, "summary"); summaryErr != nil {
+		return TriageActionStatus{}, summaryErr
+	} else if found {
+		status.Summary, err = parseTriageRunSummary(summary)
+		if err != nil {
+			return TriageActionStatus{}, err
+		}
+	}
+	status.Results, err = parseTriageCheckResults(item, "results")
+	if err != nil {
+		return TriageActionStatus{}, err
+	}
+	return status, nil
+}
+
+func parseTriageCheckResults(object map[string]any, fields ...string) ([]TriageCheckResult, error) {
+	items, found, err := unstructured.NestedSlice(object, fields...)
+	if err != nil || !found {
+		return nil, err
+	}
+	results := make([]TriageCheckResult, 0, len(items))
+	for i, item := range items {
+		resultMap, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("result %d is %T, want object", i, item)
+		}
+		result, err := parseTriageCheckResult(resultMap)
+		if err != nil {
+			return nil, fmt.Errorf("result %d: %w", i, err)
+		}
+		results = append(results, result)
+	}
+	return results, nil
 }
 
 func parseTriageRunSummary(summary map[string]any) (*TriageRunSummary, error) {
@@ -417,7 +564,33 @@ func validateTriageRunRequest(request TriageRunRequest) error {
 	if err := validateTriageRunNamespace(request.Namespace); err != nil {
 		return err
 	}
-	return validateTriageApplicationName(request.ApplicationName)
+	if err := validateTriageApplicationName(request.ApplicationName); err != nil {
+		return err
+	}
+	if request.Action != "" && len(request.Actions) > 0 {
+		return errors.New("set either action or actions, not both")
+	}
+	seen := make(map[string]struct{})
+	for i, action := range normalizedTriageActions(request) {
+		if strings.TrimSpace(action) == "" {
+			return fmt.Errorf("triage action %d must not be empty", i)
+		}
+		if _, exists := seen[action]; exists {
+			return fmt.Errorf("triage action %q is selected more than once", action)
+		}
+		seen[action] = struct{}{}
+	}
+	return nil
+}
+
+func normalizedTriageActions(request TriageRunRequest) []string {
+	if len(request.Actions) > 0 {
+		return append([]string(nil), request.Actions...)
+	}
+	if request.Action != "" {
+		return []string{request.Action}
+	}
+	return []string{DefaultTriageAction}
 }
 
 func validateTriageRunIdentity(namespace, name string) error {
@@ -454,9 +627,10 @@ func validateTriageApplicationName(applicationName string) error {
 }
 
 func newTriageRun(request TriageRunRequest) *unstructured.Unstructured {
-	action := request.Action
-	if action == "" {
-		action = DefaultTriageAction
+	actions := normalizedTriageActions(request)
+	unstructuredActions := make([]any, len(actions))
+	for i := range actions {
+		unstructuredActions[i] = actions[i]
 	}
 
 	return &unstructured.Unstructured{Object: map[string]any{
@@ -473,7 +647,7 @@ func newTriageRun(request TriageRunRequest) *unstructured.Unstructured {
 			"applicationRef": map[string]any{
 				"name": request.ApplicationName,
 			},
-			"action": action,
+			"actions": unstructuredActions,
 		},
 	}}
 }

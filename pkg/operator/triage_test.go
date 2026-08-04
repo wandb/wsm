@@ -39,8 +39,8 @@ func TestCreateTriageRun(t *testing.T) {
 		); got != "weave-trace" {
 			t.Fatalf("applicationRef.name = %q, want weave-trace", got)
 		}
-		if got, _, _ := unstructured.NestedString(obj.Object, "spec", "action"); got != "default" {
-			t.Fatalf("action = %q, want default", got)
+		if got, _, _ := unstructured.NestedStringSlice(obj.Object, "spec", "actions"); len(got) != 1 || got[0] != "default" {
+			t.Fatalf("actions = %#v, want [default]", got)
 		}
 
 		obj.SetName(obj.GetGenerateName() + "abcde")
@@ -59,15 +59,15 @@ func TestCreateTriageRun(t *testing.T) {
 	}
 }
 
-func TestCreateTriageRunPreservesExplicitAction(t *testing.T) {
+func TestCreateTriageRunPreservesExplicitActions(t *testing.T) {
 	t.Parallel()
 
 	client := fake.NewSimpleDynamicClient(runtime.NewScheme())
 	client.PrependReactor("create", "triageruns", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		obj := action.(k8stesting.CreateAction).GetObject().(*unstructured.Unstructured).DeepCopy()
-		got, _, _ := unstructured.NestedString(obj.Object, "spec", "action")
-		if got != "dependencies" {
-			t.Fatalf("action = %q, want dependencies", got)
+		got, _, _ := unstructured.NestedStringSlice(obj.Object, "spec", "actions")
+		if len(got) != 2 || got[0] != "dependencies" || got[1] != "deep" {
+			t.Fatalf("actions = %#v, want [dependencies deep]", got)
 		}
 		obj.SetName("weave-trace-triage-explicit")
 		return true, obj, nil
@@ -76,7 +76,7 @@ func TestCreateTriageRunPreservesExplicitAction(t *testing.T) {
 	_, err := createTriageRun(context.Background(), client, TriageRunRequest{
 		Namespace:       "wandb",
 		ApplicationName: "weave-trace",
-		Action:          "dependencies",
+		Actions:         []string{"dependencies", "deep"},
 	})
 	if err != nil {
 		t.Fatalf("create TriageRun: %v", err)
@@ -110,6 +110,22 @@ func TestCreateTriageRunValidatesRequestBeforeCallingCluster(t *testing.T) {
 			name:    "application valid",
 			request: TriageRunRequest{Namespace: "wandb", ApplicationName: "Not Valid"},
 			want:    "invalid Application name",
+		},
+		{
+			name: "action and actions conflict",
+			request: TriageRunRequest{
+				Namespace: "wandb", ApplicationName: "weave-trace",
+				Action: "default", Actions: []string{"deep"},
+			},
+			want: "either action or actions",
+		},
+		{
+			name: "duplicate actions",
+			request: TriageRunRequest{
+				Namespace: "wandb", ApplicationName: "weave-trace",
+				Actions: []string{"default", "default"},
+			},
+			want: "selected more than once",
 		},
 	}
 
@@ -169,13 +185,46 @@ func TestTriageRunGVR(t *testing.T) {
 	}
 }
 
+func TestListTriageActionsReturnsSortedApplicationActions(t *testing.T) {
+	t.Parallel()
+
+	application := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps.wandb.com/v2",
+		"kind":       "Application",
+		"metadata": map[string]any{
+			"name":      "weave-trace",
+			"namespace": "wandb",
+		},
+		"spec": map[string]any{
+			"triage": map[string]any{
+				"actions": map[string]any{
+					"deep":    map[string]any{"args": []any{"deep"}},
+					"default": map[string]any{"args": []any{"run-all"}},
+				},
+			},
+		},
+	}}
+	application.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: applicationsV2GVR.Group, Version: applicationsV2GVR.Version, Kind: "Application",
+	})
+	client := fake.NewSimpleDynamicClient(runtime.NewScheme(), application)
+
+	actions, err := listTriageActions(context.Background(), client, "wandb", "weave-trace")
+	if err != nil {
+		t.Fatalf("list triage actions: %v", err)
+	}
+	if len(actions) != 2 || actions[0] != "deep" || actions[1] != "default" {
+		t.Fatalf("actions = %#v, want [deep default]", actions)
+	}
+}
+
 func TestNewTriageRunHasNamespacedMetadata(t *testing.T) {
 	t.Parallel()
 
 	obj := newTriageRun(TriageRunRequest{
 		Namespace:       "wandb",
 		ApplicationName: "weave-trace",
-		Action:          "default",
+		Actions:         []string{"default"},
 	})
 	if obj.GetNamespace() != "wandb" || obj.GetCreationTimestamp() != (metav1.Time{}) {
 		t.Fatalf("unexpected metadata: %#v", obj.Object["metadata"])
@@ -216,15 +265,23 @@ func TestListTriageRunsFiltersSortsAndParsesStatus(t *testing.T) {
 			"error":           int64(0),
 			"overallSeverity": "fail",
 		},
-		"results": []any{
+		"actionStatuses": []any{
 			map[string]any{
-				"name":        "clickhouse-reachable",
-				"umbrella":    "clickhouse",
-				"severity":    "pass",
-				"message":     "connected",
-				"durationMs":  int64(12),
-				"evidence":    map[string]any{"host": "clickhouse"},
-				"remediation": "",
+				"action":  "default",
+				"phase":   "Succeeded",
+				"jobRef":  map[string]any{"name": "weave-trace-triage-newer-triage-0"},
+				"summary": map[string]any{"total": int64(1), "pass": int64(1)},
+				"results": []any{
+					map[string]any{
+						"name":        "clickhouse-reachable",
+						"umbrella":    "clickhouse",
+						"severity":    "pass",
+						"message":     "connected",
+						"durationMs":  int64(12),
+						"evidence":    map[string]any{"host": "clickhouse"},
+						"remediation": "",
+					},
+				},
 			},
 		},
 	}, "status"); err != nil {
@@ -250,6 +307,10 @@ func TestListTriageRunsFiltersSortsAndParsesStatus(t *testing.T) {
 	}
 	if len(runs[0].Results) != 1 || runs[0].Results[0].Name != "clickhouse-reachable" {
 		t.Fatalf("results = %#v", runs[0].Results)
+	}
+	if len(runs[0].ActionStatuses) != 1 ||
+		runs[0].ActionStatuses[0].JobName != "weave-trace-triage-newer-triage-0" {
+		t.Fatalf("action statuses = %#v", runs[0].ActionStatuses)
 	}
 	evidence, ok := runs[0].Results[0].Evidence.(map[string]any)
 	if !ok || evidence["host"] != "clickhouse" {
@@ -359,7 +420,7 @@ func testTriageRun(
 	obj := newTriageRun(TriageRunRequest{
 		Namespace:       "wandb",
 		ApplicationName: applicationName,
-		Action:          "default",
+		Actions:         []string{"default"},
 	})
 	obj.SetName(name)
 	obj.SetGenerateName("")

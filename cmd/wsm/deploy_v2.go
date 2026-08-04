@@ -47,7 +47,7 @@ func init() {
 // TODO once an official release publishes a manifest, we should switch to looking
 // up the most recent non-dev release and not have a default.
 const (
-	defaultWandbVersion = "0.83.1"
+	defaultWandbVersion = "0.83.0"
 	minWandbVersion     = "0.80.0"
 )
 

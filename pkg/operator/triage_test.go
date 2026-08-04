@@ -39,7 +39,8 @@ func TestCreateTriageRun(t *testing.T) {
 		); got != "weave-trace" {
 			t.Fatalf("applicationRef.name = %q, want weave-trace", got)
 		}
-		if got, _, _ := unstructured.NestedStringSlice(obj.Object, "spec", "actions"); len(got) != 1 || got[0] != "default" {
+		got, _, _ := parseTriageActionReferences(obj.Object, "spec", "actions")
+		if len(got) != 1 || got[0].Name != "default" {
 			t.Fatalf("actions = %#v, want [default]", got)
 		}
 
@@ -65,8 +66,8 @@ func TestCreateTriageRunPreservesExplicitActions(t *testing.T) {
 	client := fake.NewSimpleDynamicClient(runtime.NewScheme())
 	client.PrependReactor("create", "triageruns", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		obj := action.(k8stesting.CreateAction).GetObject().(*unstructured.Unstructured).DeepCopy()
-		got, _, _ := unstructured.NestedStringSlice(obj.Object, "spec", "actions")
-		if len(got) != 2 || got[0] != "dependencies" || got[1] != "deep" {
+		got, _, _ := parseTriageActionReferences(obj.Object, "spec", "actions")
+		if len(got) != 2 || got[0].Name != "dependencies" || got[1].Name != "deep" {
 			t.Fatalf("actions = %#v, want [dependencies deep]", got)
 		}
 		obj.SetName("weave-trace-triage-explicit")
@@ -76,7 +77,10 @@ func TestCreateTriageRunPreservesExplicitActions(t *testing.T) {
 	_, err := createTriageRun(context.Background(), client, TriageRunRequest{
 		Namespace:       "wandb",
 		ApplicationName: "weave-trace",
-		Actions:         []string{"dependencies", "deep"},
+		Actions: []TriageActionReference{
+			{Name: "dependencies"},
+			{Name: "deep"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("create TriageRun: %v", err)
@@ -115,7 +119,7 @@ func TestCreateTriageRunValidatesRequestBeforeCallingCluster(t *testing.T) {
 			name: "action and actions conflict",
 			request: TriageRunRequest{
 				Namespace: "wandb", ApplicationName: "weave-trace",
-				Action: "default", Actions: []string{"deep"},
+				Action: "default", Actions: []TriageActionReference{{Name: "deep"}},
 			},
 			want: "either action or actions",
 		},
@@ -123,7 +127,7 @@ func TestCreateTriageRunValidatesRequestBeforeCallingCluster(t *testing.T) {
 			name: "duplicate actions",
 			request: TriageRunRequest{
 				Namespace: "wandb", ApplicationName: "weave-trace",
-				Actions: []string{"default", "default"},
+				Actions: []TriageActionReference{{Name: "default"}, {Name: "default"}},
 			},
 			want: "selected more than once",
 		},
@@ -197,9 +201,9 @@ func TestListTriageActionsReturnsSortedApplicationActions(t *testing.T) {
 		},
 		"spec": map[string]any{
 			"triage": map[string]any{
-				"actions": map[string]any{
-					"deep":    map[string]any{"args": []any{"deep"}},
-					"default": map[string]any{"args": []any{"run-all"}},
+				"actions": []any{
+					map[string]any{"name": "default", "description": "Run standard diagnostics"},
+					map[string]any{"name": "deep", "description": "Run deeper diagnostics"},
 				},
 			},
 		},
@@ -213,7 +217,8 @@ func TestListTriageActionsReturnsSortedApplicationActions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list triage actions: %v", err)
 	}
-	if len(actions) != 2 || actions[0] != "deep" || actions[1] != "default" {
+	if len(actions) != 2 || actions[0].Name != "deep" || actions[1].Name != "default" ||
+		actions[1].Description != "Run standard diagnostics" {
 		t.Fatalf("actions = %#v, want [deep default]", actions)
 	}
 }
@@ -224,7 +229,7 @@ func TestNewTriageRunHasNamespacedMetadata(t *testing.T) {
 	obj := newTriageRun(TriageRunRequest{
 		Namespace:       "wandb",
 		ApplicationName: "weave-trace",
-		Actions:         []string{"default"},
+		Actions:         []TriageActionReference{{Name: "default"}},
 	})
 	if obj.GetNamespace() != "wandb" || obj.GetCreationTimestamp() != (metav1.Time{}) {
 		t.Fatalf("unexpected metadata: %#v", obj.Object["metadata"])
@@ -420,7 +425,7 @@ func testTriageRun(
 	obj := newTriageRun(TriageRunRequest{
 		Namespace:       "wandb",
 		ApplicationName: applicationName,
-		Actions:         []string{"default"},
+		Actions:         []TriageActionReference{{Name: "default"}},
 	})
 	obj.SetName(name)
 	obj.SetGenerateName("")

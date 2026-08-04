@@ -42,12 +42,24 @@ var applicationsV2GVR = schema.GroupVersionResource{
 	Resource: "applications",
 }
 
+// TriageAction is one action advertised by an Application.
+type TriageAction struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// TriageActionReference selects an advertised Application action by name.
+type TriageActionReference struct {
+	Name string `json:"name"`
+}
+
 // TriageRunRequest describes one immutable request to diagnose an Application.
-// Namespace and ApplicationName are required; Actions defaults to ["default"].
+// Namespace and ApplicationName are required; Actions defaults to [{name:
+// "default"}].
 type TriageRunRequest struct {
-	Namespace       string   `json:"namespace"`
-	ApplicationName string   `json:"applicationName"`
-	Actions         []string `json:"actions,omitempty"`
+	Namespace       string                  `json:"namespace"`
+	ApplicationName string                  `json:"applicationName"`
+	Actions         []TriageActionReference `json:"actions,omitempty"`
 
 	// Action is retained for source compatibility with clients of the initial
 	// single-action SDK. New callers should use Actions; setting both is invalid.
@@ -109,10 +121,10 @@ type TriageActionStatus struct {
 // TriageRun is the caller-facing view of an immutable TriageRun and its latest
 // operator-reported status.
 type TriageRun struct {
-	Namespace       string   `json:"namespace"`
-	Name            string   `json:"name"`
-	ApplicationName string   `json:"applicationName"`
-	Actions         []string `json:"actions"`
+	Namespace       string                  `json:"namespace"`
+	Name            string                  `json:"name"`
+	ApplicationName string                  `json:"applicationName"`
+	Actions         []TriageActionReference `json:"actions"`
 	// Action mirrors the selected action for legacy single-action consumers.
 	Action         string               `json:"action,omitempty"`
 	Phase          string               `json:"phase,omitempty"`
@@ -136,8 +148,9 @@ func CreateTriageRun(ctx context.Context, request TriageRunRequest) (TriageRunRe
 	return createTriageRun(ctx, dynamicClient, request)
 }
 
-// ListTriageActions returns the sorted action names declared by one Application.
-func ListTriageActions(ctx context.Context, namespace, applicationName string) ([]string, error) {
+// ListTriageActions returns the sorted action metadata declared by one
+// Application.
+func ListTriageActions(ctx context.Context, namespace, applicationName string) ([]TriageAction, error) {
 	_, dynamicClient, err := kubectl.GetDynamicClientset()
 	if err != nil {
 		return nil, err
@@ -211,7 +224,7 @@ func listTriageActions(
 	dynamicClient dynamic.Interface,
 	namespace string,
 	applicationName string,
-) ([]string, error) {
+) ([]TriageAction, error) {
 	if err := validateTriageRunNamespace(namespace); err != nil {
 		return nil, err
 	}
@@ -226,20 +239,60 @@ func listTriageActions(
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Application %s/%s: %w", namespace, applicationName, err)
 	}
-	actionMap, found, err := unstructured.NestedMap(
+	rawActions, found, err := unstructured.NestedFieldNoCopy(
 		application.Object, "spec", "triage", "actions")
 	if err != nil {
 		return nil, fmt.Errorf(
 			"failed to read Application %s/%s triage actions: %w", namespace, applicationName, err)
 	}
 	if !found {
-		return []string{}, nil
+		return []TriageAction{}, nil
 	}
-	actions := make([]string, 0, len(actionMap))
-	for action := range actionMap {
-		actions = append(actions, action)
+	actions := []TriageAction{}
+	switch value := rawActions.(type) {
+	case []any:
+		actions = make([]TriageAction, 0, len(value))
+		for i, item := range value {
+			actionMap, ok := item.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf(
+					"Application %s/%s triage action %d is %T, want object",
+					namespace, applicationName, i, item)
+			}
+			name, _, nameErr := unstructured.NestedString(actionMap, "name")
+			if nameErr != nil {
+				return nil, fmt.Errorf(
+					"Application %s/%s triage action %d has invalid name: %w",
+					namespace, applicationName, i, nameErr)
+			}
+			if strings.TrimSpace(name) == "" {
+				return nil, fmt.Errorf(
+					"Application %s/%s triage action %d has an empty name",
+					namespace, applicationName, i)
+			}
+			description, _, descriptionErr := unstructured.NestedString(actionMap, "description")
+			if descriptionErr != nil {
+				return nil, fmt.Errorf(
+					"Application %s/%s triage action %q has invalid description: %w",
+					namespace, applicationName, name, descriptionErr)
+			}
+			actions = append(actions, TriageAction{Name: name, Description: description})
+		}
+	case map[string]any:
+		// Read the original map-shaped catalog during rolling upgrades.
+		actions = make([]TriageAction, 0, len(value))
+		for name, item := range value {
+			description := ""
+			if actionMap, ok := item.(map[string]any); ok {
+				description, _, _ = unstructured.NestedString(actionMap, "description")
+			}
+			actions = append(actions, TriageAction{Name: name, Description: description})
+		}
+	default:
+		return nil, fmt.Errorf(
+			"Application %s/%s triage actions are %T, want array", namespace, applicationName, rawActions)
 	}
-	sort.Strings(actions)
+	sort.Slice(actions, func(i, j int) bool { return actions[i].Name < actions[j].Name })
 	return actions, nil
 }
 
@@ -356,7 +409,7 @@ func parseTriageRun(obj *unstructured.Unstructured) (TriageRun, error) {
 	if err != nil {
 		return TriageRun{}, fmt.Errorf("failed to read TriageRun %s/%s application: %w", obj.GetNamespace(), obj.GetName(), err)
 	}
-	actions, foundActions, err := unstructured.NestedStringSlice(obj.Object, "spec", "actions")
+	actions, foundActions, err := parseTriageActionReferences(obj.Object, "spec", "actions")
 	if err != nil {
 		return TriageRun{}, fmt.Errorf("failed to read TriageRun %s/%s actions: %w", obj.GetNamespace(), obj.GetName(), err)
 	}
@@ -369,7 +422,7 @@ func parseTriageRun(obj *unstructured.Unstructured) (TriageRun, error) {
 		if legacyAction == "" {
 			legacyAction = DefaultTriageAction
 		}
-		actions = []string{legacyAction}
+		actions = []TriageActionReference{{Name: legacyAction}}
 	}
 	phase, _, err := unstructured.NestedString(obj.Object, "status", "phase")
 	if err != nil {
@@ -399,7 +452,7 @@ func parseTriageRun(obj *unstructured.Unstructured) (TriageRun, error) {
 		CompletedAt:     completedAt,
 	}
 	if len(actions) == 1 {
-		run.Action = actions[0]
+		run.Action = actions[0].Name
 	}
 	if creationTimestamp.IsZero() {
 		run.CreatedAt = ""
@@ -448,6 +501,33 @@ func parseTriageRun(obj *unstructured.Unstructured) (TriageRun, error) {
 		run.Results = legacyResults
 	}
 	return run, nil
+}
+
+func parseTriageActionReferences(
+	object map[string]any,
+	fields ...string,
+) ([]TriageActionReference, bool, error) {
+	items, found, err := unstructured.NestedSlice(object, fields...)
+	if err != nil || !found {
+		return nil, found, err
+	}
+	actions := make([]TriageActionReference, 0, len(items))
+	for i, item := range items {
+		switch value := item.(type) {
+		case map[string]any:
+			name, _, nameErr := unstructured.NestedString(value, "name")
+			if nameErr != nil {
+				return nil, true, fmt.Errorf("action %d name: %w", i, nameErr)
+			}
+			actions = append(actions, TriageActionReference{Name: name})
+		case string:
+			// Read the original string-shaped selection during rolling upgrades.
+			actions = append(actions, TriageActionReference{Name: value})
+		default:
+			return nil, true, fmt.Errorf("action %d is %T, want object", i, item)
+		}
+	}
+	return actions, true, nil
 }
 
 func parseTriageActionStatus(item map[string]any) (TriageActionStatus, error) {
@@ -572,25 +652,25 @@ func validateTriageRunRequest(request TriageRunRequest) error {
 	}
 	seen := make(map[string]struct{})
 	for i, action := range normalizedTriageActions(request) {
-		if strings.TrimSpace(action) == "" {
+		if strings.TrimSpace(action.Name) == "" {
 			return fmt.Errorf("triage action %d must not be empty", i)
 		}
-		if _, exists := seen[action]; exists {
-			return fmt.Errorf("triage action %q is selected more than once", action)
+		if _, exists := seen[action.Name]; exists {
+			return fmt.Errorf("triage action %q is selected more than once", action.Name)
 		}
-		seen[action] = struct{}{}
+		seen[action.Name] = struct{}{}
 	}
 	return nil
 }
 
-func normalizedTriageActions(request TriageRunRequest) []string {
+func normalizedTriageActions(request TriageRunRequest) []TriageActionReference {
 	if len(request.Actions) > 0 {
-		return append([]string(nil), request.Actions...)
+		return append([]TriageActionReference(nil), request.Actions...)
 	}
 	if request.Action != "" {
-		return []string{request.Action}
+		return []TriageActionReference{{Name: request.Action}}
 	}
-	return []string{DefaultTriageAction}
+	return []TriageActionReference{{Name: DefaultTriageAction}}
 }
 
 func validateTriageRunIdentity(namespace, name string) error {
@@ -630,7 +710,7 @@ func newTriageRun(request TriageRunRequest) *unstructured.Unstructured {
 	actions := normalizedTriageActions(request)
 	unstructuredActions := make([]any, len(actions))
 	for i := range actions {
-		unstructuredActions[i] = actions[i]
+		unstructuredActions[i] = map[string]any{"name": actions[i].Name}
 	}
 
 	return &unstructured.Unstructured{Object: map[string]any{

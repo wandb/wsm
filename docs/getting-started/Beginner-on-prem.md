@@ -68,7 +68,8 @@ wsm deploy-v2 operator --context kind-wandb --mirror-registry $REG --insecure-re
 docker pull us-docker.pkg.dev/wandb-production/public/wandb/server-manifest:$VER
 cid=$(docker create us-docker.pkg.dev/wandb-production/public/wandb/server-manifest:$VER x)
 docker cp "$cid:/manifest.yaml" . && docker cp "$cid:/sizing.yaml" . && docker rm "$cid"
-sed -i '' "s#us-docker.pkg.dev/wandb-production/public/#$REG/#g" manifest.yaml   # Linux: sed -i (no '')
+sed -i.bak "s#us-docker.pkg.dev/wandb-production/public/#$REG/#g" manifest.yaml
+rm -f manifest.yaml.bak
 
 # mount it onto the operator so it reads the manifest from disk (file://)
 kubectl create configmap wandb-manifest -n wandb-operators --from-file=manifest.yaml --from-file=sizing.yaml

@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Masterminds/semver/v3"
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/kind"
 	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/operator"
+	"github.com/wandb/wsm/pkg/serverversion"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -44,10 +44,13 @@ func init() {
 //     below this (via --wandb-version, --cr-file, or --cr-set spec.wandb.version)
 //     is rejected up front. Raise it when dropping support for old servers.
 //
+// A non-mirror deploy also cross-checks the resolved version against the published
+// wandb/local tags, so defaultWandbVersion must always be a real published release.
+//
 // TODO once an official release publishes a manifest, we should switch to looking
 // up the most recent non-dev release and not have a default.
 const (
-	defaultWandbVersion = "0.83.1"
+	defaultWandbVersion = "0.83.0"
 	minWandbVersion     = "0.80.0"
 )
 
@@ -208,8 +211,29 @@ func wandbCmd() *cobra.Command {
 	cmd.AddCommand(wandbCreateCmd())
 	cmd.AddCommand(wandbDestroyCmd())
 	cmd.AddCommand(wandbGetCACertCmd())
+	cmd.AddCommand(wandbListVersionsCmd())
 
 	return cmd
+}
+
+func wandbListVersionsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list-versions",
+		Short: "List deployable W&B server versions",
+		Long:  `List published W&B server versions (wandb/local Docker Hub tags) at or above the minimum supported version.`,
+		// Overrides the deploy-v2 --context requirement: this reads Docker Hub, not a cluster.
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error { return nil },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			versions, err := serverversion.Available(cmd.Context(), minWandbVersion)
+			if err != nil {
+				return err
+			}
+			for _, v := range versions {
+				fmt.Println(v)
+			}
+			return nil
+		},
+	}
 }
 
 func wandbDestroyCmd() *cobra.Command {
@@ -342,6 +366,10 @@ func wandbCreateCmd() *cobra.Command {
 				return err
 			}
 
+			if err := crossCheckWandbVersion(ctx, f, crOverrides); err != nil {
+				return err
+			}
+
 			err = deployWandbCR(ctx, f.createCA, createAwsStorageClass, createAwsIngressClass, f.ingressClass, crOverrides)
 			if err != nil {
 				return err
@@ -431,6 +459,14 @@ func operatorDeployCmd() *cobra.Command {
 
 			if err := processWandbCR(cmd, f); err != nil {
 				return err
+			}
+
+			// The CR only reconciles this run with --include-cr, so only then is the
+			// resolved version cross-checked against published tags.
+			if includeCR {
+				if err := crossCheckWandbVersion(context.Background(), f, crOverrides); err != nil {
+					return err
+				}
 			}
 
 			// Perform the deployment
@@ -1469,20 +1505,32 @@ func telemetryConfigFrom(cmd *cobra.Command) operator.TelemetryConfig {
 	}
 }
 
-// validateWandbVersion rejects a W&B server version below minWandbVersion. The
-// floor is compared on the core major.minor.patch, so a pre-release build of the
-// minimum line (e.g. 0.80.0-rc.1) still passes.
+// validateWandbVersion rejects a W&B server version below minWandbVersion.
 func validateWandbVersion(version string) error {
-	v, err := semver.NewVersion(version)
-	if err != nil {
-		return fmt.Errorf("wandb version %q is not valid semver: %w", version, err)
+	return serverversion.CheckFloor(version, minWandbVersion)
+}
+
+// effectiveWandbVersion returns the version that will actually deploy: the last
+// `--cr-set spec.wandb.version` override if present, else the resolved value.
+func effectiveWandbVersion(overrides []operator.CROverride, resolved string) string {
+	version := resolved
+	for _, o := range overrides {
+		if strings.Join(o.Path, ".") == "spec.wandb.version" {
+			version = operator.OverrideStringValue(o)
+		}
 	}
-	minV := semver.MustParse(minWandbVersion)
-	core := semver.New(v.Major(), v.Minor(), v.Patch(), "", "")
-	if core.LessThan(minV) {
-		return fmt.Errorf("wandb version %q is below the minimum supported version %s", version, minWandbVersion)
+	return version
+}
+
+// crossCheckWandbVersion rejects a resolved version that is not a published
+// wandb/local tag. It is skipped when deploying from a mirror/manifest source,
+// since Docker Hub is unreachable offline and the tag list would not apply.
+func crossCheckWandbVersion(ctx context.Context, f wandbCRFlags, overrides []operator.CROverride) error {
+	if f.mirrorRegistry != "" || f.manifestRepo != "" {
+		return nil
 	}
-	return nil
+	version := effectiveWandbVersion(overrides, wandbCR.Spec.Wandb.Version)
+	return serverversion.CheckAvailable(ctx, version, minWandbVersion)
 }
 
 // validateVersionOverride applies the minWandbVersion floor to a

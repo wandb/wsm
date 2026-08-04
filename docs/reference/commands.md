@@ -181,7 +181,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--wandb-name` | `wandb` | Name of the W&B instance |
 | `--wandb-namespace` | `wandb` | Kubernetes namespace for the CR |
 | `--wandb-hostname` | `http://localhost:8080` | External URL for accessing W&B |
-| `--wandb-version` | — | Server manifest version (defaults to built-in stable version) |
+| `--wandb-version` | — | Server manifest version (defaults to built-in stable version). Cross-checked against the published [`wandb/local`](https://hub.docker.com/r/wandb/local/tags) tags — see the note below. List valid values with [`wsm deploy-v2 wandb list-versions`](#wsm-deploy-v2-wandb-list-versions) |
 | `--mirror-registry` | — | Install the W&B instance from this mirror. Defaults `--manifest-repository` to `oci://<mirror>/wandb/server-manifest` (charts, operator/infra images, and the rewritten app images come from the mirror). The managed data-plane images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) keep their upstream refs and reach the mirror via each node's container-runtime registry mirror — not `spec.global.imageRegistry`. Populate the mirror first with `wsm registry mirror`. |
 | `--manifest-repository` | — | Server manifest source. Accepts an OCI repository (`oci://…`, pulled over HTTPS) **or** a local `file://` path mounted onto the operator pod (the no-TLS option for plain-HTTP / insecure air-gap installs; a plain-HTTP `oci://` mirror is rejected). Auto-set to `oci://<mirror>/wandb/server-manifest` when `--mirror-registry` is provided and this is unset. |
 | `--size` | `dev` | Deployment size profile: `dev`, `micro`, `small`, `medium`, `large`, `xlarge`, `xxlarge` |
@@ -307,6 +307,18 @@ wsm deploy-v2 wandb get-ca-cert [flags]
 | `--wandb-name` | `wandb` | Name of the W&B instance |
 | `--wandb-namespace` | `wandb` | Namespace of the W&B instance |
 | `--output-dir` | `.` | Directory to write the CA certificate file (`<name>.crt`) |
+
+---
+
+### `wsm deploy-v2 wandb list-versions`
+
+Lists the W&B server versions you can deploy — the published [`wandb/local`](https://hub.docker.com/r/wandb/local/tags) tags at or above the minimum supported version, newest first. Non-release build tags and `latest` are excluded. Reads Docker Hub only, so no `--context` is required.
+
+```bash
+wsm deploy-v2 wandb list-versions
+```
+
+> **Version cross-check.** `wsm deploy-v2 wandb deploy` (and `wsm deploy-v2 operator --include-cr`) reject a resolved version — whether from `--wandb-version`, `--cr-file`, or `--cr-set spec.wandb.version` — that is not one of these published tags, failing fast instead of surfacing later during reconciliation. The check is **skipped** when installing from a mirror (`--mirror-registry` / `--manifest-repository`), since Docker Hub is unreachable in that offline path.
 
 ---
 

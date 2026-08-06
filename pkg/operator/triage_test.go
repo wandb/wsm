@@ -87,6 +87,30 @@ func TestCreateTriageRunPreservesExplicitActions(t *testing.T) {
 	}
 }
 
+func TestCreateTriageRunPreservesLegacyAction(t *testing.T) {
+	t.Parallel()
+
+	client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+	client.PrependReactor("create", "triageruns", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		obj := action.(k8stesting.CreateAction).GetObject().(*unstructured.Unstructured).DeepCopy()
+		got, _, _ := parseTriageActionReferences(obj.Object, "spec", "actions")
+		if len(got) != 1 || got[0].Name != "dependencies" {
+			t.Fatalf("actions = %#v, want [dependencies]", got)
+		}
+		obj.SetName("weave-trace-triage-legacy")
+		return true, obj, nil
+	})
+
+	_, err := createTriageRun(context.Background(), client, TriageRunRequest{
+		Namespace:       "wandb",
+		ApplicationName: "weave-trace",
+		Action:          "dependencies",
+	})
+	if err != nil {
+		t.Fatalf("create TriageRun: %v", err)
+	}
+}
+
 func TestCreateTriageRunValidatesRequestBeforeCallingCluster(t *testing.T) {
 	t.Parallel()
 
@@ -258,6 +282,12 @@ func TestListTriageRunsFiltersSortsAndParsesStatus(t *testing.T) {
 		"Succeeded",
 		"2026-07-28T20:00:00Z",
 	)
+	if err := unstructured.SetNestedSlice(newer.Object, []any{
+		map[string]any{"name": "default"},
+		map[string]any{"name": "deep"},
+	}, "spec", "actions"); err != nil {
+		t.Fatalf("set actions: %v", err)
+	}
 	if err := unstructured.SetNestedMap(newer.Object, map[string]any{
 		"phase":       "Failed",
 		"startedAt":   "2026-07-28T19:00:01Z",
@@ -288,6 +318,21 @@ func TestListTriageRunsFiltersSortsAndParsesStatus(t *testing.T) {
 					},
 				},
 			},
+			map[string]any{
+				"action":  "deep",
+				"phase":   "Failed",
+				"jobRef":  map[string]any{"name": "weave-trace-triage-newer-triage-1"},
+				"summary": map[string]any{"total": int64(1), "fail": int64(1)},
+				"results": []any{
+					map[string]any{
+						"name":       "kafka-reachable",
+						"umbrella":   "kafka",
+						"severity":   "fail",
+						"message":    "connection refused",
+						"durationMs": int64(8),
+					},
+				},
+			},
 		},
 	}, "status"); err != nil {
 		t.Fatalf("set status: %v", err)
@@ -310,11 +355,19 @@ func TestListTriageRunsFiltersSortsAndParsesStatus(t *testing.T) {
 	if runs[0].Summary == nil || runs[0].Summary.OverallSeverity != "fail" || runs[0].Summary.Total != 2 {
 		t.Fatalf("summary = %#v", runs[0].Summary)
 	}
-	if len(runs[0].Results) != 1 || runs[0].Results[0].Name != "clickhouse-reachable" {
+	if len(runs[0].Actions) != 2 || runs[0].Actions[0].Name != "default" ||
+		runs[0].Actions[1].Name != "deep" || runs[0].Action != "" {
+		t.Fatalf("actions = %#v, legacy action = %q", runs[0].Actions, runs[0].Action)
+	}
+	if len(runs[0].Results) != 2 || runs[0].Results[0].Name != "clickhouse-reachable" ||
+		runs[0].Results[1].Name != "kafka-reachable" {
 		t.Fatalf("results = %#v", runs[0].Results)
 	}
-	if len(runs[0].ActionStatuses) != 1 ||
-		runs[0].ActionStatuses[0].JobName != "weave-trace-triage-newer-triage-0" {
+	if len(runs[0].ActionStatuses) != 2 ||
+		runs[0].ActionStatuses[0].Action != "default" ||
+		runs[0].ActionStatuses[0].JobName != "weave-trace-triage-newer-triage-0" ||
+		runs[0].ActionStatuses[1].Action != "deep" ||
+		runs[0].ActionStatuses[1].JobName != "weave-trace-triage-newer-triage-1" {
 		t.Fatalf("action statuses = %#v", runs[0].ActionStatuses)
 	}
 	evidence, ok := runs[0].Results[0].Evidence.(map[string]any)

@@ -59,6 +59,8 @@ IAM permission ecr:CreateRepository.`,
 			}
 			if region == "" {
 				region = m[1]
+			} else if region != m[1] {
+				return fmt.Errorf("--region %q does not match ECR host region %q", region, m[1])
 			}
 
 			repos, err := collectMirrorRepos(cmd.Context(), targetRegistry, operatorChartVersion, wandbVersion, skipManaged)

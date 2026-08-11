@@ -16,6 +16,7 @@ import (
 	"github.com/wandb/wsm/pkg/kubectl"
 	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v4/pkg/action"
+	helmchart "helm.sh/helm/v4/pkg/chart"
 	"helm.sh/helm/v4/pkg/chart/loader"
 	"helm.sh/helm/v4/pkg/cli"
 	"helm.sh/helm/v4/pkg/registry"
@@ -201,7 +202,7 @@ func InstallCertManager(ctx context.Context, enableGatewayAPI bool, skipIfPresen
 		}
 
 		// Run the upgrade
-		_, err = upgradeClient.RunWithContext(ctx, certManagerReleaseName, chartRequested, releaseValues)
+		err = runUpgradeWithWebhookRaceRetry(ctx, upgradeClient, certManagerReleaseName, chartRequested, releaseValues)
 		if err != nil {
 			return fmt.Errorf("failed to upgrade cert-manager: %w", err)
 		}
@@ -226,7 +227,7 @@ func InstallCertManager(ctx context.Context, enableGatewayAPI bool, skipIfPresen
 		}
 
 		// Run the install
-		_, err = installClient.RunWithContext(ctx, chartRequested, releaseValues)
+		err = runInstallWithWebhookRaceRetry(ctx, installClient, chartRequested, releaseValues)
 		if err != nil {
 			return fmt.Errorf("failed to install cert-manager: %w", err)
 		}
@@ -415,7 +416,7 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *Mirror
 		}
 
 		// Run the upgrade
-		_, err = upgradeClient.RunWithContext(ctx, nginxGatewayReleaseName, chartRequested, releaseValues)
+		err = runUpgradeWithWebhookRaceRetry(ctx, upgradeClient, nginxGatewayReleaseName, chartRequested, releaseValues)
 		if err != nil {
 			return fmt.Errorf("failed to upgrade nginx-gateway: %w", err)
 		}
@@ -441,7 +442,7 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *Mirror
 		}
 
 		// Run the install
-		_, err = installClient.RunWithContext(ctx, chartRequested, releaseValues)
+		err = runInstallWithWebhookRaceRetry(ctx, installClient, chartRequested, releaseValues)
 		if err != nil {
 			return fmt.Errorf("failed to install nginx-gateway: %w", err)
 		}
@@ -918,7 +919,7 @@ func DeployOperator(
 		}
 
 		// Run the upgrade
-		_, err = upgradeClient.RunWithContext(ctx, releaseName, chartRequested, releaseValues)
+		err = runUpgradeWithWebhookRaceRetry(ctx, upgradeClient, releaseName, chartRequested, releaseValues)
 		if err != nil {
 			return fmt.Errorf("failed to upgrade operator chart: %w", err)
 		}
@@ -943,13 +944,111 @@ func DeployOperator(
 		}
 
 		// Run the install
-		_, err = installClient.RunWithContext(ctx, chartRequested, releaseValues)
+		err = runInstallWithWebhookRaceRetry(ctx, installClient, chartRequested, releaseValues)
 		if err != nil {
 			return fmt.Errorf("failed to install operator chart: %w", err)
 		}
 	}
 
 	return nil
+}
+
+// admissionWebhookRaceMarker identifies the class of helm-install / helm-upgrade
+// failure that occurs when a chart bundles a Deployment, its own admission
+// webhook Service, and CRs that must pass through that webhook — all in one
+// release. WaitStrategy="hookOnly" (used by every helm caller in this package
+// so the actions return promptly rather than blocking on full readiness)
+// does not wait for the webhook-backing pod to become Ready, so admission
+// calls hit a Service with zero endpoints and every CR create is rejected:
+//
+//	Internal error occurred: failed calling webhook "<name>.<group>":
+//	  Post "https://<svc>.<ns>.svc:<port>/validate-...":
+//	  no endpoints available for service "<svc>"
+//
+// Helm rolls back the release and RunWithContext returns an error containing
+// the marker below. A retry ~60s later succeeds because the pod has come
+// Ready by then. Observed most commonly on the operator chart's bundled
+// victoria-metrics-operator subchart on fresh installs, but the pattern
+// applies to any chart that co-installs an admission webhook and the
+// resources it admits.
+//
+// The correct long-term fix belongs in the affected charts (a
+// helm.sh/hook-weight on the webhook resources so they install and become
+// Ready before dependent CRs). Until every chart adopts that pattern, this
+// narrow signature-matched retry unblocks the common case.
+const admissionWebhookRaceMarker = "no endpoints available for service"
+
+// admissionWebhookRaceRetryDelay is the pause between helm attempts. The
+// pod backing the webhook Service typically becomes Ready within ~30-60s of
+// the image pull completing on a small cluster; 60s is a comfortable margin
+// without dragging out the pipeline.
+const admissionWebhookRaceRetryDelay = 60 * time.Second
+
+// isAdmissionWebhookRace reports whether the given error is the "no endpoints
+// available for service <name>" race described on admissionWebhookRaceMarker.
+// Case-sensitive substring match: helm surfaces the API server's error
+// verbatim, so the marker is stable across k8s versions.
+func isAdmissionWebhookRace(err error) bool {
+	return err != nil && strings.Contains(err.Error(), admissionWebhookRaceMarker)
+}
+
+// waitBeforeRetry sleeps for admissionWebhookRaceRetryDelay, returning early
+// if ctx is cancelled. Printed message goes to stdout in the same style as
+// the surrounding phase output ("[N/M] ..." lines).
+func waitBeforeRetry(ctx context.Context, phase string) error {
+	fmt.Printf(
+		"\n  ! admission webhook Service had no endpoints during %s; "+
+			"sleeping %s and retrying once (see admissionWebhookRaceMarker in operator.go).\n",
+		phase,
+		admissionWebhookRaceRetryDelay,
+	)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(admissionWebhookRaceRetryDelay):
+		return nil
+	}
+}
+
+// runInstallWithWebhookRaceRetry wraps installClient.RunWithContext with a
+// single retry on the admission-webhook race. Any other error is returned
+// unchanged on the first attempt.
+func runInstallWithWebhookRaceRetry(
+	ctx context.Context,
+	installClient *action.Install,
+	chartRequested helmchart.Charter,
+	values map[string]interface{},
+) error {
+	_, err := installClient.RunWithContext(ctx, chartRequested, values)
+	if !isAdmissionWebhookRace(err) {
+		return err
+	}
+	if waitErr := waitBeforeRetry(ctx, "install"); waitErr != nil {
+		return waitErr
+	}
+	_, err = installClient.RunWithContext(ctx, chartRequested, values)
+	return err
+}
+
+// runUpgradeWithWebhookRaceRetry wraps upgradeClient.RunWithContext with the
+// same single-retry-on-race behavior. Separate helper because Install and
+// Upgrade have different method signatures (Upgrade takes releaseName).
+func runUpgradeWithWebhookRaceRetry(
+	ctx context.Context,
+	upgradeClient *action.Upgrade,
+	releaseName string,
+	chartRequested helmchart.Charter,
+	values map[string]interface{},
+) error {
+	_, err := upgradeClient.RunWithContext(ctx, releaseName, chartRequested, values)
+	if !isAdmissionWebhookRace(err) {
+		return err
+	}
+	if waitErr := waitBeforeRetry(ctx, "upgrade"); waitErr != nil {
+		return waitErr
+	}
+	_, err = upgradeClient.RunWithContext(ctx, releaseName, chartRequested, values)
+	return err
 }
 
 // WaitForOperator waits for operator to be ready by checking webhook CA bundle injection and deployment

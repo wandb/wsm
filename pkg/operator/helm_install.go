@@ -55,7 +55,7 @@ func installHelmChart(ctx context.Context, namespace, releaseName, chartRef, ver
 		if err != nil {
 			return fmt.Errorf("failed to load chart %q: %w", chartRef, err)
 		}
-		if _, err := upgradeClient.RunWithContext(ctx, releaseName, chartRequested, values); err != nil {
+		if err := runUpgradeWithWebhookRaceRetry(ctx, upgradeClient, releaseName, chartRequested, values); err != nil {
 			return fmt.Errorf("failed to upgrade %q: %w", releaseName, err)
 		}
 		return nil
@@ -76,7 +76,7 @@ func installHelmChart(ctx context.Context, namespace, releaseName, chartRef, ver
 	if err != nil {
 		return fmt.Errorf("failed to load chart %q: %w", chartRef, err)
 	}
-	if _, err := installClient.RunWithContext(ctx, chartRequested, values); err != nil {
+	if err := runInstallWithWebhookRaceRetry(ctx, installClient, chartRequested, values); err != nil {
 		return fmt.Errorf("failed to install %q: %w", releaseName, err)
 	}
 	return nil

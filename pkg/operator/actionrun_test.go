@@ -278,6 +278,12 @@ func TestListActionRunsUsesSelectorsAndParsesFlatStatus(t *testing.T) {
 		"compact", "Failed", "2026-07-28T20:00:00Z")
 	otherApplication := testActionRun(t, "gorilla-triage-other", "gorilla", ActionTypeTriage,
 		"default", "Succeeded", "2026-07-28T21:00:00Z")
+	malformedMatching := testActionRun(t, "weave-trace-triage-malformed", "weave-trace", ActionTypeTriage,
+		"default", "Succeeded", "2026-07-28T22:00:00Z")
+	unstructured.RemoveNestedField(malformedMatching.Object, "spec", "action")
+	malformedFiltered := testActionRun(t, "gorilla-triage-malformed", "gorilla", ActionTypeTriage,
+		"default", "Succeeded", "2026-07-28T23:00:00Z")
+	unstructured.RemoveNestedField(malformedFiltered.Object, "spec", "action")
 	if err := unstructured.SetNestedMap(newer.Object, map[string]any{
 		"phase":       "Succeeded",
 		"jobRef":      map[string]any{"name": "weave-trace-triage-newer-action"},
@@ -302,7 +308,9 @@ func TestListActionRunsUsesSelectorsAndParsesFlatStatus(t *testing.T) {
 		t.Fatalf("set status: %v", err)
 	}
 
-	client := newActionRunFakeClient(older, newer, otherType, otherApplication)
+	client := newActionRunFakeClient(
+		older, newer, otherType, otherApplication, malformedMatching, malformedFiltered,
+	)
 	var fieldSelector string
 	client.PrependReactor("list", "actionruns", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		fieldSelector = action.(k8stesting.ListAction).GetListRestrictions().Fields.String()

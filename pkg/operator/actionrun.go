@@ -311,14 +311,17 @@ func listActionRuns(
 
 	runs := make([]ActionRun, 0, len(list.Items))
 	for i := range list.Items {
-		run, err := parseActionRun(&list.Items[i])
-		if err != nil {
-			return nil, err
-		}
-		if request.Type != "" && run.Type != request.Type {
+		item := &list.Items[i]
+		if itemType, _, _ := unstructured.NestedString(item.Object, "spec", "type"); request.Type != "" && itemType != string(request.Type) {
 			continue
 		}
-		if request.ApplicationName != "" && run.ApplicationName != request.ApplicationName {
+		if itemApplication, _, _ := unstructured.NestedString(
+			item.Object, "spec", "applicationRef", "name",
+		); request.ApplicationName != "" && itemApplication != request.ApplicationName {
+			continue
+		}
+		run, err := parseActionRun(item)
+		if err != nil {
 			continue
 		}
 		runs = append(runs, run)

@@ -56,7 +56,7 @@ const wandbPublicPrefix = "us-docker.pkg.dev/wandb-production/public/"
 func mirrorServerManifest(
 	ctx context.Context,
 	target, version, manifestSource string,
-	ex managedExclusions,
+	exclusions managedExclusions,
 	insecure, dryRun bool,
 	srcCtx, dstCtx *types.SystemContext,
 	policyCtx *signature.PolicyContext,
@@ -82,7 +82,7 @@ func mirrorServerManifest(
 		return fmt.Errorf("pull server manifest: %w", err)
 	}
 
-	refs, err := collectManifestImages(files, ex)
+	refs, err := collectManifestImages(files, exclusions)
 	if err != nil {
 		return fmt.Errorf("enumerate manifest images: %w", err)
 	}
@@ -90,19 +90,16 @@ func mirrorServerManifest(
 		return fmt.Errorf("server manifest %s:%s referenced no images", source, version)
 	}
 
-	// When mirroring the managed ClickHouse data-plane images, require the manifest
-	// to publish the Keeper image the operator would otherwise resolve from an
-	// internal constant wsm cannot see. Fail early with a clear message rather than
-	// producing an incomplete mirror. Skipped when ClickHouse is excluded.
-	if !ex.excludeServer("clickhouse") {
+	// Require the manifest to publish the ClickHouse Keeper image (see
+	// checkClickhouseKeeper); skipped when ClickHouse is excluded.
+	if !exclusions.excludeServer("clickhouse") {
 		if err := checkClickhouseKeeper(files); err != nil {
 			return err
 		}
 	}
 
-	// Map each unique upstream ref (by full source image) to its mirror
-	// repository once; the same mapping drives both image copying and the
-	// in-manifest rewrite so they cannot drift.
+	// One mapping from upstream ref to mirror repository drives both the image
+	// copy and the in-manifest rewrite, so they cannot drift.
 	mirrored := map[string]string{}
 	for _, ref := range refs {
 		mirrored[ref.GetImage("")] = rewriteRepoForMirror(target, upstreamRepo(ref))
@@ -353,14 +350,11 @@ func extractManifestYAML(ctx context.Context, fetcher content.Fetcher, desc ocis
 	}
 }
 
-// collectManifestImages parses each manifest YAML file and returns the unique
-// image references across applications (including init/sidecar containers) and
-// migration jobs, plus the managed data-plane images the operator reads from the
-// manifest's infra sections (object store, ClickHouse, MySQL, Redis, Kafka) — the
-// tier-3 images wsm used to hard-code. ex drops the data-plane images for excluded
-// managed types (Kafka is always included; it cannot be excluded). mirror and check
-// must pass the same ex so they agree on the set.
-func collectManifestImages(files map[string][]byte, ex managedExclusions) ([]wmanifest.ImageRef, error) {
+// collectManifestImages returns the unique images the manifest references: the W&B
+// application/migration images plus the managed data-plane images the operator reads
+// from the infra sections. exclusions drops the data-plane images for excluded types
+// (Kafka is always included). mirror and check must pass the same exclusions.
+func collectManifestImages(files map[string][]byte, exclusions managedExclusions) ([]wmanifest.ImageRef, error) {
 	seen := map[string]struct{}{}
 	var refs []wmanifest.ImageRef
 	add := func(ref wmanifest.ImageRef) {
@@ -393,21 +387,17 @@ func collectManifestImages(files map[string][]byte, ex managedExclusions) ([]wma
 		for _, mig := range m.Migrations {
 			add(mig.Image)
 		}
-		addInfraImages(m, add, ex)
+		addInfraImages(m, add, exclusions)
 	}
 	return refs, nil
 }
 
-// addInfraImages enumerates the managed data-plane images the operator pulls
-// straight from the manifest's infra sections. The MySQL "exporter" key is
-// deliberately skipped: moco exposes no per-cluster exporter-image override
-// (moco v0.34.0), so the operator ignores mysql.*.images.exporter and always
-// deploys the moco-chart exporter — mirroring the manifest value would push an
-// image that is never pulled. TODO: remove the skip once the manifest stops
-// emitting mysql.*.images.exporter. (The moco sidecars — agent/fluent-bit/the
-// real exporter — and every managed *operator* image are chart-derived, not
-// manifest-derived, so they are handled separately.)
-func addInfraImages(m wmanifest.Manifest, add func(wmanifest.ImageRef), ex managedExclusions) {
+// addInfraImages enumerates the managed data-plane images from the manifest's infra
+// sections. The MySQL "exporter" key is skipped: moco has no per-cluster
+// exporter-image override (v0.34.0), so the operator ignores it and deploys the
+// moco-chart exporter instead — mirroring the manifest value would push an unused
+// image. TODO: drop the skip once the manifest stops emitting it.
+func addInfraImages(m wmanifest.Manifest, add func(wmanifest.ImageRef), exclusions managedExclusions) {
 	addSection := func(cfgs map[string]wmanifest.InfraConfig, skipKeys map[string]bool) {
 		for _, inst := range sortedInstanceKeys(cfgs) {
 			images := cfgs[inst].Images
@@ -419,17 +409,17 @@ func addInfraImages(m wmanifest.Manifest, add func(wmanifest.ImageRef), ex manag
 			}
 		}
 	}
-	if !ex.excludeServer("object-store") {
+	if !exclusions.excludeServer("object-store") {
 		addSection(m.Bucket, nil)
 	}
-	if !ex.excludeServer("clickhouse") {
+	if !exclusions.excludeServer("clickhouse") {
 		addSection(m.Clickhouse, nil)
 		addSection(m.ClickhouseKeeper, nil)
 	}
-	if !ex.excludeServer("mysql") {
+	if !exclusions.excludeServer("mysql") {
 		addSection(m.Mysql, map[string]bool{"exporter": true})
 	}
-	if !ex.excludeServer("redis") {
+	if !exclusions.excludeServer("redis") {
 		addSection(m.Redis, nil)
 	}
 	// Kafka is always mirrored — it cannot be excluded.
@@ -467,14 +457,11 @@ func upstreamRepo(ref wmanifest.ImageRef) string {
 	return ref.Repository
 }
 
-// checkClickhouseKeeper rejects a manifest that deploys managed ClickHouse but
-// does not publish a Keeper image. Server manifests before ~0.84 left the
-// clickhouseKeeper section empty and the operator fell back to an internal
-// (unexported) constant wsm cannot read — so wsm could not mirror the Keeper image
-// the operator will actually pull. Requiring the image in the manifest keeps the
-// mirror complete; the fix is to mirror with W&B server >= 0.84.0. Values are
-// merged across every manifest file before deciding, since the two sections may
-// live in different files.
+// checkClickhouseKeeper rejects a manifest that deploys managed ClickHouse without a
+// Keeper image. Manifests before ~0.84 left clickhouseKeeper empty and the operator
+// fell back to an unexported constant wsm can't read, so wsm couldn't mirror the
+// Keeper image the operator pulls; the fix is W&B server >= 0.84.0. Sections are
+// merged across files since they may live in different ones.
 func checkClickhouseKeeper(files map[string][]byte) error {
 	hasServer, hasKeeper := false, false
 	for _, name := range sortedKeys(files) {
@@ -532,15 +519,13 @@ func mirrorImageRef(target string, ref wmanifest.ImageRef) string {
 	return mirrored.GetImage("")
 }
 
-// rewriteManifestImages rewrites every mirrored image reference in one manifest
-// YAML file to point at the mirror, and drops the inert MySQL exporter image. It
-// edits the YAML node tree rather than the raw bytes so it handles both image-ref
-// encodings (legacy embedded repository, and the newer registry/repository split)
-// and preserves comments and any fields wsm's pinned manifest struct does not
-// model. mirrored maps an upstream ref's GetImage("") to its flattened mirror
-// repository; only refs present there are rewritten, guaranteeing every rewritten
-// ref was actually pushed. Refs not in mirrored are left untouched and returned so
-// the caller can warn. Returns the original bytes unchanged when nothing matched.
+// rewriteManifestImages rewrites one manifest file's image refs to the mirror and
+// drops the inert MySQL exporter. It edits the YAML node tree (not raw bytes) so it
+// handles both image-ref encodings and preserves comments and fields wsm's pinned
+// struct doesn't model. mirrored maps an upstream GetImage("") to its mirror
+// repository; only refs present there are rewritten (so every rewrite was pushed),
+// and the rest are returned for the caller to warn on. Unchanged input is returned
+// as-is.
 func rewriteManifestImages(data []byte, mirrored map[string]string) ([]byte, []string, error) {
 	var doc yamlv3.Node
 	if err := yamlv3.Unmarshal(data, &doc); err != nil {

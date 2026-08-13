@@ -14,35 +14,20 @@ import (
 	"helm.sh/helm/v4/pkg/release"
 )
 
-// renderKubeVersion is the Kubernetes version the client-side render advertises.
-// It must satisfy the kubeVersion floors the charts declare (cert-manager needs
-// >=1.22, nginx-gateway-fabric >=1.31); the default client capabilities report an
-// old version and would fail the chart's kubeVersion check.
+// renderKubeVersion satisfies the charts' kubeVersion floors (cert-manager >=1.22,
+// nginx-gateway-fabric >=1.31); the default client capabilities report too old a version.
 const renderKubeVersion = "v1.33.0"
 
-// OperatorChartRepo is the public OCI repository base the operator chart is
-// published to. It matches DeployOperator's repositoryURL so the mirror and
-// install sides pull the same chart. The mirror command renders from here; the
-// check command renders the copy under a mirror's "oci://<host>/wandb/charts".
+// OperatorChartRepo is the public OCI repo base for the operator chart, matching
+// DeployOperator. The mirror renders from here; check renders the mirror's copy.
 const OperatorChartRepo = "oci://us-docker.pkg.dev/wandb-production/public/wandb/charts"
 
-// RenderChartImages pulls chartRef@version over verified TLS, renders it entirely
-// client-side (no cluster, no release), and returns every distinct container image
-// it would create, sorted. It looks beyond plain container images so it also
-// captures images the chart injects indirectly:
-//
-//   - workload container and initContainer images (image: <ref> scalars),
-//   - images passed to a container as a --…-image argument (moco's
-//     --agent-image/--fluent-bit-image/--mysqld-exporter-image, cert-manager's
-//     --acme-http01-solver-image),
-//   - image refs expressed as {registry?, repository, tag?/digest?} maps on custom
-//     resources (e.g. nginx-gateway-fabric's NginxProxy),
-//   - images in the chart's hook manifests.
-//
-// values are the Helm values to render with; pass the same ones the install side
-// uses (minus any mirror retargeting) so the derived set matches what a real
-// install pulls. insecure skips TLS verification (and allows plain HTTP) when
-// pulling the chart — used when rendering a chart copy from a self-signed mirror.
+// RenderChartImages renders chartRef@version client-side (no cluster) and returns the
+// sorted, de-duplicated container images it would create. Beyond plain container images
+// it captures init containers, images passed via --…-image args (moco sidecars,
+// cert-manager acmesolver), image refs on custom resources (e.g. NginxProxy), and hook
+// images. values should match the install (minus mirror retargeting); insecure allows a
+// self-signed / plain-HTTP chart source.
 func RenderChartImages(ctx context.Context, chartRef, version string, values map[string]any, insecure bool) ([]string, error) {
 	settings := cli.New()
 
@@ -62,17 +47,13 @@ func RenderChartImages(ctx context.Context, chartRef, version string, values map
 	}
 
 	inst := action.NewInstall(actionConfig)
-	// DryRunClient renders entirely client-side: no cluster contact, default
-	// capabilities.
-	inst.DryRunStrategy = action.DryRunClient
+	inst.DryRunStrategy = action.DryRunClient // render client-side, no cluster
 	inst.KubeVersion = kubeVersion
 	inst.Replace = true
 	inst.ReleaseName = "wsm-render"
 	inst.Namespace = "wsm-render"
 	inst.Version = version
-	// CRDs carry image strings as openAPIV3Schema defaults that are not
-	// necessarily pulled; rendering templates only keeps the set to images the
-	// chart actually deploys.
+	// Skip CRDs: their schema-default image strings aren't necessarily pulled.
 	inst.IncludeCRDs = false
 
 	cp, err := inst.LocateChart(chartRef, settings)
@@ -105,16 +86,11 @@ func RenderChartImages(ctx context.Context, chartRef, version string, values map
 	return extractImages(docs.String()), nil
 }
 
-// OperatorChartImages renders the wandb operator chart from chartRepo (an OCI repo
-// base — OperatorChartRepo for upstream, or a mirror's "oci://<host>/wandb/charts")
-// at chartVersion and returns the managed-service images it deploys: the operator
-// binary, the bundled managed-service operator images (moco/redis/seaweedfs/
-// altinity), and the moco sidecars injected via controller args. Rendered with the
-// same non-mirror values DeployOperator installs with, so the set matches a real
-// install. disabledSubcharts are managed-service operator subcharts to turn off
-// (via <name>.enabled=false) so their operator images — and, for moco, the injected
-// sidecars — are not derived; pass the subcharts for types the caller excludes.
-// insecure is passed through for a self-signed mirror source.
+// OperatorChartImages renders the operator chart from chartRepo at chartVersion and
+// returns the managed-service images it deploys (operator binary, the moco/redis/
+// seaweedfs/altinity operators, and the moco sidecars). disabledSubcharts turns off
+// subcharts (<name>.enabled=false) for excluded managed types so their images aren't
+// derived. Values match DeployOperator's non-mirror install.
 func OperatorChartImages(ctx context.Context, chartRepo, chartVersion string, disabledSubcharts []string, insecure bool) ([]string, error) {
 	values := map[string]any{
 		"wandb":          map[string]any{"install": false},
@@ -126,12 +102,9 @@ func OperatorChartImages(ctx context.Context, chartRepo, chartVersion string, di
 	return RenderChartImages(ctx, chartRepo+"/operator", chartVersion, values, insecure)
 }
 
-// CertManagerImages renders the cert-manager chart (at CertManagerVersion) from
-// chartRef and returns the component images it deploys. Rendered with the same
-// values InstallCertManager uses (startupapicheck disabled), so the derived set —
-// controller/webhook/cainjector plus the acmesolver passed via a controller arg —
-// matches what a real install pulls, and the unused startupapicheck image is not
-// mirrored.
+// CertManagerImages renders the cert-manager chart from chartRef with the same values
+// InstallCertManager uses (startupapicheck disabled), yielding controller/webhook/
+// cainjector plus the acmesolver passed via a controller arg.
 func CertManagerImages(ctx context.Context, chartRef string, insecure bool) ([]string, error) {
 	values := map[string]any{
 		"crds":            map[string]any{"enabled": true},
@@ -147,10 +120,8 @@ func NginxGatewayImages(ctx context.Context, chartRef string, insecure bool) ([]
 	return RenderChartImages(ctx, chartRef, NginxGatewayVersion, map[string]any{}, insecure)
 }
 
-// KubeStateMetricsImages renders the kube-state-metrics chart (at
-// KubeStateMetricsVersion) from chartRef and returns its image. The image tag is
-// pinned via the same value InstallKubeStateMetrics sets, so the derived image
-// matches the install even if the chart's default tag differs.
+// KubeStateMetricsImages renders the kube-state-metrics chart from chartRef. The tag
+// is pinned to match InstallKubeStateMetrics rather than the chart default.
 func KubeStateMetricsImages(ctx context.Context, chartRef string, insecure bool) ([]string, error) {
 	values := map[string]any{
 		"image": map[string]any{"tag": KubeStateMetricsImageTag},

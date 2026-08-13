@@ -133,7 +133,7 @@ func registryCheckCmd() *cobra.Command {
 			registry = strings.TrimRight(registry, "/")
 			ctx := context.Background()
 
-			ex, err := parseManagedExclusions(excludeOperators, excludeManaged, skipManaged)
+			exclusions, err := parseManagedExclusions(excludeOperators, excludeManaged, skipManaged)
 			if err != nil {
 				return err
 			}
@@ -151,11 +151,8 @@ func registryCheckCmd() *cobra.Command {
 			for _, it := range mirrorPlan {
 				targets = append(targets, it.dst)
 			}
-			// Render the operator chart FROM THE MIRROR (its bundled subcharts travel
-			// with it), so check needs only registry access — no upstream. The rendered
-			// image refs are upstream regardless of chart source, so they translate to
-			// the same mirror destinations. Excluded operators are dropped per ex.
-			managed, err := buildManagedImagePlan(ctx, registry, "oci://"+registry+"/wandb/charts", operatorChartVersion, ex, insecure)
+			// Operator chart also rendered from the mirror's copy (its subcharts travel with it).
+			managed, err := buildManagedImagePlan(ctx, registry, "oci://"+registry+"/wandb/charts", operatorChartVersion, exclusions, insecure)
 			if err != nil {
 				return err
 			}
@@ -175,7 +172,7 @@ func registryCheckCmd() *cobra.Command {
 				files, err := pullManifestYAMLFrom(ctx, manifestRepo, wandbVersion, insecure)
 				if err != nil {
 					manifestWarn = fmt.Sprintf("could not read server manifest %s:%s — application images not checked (%v)", manifestRepo, wandbVersion, err)
-				} else if refs, err := collectManifestImages(files, ex); err != nil {
+				} else if refs, err := collectManifestImages(files, exclusions); err != nil {
 					manifestWarn = fmt.Sprintf("could not parse server manifest %s:%s — application images not checked (%v)", manifestRepo, wandbVersion, err)
 				} else {
 					for _, r := range refs {

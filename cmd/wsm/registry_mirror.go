@@ -63,29 +63,21 @@ external databases).`,
 			}
 			targetRegistry = strings.TrimRight(targetRegistry, "/")
 
-			ex, err := parseManagedExclusions(excludeOperators, excludeManaged, skipManaged)
+			exclusions, err := parseManagedExclusions(excludeOperators, excludeManaged, skipManaged)
 			if err != nil {
 				return err
 			}
 
 			ctx := context.Background()
 
-			// Render the charts from upstream (verified TLS) to learn the images to
-			// pull and push.
+			// Charts render from upstream (verified TLS); false = not from the mirror.
 			items, err := buildMirrorPlan(ctx, targetRegistry, operatorChartVersion, false, false)
 			if err != nil {
 				return err
 			}
-			// Managed MySQL/Redis/Kafka/ClickHouse/object-store services. The operator
-			// + sidecar images are derived by rendering the operator chart (from
-			// upstream, verified TLS); the data-plane server images come from the
-			// manifest below. Excluded types are dropped per --exclude-operators /
-			// --exclude-managed. These pull from docker.io/quay.io/ghcr.io and are
-			// pushed to the mirror. At install they're retargeted to the mirror by Helm
-			// image values set from --mirror-registry (see pkg/operator.DeployOperator),
-			// or on a plain-HTTP local install by the node's containerd registry mirrors
-			// (wsm cluster create --insecure-registry-host).
-			managed, err := buildManagedImagePlan(ctx, targetRegistry, operator.OperatorChartRepo, operatorChartVersion, ex, false)
+			// Managed-service operator + sidecar images (operator chart render) plus the
+			// data-plane server images (manifest below). Excluded types are dropped.
+			managed, err := buildManagedImagePlan(ctx, targetRegistry, operator.OperatorChartRepo, operatorChartVersion, exclusions, false)
 			if err != nil {
 				return err
 			}
@@ -133,7 +125,7 @@ external databases).`,
 			// (weave-trace, weave-python, local, console, migrations, …) are only
 			// mirrored when a version is given, since they're version-specific.
 			if wandbVersion != "" {
-				if err := mirrorServerManifest(ctx, targetRegistry, wandbVersion, manifestSource, ex, insecure, dryRun, srcCtx, dstCtx, policyCtx); err != nil {
+				if err := mirrorServerManifest(ctx, targetRegistry, wandbVersion, manifestSource, exclusions, insecure, dryRun, srcCtx, dstCtx, policyCtx); err != nil {
 					return err
 				}
 			} else {
@@ -166,17 +158,14 @@ type mirrorItem struct {
 }
 
 // buildMirrorPlan returns the OCI chart artifacts wsm mirrors plus the component
-// images each of the operator/cert-manager/nginx-gateway/kube-state-metrics charts
-// deploys. The chart artifacts (and the operator binary) are fixed refs keyed on
-// their pinned versions; the component images are derived by rendering each chart
-// so the set — and its image tags — always match what a real install pulls, with
-// no hand-maintained list (cert-manager's unused startupapicheck is dropped, and
-// the nginx data-plane image / cert-manager acmesolver are picked up).
+// images each chart (operator/cert-manager/nginx-gateway/kube-state-metrics) deploys.
+// Chart artifacts and the operator binary are fixed version-pinned refs; component
+// images are derived by rendering each chart, so the set always matches a real install
+// with no hand-maintained list.
 //
-// fromMirror selects where the tool charts are rendered from: false pulls them
-// from upstream (the mirror command), true pulls the copies already pushed under
-// target (the check command, which must work with registry access only). insecure
-// skips TLS verification for a self-signed mirror source.
+// fromMirror renders the tool charts from their pushed copies under target (for check,
+// which needs registry access only) instead of upstream (for mirror). insecure skips
+// TLS verification for a self-signed mirror source.
 func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, fromMirror, insecure bool) ([]mirrorItem, error) {
 	certManagerVersion := operator.CertManagerVersion
 	nginxGatewayVersion := operator.NginxGatewayVersion
@@ -206,10 +195,9 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 		},
 	}
 
-	// Render each tool chart's images. pick chooses the upstream chart ref (mirror
-	// command) or its pushed copy under target (check command). The rendered image
-	// refs are upstream regardless of chart source, so they translate() to the same
-	// mirror destinations.
+	// pick selects the upstream chart ref (mirror) or its pushed copy under target
+	// (check); rendered image refs are upstream either way, so they translate() to
+	// the same mirror destinations.
 	pick := func(upstream, mirrored string) string {
 		if fromMirror {
 			return mirrored
@@ -238,29 +226,19 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 	return plan, nil
 }
 
-// buildManagedImagePlan returns the managed-service images wsm mirrors that are
-// NOT derived from the server manifest: the bundled managed-service *operator*
-// images (moco/redis/seaweedfs/altinity) and the moco sidecars moco injects into
-// every managed MySQL pod (agent/fluent-bit/mysqld_exporter). These are derived by
-// rendering the operator chart client-side, so the set — and its versions — always
-// match what a real install pulls, with no hand-maintained list. (The tier-3
-// data-plane *server* images come from the manifest via collectManifestImages.)
-//
-// W&B's own images the render surfaces (the operator binary) are skipped here: they
-// live under the wandb-production/public prefix and are mirrored elsewhere with
-// W&B's path convention (the operator binary in buildMirrorPlan, application images
-// in the server manifest), which translate() would not reproduce.
-// chartRepo is the OCI repo base the operator chart is rendered from — upstream
-// (operator.OperatorChartRepo) when mirroring, or the mirror's own copy
-// ("oci://<host>/wandb/charts") when checking an air-gapped registry. ex drops the
-// operator images for excluded managed types (the operator chart is rendered with
-// those subcharts disabled). insecure skips TLS verification for a self-signed
-// mirror source.
-func buildManagedImagePlan(ctx context.Context, target, chartRepo, operatorChartVersion string, ex managedExclusions, insecure bool) ([]mirrorItem, error) {
-	if ex.allOperatorsExcluded() {
+// buildManagedImagePlan returns the managed-service operator + moco-sidecar images,
+// derived by rendering the operator chart so the set matches a real install with no
+// hand-maintained list. (The data-plane server images come from the manifest.)
+// chartRepo is the render source — upstream when mirroring, the mirror's own copy
+// when checking an air-gapped registry. exclusions drops excluded types' operator
+// images (their subcharts are disabled in the render). The W&B operator-binary image
+// is skipped: buildMirrorPlan mirrors it under W&B's path convention, which
+// translate() wouldn't reproduce. insecure skips TLS for a self-signed source.
+func buildManagedImagePlan(ctx context.Context, target, chartRepo, operatorChartVersion string, exclusions managedExclusions, insecure bool) ([]mirrorItem, error) {
+	if exclusions.allOperatorsExcluded() {
 		return nil, nil
 	}
-	imgs, err := operator.OperatorChartImages(ctx, chartRepo, operatorChartVersion, ex.disabledSubcharts(), insecure)
+	imgs, err := operator.OperatorChartImages(ctx, chartRepo, operatorChartVersion, exclusions.disabledSubcharts(), insecure)
 	if err != nil {
 		return nil, fmt.Errorf("derive operator chart images: %w", err)
 	}

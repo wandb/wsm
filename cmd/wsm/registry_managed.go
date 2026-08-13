@@ -6,13 +6,11 @@ import (
 	"strings"
 )
 
-// managedType describes a managed-service type that can be excluded from the
-// mirror. Kafka is deliberately NOT a managed type: its data-plane images are
-// always mirrored and it has no operator subchart.
+// managedType is an excludable managed-service type. Kafka is deliberately not one:
+// its data-plane images are always mirrored and it has no operator subchart.
 type managedType struct {
-	// subchart is the operator-chart dependency that installs this type's operator;
-	// disabling it (via <subchart>.enabled=false) drops the operator's images from
-	// the render.
+	// subchart is the operator-chart dependency for this type's operator, disabled
+	// via <subchart>.enabled=false to drop its images from the render.
 	subchart string
 }
 
@@ -34,34 +32,27 @@ func managedTypeNames() []string {
 	return names
 }
 
-// managedExclusions records which managed-service types are excluded from the
-// mirror, along two independent axes:
-//
-//   - operators: skip the type's OPERATOR images only — the customer runs their own
-//     cluster-wide operator, but still uses W&B's managed data-plane service.
-//   - managed: skip the type ENTIRELY (operator + data-plane server images) — the
-//     customer brings an external service.
-//
-// Excluding a type's managed service implies excluding its now-purposeless
-// operator, so managed is a superset for the operator axis.
+// managedExclusions records excluded managed-service types along two axes:
+// operators (skip the operator images only — customer runs their own operator) and
+// managed (skip the type entirely — customer brings an external service). Excluding
+// the managed service implies excluding its operator.
 type managedExclusions struct {
 	operators map[string]bool
 	managed   map[string]bool
 }
 
-// excludeOperator reports whether the type's operator images should be skipped.
+// excludeOperator reports whether the type's operator images should be skipped
+// (either axis excludes the operator).
 func (e managedExclusions) excludeOperator(t string) bool {
 	return e.operators[t] || e.managed[t]
 }
 
-// excludeServer reports whether the type's data-plane server images should be skipped.
 func (e managedExclusions) excludeServer(t string) bool {
 	return e.managed[t]
 }
 
-// disabledSubcharts returns the operator-chart subcharts to disable when rendering
-// the operator chart — one per type whose operator is excluded — so their operator
-// images (and, for moco, the injected sidecars) are not derived.
+// disabledSubcharts returns the subcharts to disable when rendering the operator
+// chart, one per type whose operator is excluded.
 func (e managedExclusions) disabledSubcharts() []string {
 	var out []string
 	for _, t := range managedTypeNames() {
@@ -72,8 +63,7 @@ func (e managedExclusions) disabledSubcharts() []string {
 	return out
 }
 
-// allOperatorsExcluded reports whether every managed operator is excluded, so the
-// operator chart need not be rendered for managed images at all.
+// allOperatorsExcluded reports whether the operator chart can be skipped entirely.
 func (e managedExclusions) allOperatorsExcluded() bool {
 	for t := range managedTypes {
 		if !e.excludeOperator(t) {
@@ -87,7 +77,7 @@ func (e managedExclusions) allOperatorsExcluded() bool {
 // values (and the --skip-managed-images alias) into a managedExclusions. Unknown
 // types — including "kafka", which can never be excluded — are rejected.
 func parseManagedExclusions(excludeOperators, excludeManaged []string, skipManaged bool) (managedExclusions, error) {
-	ex := managedExclusions{operators: map[string]bool{}, managed: map[string]bool{}}
+	exclusions := managedExclusions{operators: map[string]bool{}, managed: map[string]bool{}}
 
 	assign := func(flag string, values []string, dst map[string]bool) error {
 		for _, v := range values {
@@ -106,16 +96,16 @@ func parseManagedExclusions(excludeOperators, excludeManaged []string, skipManag
 		return nil
 	}
 
-	if err := assign("--exclude-operators", excludeOperators, ex.operators); err != nil {
-		return ex, err
+	if err := assign("--exclude-operators", excludeOperators, exclusions.operators); err != nil {
+		return exclusions, err
 	}
-	if err := assign("--exclude-managed", excludeManaged, ex.managed); err != nil {
-		return ex, err
+	if err := assign("--exclude-managed", excludeManaged, exclusions.managed); err != nil {
+		return exclusions, err
 	}
 	if skipManaged {
 		for t := range managedTypes {
-			ex.managed[t] = true
+			exclusions.managed[t] = true
 		}
 	}
-	return ex, nil
+	return exclusions, nil
 }

@@ -25,53 +25,53 @@ func TestParseManagedExclusions_Unknown(t *testing.T) {
 
 func TestManagedExclusions_Semantics(t *testing.T) {
 	// --exclude-operators mysql: operator skipped, server kept.
-	ex, err := parseManagedExclusions([]string{"mysql"}, nil, false)
+	exclusions, err := parseManagedExclusions([]string{"mysql"}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ex.excludeOperator("mysql") {
+	if !exclusions.excludeOperator("mysql") {
 		t.Error("mysql operator should be excluded")
 	}
-	if ex.excludeServer("mysql") {
+	if exclusions.excludeServer("mysql") {
 		t.Error("mysql server should NOT be excluded by --exclude-operators")
 	}
 
 	// --exclude-managed redis: both operator and server skipped.
-	ex, err = parseManagedExclusions(nil, []string{"redis"}, false)
+	exclusions, err = parseManagedExclusions(nil, []string{"redis"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ex.excludeOperator("redis") || !ex.excludeServer("redis") {
+	if !exclusions.excludeOperator("redis") || !exclusions.excludeServer("redis") {
 		t.Error("--exclude-managed redis should exclude both operator and server")
 	}
 }
 
 func TestManagedExclusions_SkipAllAliasAndSubcharts(t *testing.T) {
-	ex, err := parseManagedExclusions(nil, nil, true) // --skip-managed-images
+	exclusions, err := parseManagedExclusions(nil, nil, true) // --skip-managed-images
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ex.allOperatorsExcluded() {
+	if !exclusions.allOperatorsExcluded() {
 		t.Error("--skip-managed-images should exclude all operators")
 	}
 	for _, tp := range []string{"clickhouse", "mysql", "redis", "object-store"} {
-		if !ex.excludeServer(tp) {
+		if !exclusions.excludeServer(tp) {
 			t.Errorf("--skip-managed-images should exclude server %q", tp)
 		}
 	}
 
 	// disabledSubcharts maps the excluded operator types to their subchart names.
-	ex, err = parseManagedExclusions([]string{"mysql", "clickhouse"}, nil, false)
+	exclusions, err = parseManagedExclusions([]string{"mysql", "clickhouse"}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := ex.disabledSubcharts()
+	got := exclusions.disabledSubcharts()
 	sort.Strings(got)
 	want := []string{"altinity-clickhouse-operator", "moco"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("disabledSubcharts = %v, want %v", got, want)
 	}
-	if ex.allOperatorsExcluded() {
+	if exclusions.allOperatorsExcluded() {
 		t.Error("only two of four types excluded — allOperatorsExcluded should be false")
 	}
 }

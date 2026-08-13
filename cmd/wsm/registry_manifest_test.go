@@ -83,7 +83,7 @@ redis:
         tag: "v7.0.15"
 `
 
-func mustExclusions(t *testing.T, ops, mgd []string, skip bool) managedExclusions {
+func mustExclude(t *testing.T, ops, mgd []string, skip bool) managedExclusions {
 	t.Helper()
 	exclusions, err := parseManagedExclusions(ops, mgd, skip)
 	if err != nil {
@@ -103,7 +103,7 @@ func imageSet(refs []wmanifest.ImageRef) map[string]struct{} {
 func TestCollectManifestImages_Managed(t *testing.T) {
 	files := map[string][]byte{"manifest.yaml": []byte(testManifest)}
 
-	refs, err := collectManifestImages(files, mustExclusions(t, nil, nil, false))
+	refs, err := collectManifestImages(files, mustExclude(t, nil, nil, false))
 	if err != nil {
 		t.Fatalf("collectManifestImages: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestCollectManifestImages_SkipManaged(t *testing.T) {
 	// --skip-managed-images excludes clickhouse/mysql/redis/object-store — but NOT
 	// kafka, which is always mirrored. So the set is app+migration images plus the
 	// kafka data-plane images.
-	refs, err := collectManifestImages(files, mustExclusions(t, nil, nil, true))
+	refs, err := collectManifestImages(files, mustExclude(t, nil, nil, true))
 	if err != nil {
 		t.Fatalf("collectManifestImages: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestCollectManifestImages_ExcludeOneType(t *testing.T) {
 	files := map[string][]byte{"manifest.yaml": []byte(testManifest)}
 
 	// --exclude-managed mysql drops the mysql server image but keeps everything else.
-	refs, err := collectManifestImages(files, mustExclusions(t, nil, []string{"mysql"}, false))
+	refs, err := collectManifestImages(files, mustExclude(t, nil, []string{"mysql"}, false))
 	if err != nil {
 		t.Fatalf("collectManifestImages: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestCollectManifestImages_ExcludeOneType(t *testing.T) {
 
 	// --exclude-operators mysql is an operator-axis exclusion: it must NOT drop the
 	// mysql server image (still a managed service).
-	refs2, err := collectManifestImages(files, mustExclusions(t, []string{"mysql"}, nil, false))
+	refs2, err := collectManifestImages(files, mustExclude(t, []string{"mysql"}, nil, false))
 	if err != nil {
 		t.Fatalf("collectManifestImages: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestRewriteManifestImages(t *testing.T) {
 	const target = "mirror.test"
 	files := map[string][]byte{"manifest.yaml": []byte(testManifest)}
 
-	refs, err := collectManifestImages(files, mustExclusions(t, nil, nil, false))
+	refs, err := collectManifestImages(files, mustExclude(t, nil, nil, false))
 	if err != nil {
 		t.Fatalf("collectManifestImages: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestRewriteManifestImages(t *testing.T) {
 
 	// Re-parse via the operator's own decoder and confirm every image now resolves
 	// to a mirror ref.
-	refs2, err := collectManifestImages(map[string][]byte{"manifest.yaml": out}, mustExclusions(t, nil, nil, false))
+	refs2, err := collectManifestImages(map[string][]byte{"manifest.yaml": out}, mustExclude(t, nil, nil, false))
 	if err != nil {
 		t.Fatalf("re-parse rewritten manifest: %v", err)
 	}

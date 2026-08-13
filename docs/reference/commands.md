@@ -414,7 +414,7 @@ Pulls every chart and image required by `wsm deploy-v2 operator` from its upstre
 wsm registry mirror --to <host> [flags]
 ```
 
-Scope today: the operator OCI chart + binary image, cert-manager OCI chart + 5 component images, nginx-gateway-fabric OCI chart + 2 images (control plane + data plane). W&B server manifest, application images, and subchart controller images are upcoming iterations.
+Scope: the operator OCI chart + binary image, and the cert-manager, nginx-gateway-fabric, and kube-state-metrics OCI charts plus the component images each deploys. With `--wandb-version` it also mirrors the W&B server manifest and every image it references — the application images and the managed data-plane server images (ClickHouse/MySQL/Redis/Kafka/object-store) — and rewrites the manifest's image refs to point at your mirror. The managed-service **operator** images (moco/redis/seaweedfs/altinity) and their sidecars come with them. Nothing is hand-listed: the image sets are derived by rendering the charts and parsing the manifest, so they always match what an install actually pulls.
 
 #### Flags
 
@@ -424,6 +424,12 @@ Scope today: the operator OCI chart + binary image, cert-manager OCI chart + 5 c
 | `--insecure` | `false` | Skip TLS verification when pushing to the mirror. Use for plain-HTTP registries like a local `registry:2`. **Never** in production. |
 | `--dry-run` | `false` | Print the source → target mirroring plan without pushing. |
 | `--operator-chart-version` | `2.0.0-beta.3` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
+| `--wandb-version` | — | W&B server version (e.g. `0.84.0`). When set, also mirror the server manifest and every application + managed data-plane image it references, rewriting them to point at the mirror. |
+| `--exclude-operators` | — | Comma-separated managed types (`clickhouse`, `mysql`, `redis`, `object-store`) whose **operator** images to skip — for when you run your own cluster-wide operator. The managed data-plane service is still mirrored. |
+| `--exclude-managed` | — | Comma-separated managed types to skip **entirely** — operator *and* data-plane images — for when you use an external service. |
+| `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store`. |
+
+The two exclusion flags cover independent cases: `--exclude-operators <type>` mirrors the managed data-plane service but not W&B's operator for it (you bring your own); `--exclude-managed <type>` skips the type completely (you bring an external service).
 
 Auth is read from your Docker config (`~/.docker/config.json`). Run `docker login <mirror-host>` before this command for any registry that requires credentials.
 
@@ -431,7 +437,7 @@ Auth is read from your Docker config (`~/.docker/config.json`). Run `docker logi
 
 Verifies that every artifact `wsm registry mirror` pushes is present in your mirror. It computes the **same destination set** as `mirror` (operator chart + image, cert-manager, nginx-gateway, the managed-service operator/data-plane images, and — with `--wandb-version` — the server manifest plus every application image it references), then does a manifest check for each.
 
-Pass the **same** `--operator-chart-version` / `--wandb-version` / `--skip-managed-images` you mirrored with, or `check` and `mirror` won't agree on the expected set. The server manifest and its application images are read back out of the mirror itself, so `check` works from an air-gapped host with access only to the registry.
+Pass the **same** `--operator-chart-version` / `--wandb-version` / `--exclude-operators` / `--exclude-managed` / `--skip-managed-images` you mirrored with, or `check` and `mirror` won't agree on the expected set. The server manifest and its application images are read back out of the mirror itself — and the charts are rendered from their copies in the mirror — so `check` works from an air-gapped host with access only to the registry.
 
 ```bash
 wsm registry check --registry <host> --wandb-version <version> [flags]
@@ -444,7 +450,9 @@ wsm registry check --registry <host> --wandb-version <version> [flags]
 | `--registry` | — | **Required.** Hostname of your mirror to check against. |
 | `--wandb-version` | — | W&B server version that was mirrored; when set, also check the server manifest and every application image it references. |
 | `--operator-chart-version` | `2.0.0-beta.3` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
-| `--skip-managed-images` | `false` | Don't check the managed-service operator + data-plane images (match the flag you mirrored with). |
+| `--exclude-operators` | — | Managed types whose operator images to skip checking (match `--exclude-operators` you mirrored with). |
+| `--exclude-managed` | — | Managed types to skip checking entirely (match `--exclude-managed` you mirrored with). |
+| `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store` (match the flag you mirrored with). |
 | `--insecure` | `false` | Skip TLS verification when contacting the registry. |
 | `--fail-on-missing` | `false` | Exit non-zero if any artifact is missing. |
 

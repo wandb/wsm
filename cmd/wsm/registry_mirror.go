@@ -25,6 +25,8 @@ func registryMirrorCmd() *cobra.Command {
 		operatorChartVersion string
 		wandbVersion         string
 		skipManaged          bool
+		excludeOperators     []string
+		excludeManaged       []string
 		manifestSource       string
 	)
 
@@ -61,18 +63,25 @@ external databases).`,
 			}
 			targetRegistry = strings.TrimRight(targetRegistry, "/")
 
-			items := buildMirrorPlan(targetRegistry, operatorChartVersion)
-			if !skipManaged {
-				// Managed MySQL/Redis/Kafka/ClickHouse/object-store services. These
-				// pull from docker.io/quay.io/ghcr.io and are pushed to provided registry mirror
-				// At install they're retargeted to the mirror by:
-				// Helm image values set from --mirror-registry using
-				// spec.global.imageRegistry on the CR, which the operator host-replaces
-				// (requires an operator version that declares the field). On a plain-HTTP local
-				// install without that field, the node's containerd registry mirrors
-				// (wsm cluster create --insecure-registry-host) redirect them instead.
-				items = append(items, buildManagedImagePlan(targetRegistry)...)
+			exclusions, err := parseManagedExclusions(excludeOperators, excludeManaged, skipManaged)
+			if err != nil {
+				return err
 			}
+
+			ctx := context.Background()
+
+			// Charts render from upstream (verified TLS); false = not from the mirror.
+			items, err := buildMirrorPlan(ctx, targetRegistry, operatorChartVersion, false, false)
+			if err != nil {
+				return err
+			}
+			// Managed-service operator + sidecar images (operator chart render) plus the
+			// data-plane server images (manifest below). Excluded types are dropped.
+			managed, err := buildManagedImagePlan(ctx, targetRegistry, operator.OperatorChartRepo, operatorChartVersion, exclusions, false)
+			if err != nil {
+				return err
+			}
+			items = append(items, managed...)
 
 			fmt.Printf("Mirroring %d artifacts to %s\n\n", len(items), targetRegistry)
 
@@ -89,7 +98,6 @@ external databases).`,
 				dstCtx.OCIInsecureSkipTLSVerify = true
 			}
 
-			ctx := context.Background()
 			var pushed, failed int
 			for _, item := range items {
 				if dryRun {
@@ -117,7 +125,7 @@ external databases).`,
 			// (weave-trace, weave-python, local, console, migrations, …) are only
 			// mirrored when a version is given, since they're version-specific.
 			if wandbVersion != "" {
-				if err := mirrorServerManifest(ctx, targetRegistry, wandbVersion, manifestSource, insecure, dryRun, srcCtx, dstCtx, policyCtx); err != nil {
+				if err := mirrorServerManifest(ctx, targetRegistry, wandbVersion, manifestSource, exclusions, insecure, dryRun, srcCtx, dstCtx, policyCtx); err != nil {
 					return err
 				}
 			} else {
@@ -133,7 +141,9 @@ external databases).`,
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print the source → target mirroring plan without pushing")
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.3", "Operator chart version; also used as the tag for the operator binary image")
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version (e.g. 0.81.0); when set, also mirror the server manifest and every application image it references, rewriting them to point at the mirror")
-	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Don't mirror the managed-service operator + data-plane images (ClickHouse/Kafka/MySQL/Redis/object-store). Use when you run W&B against external databases.")
+	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Alias for --exclude-managed clickhouse,mysql,redis,object-store. Kafka is always mirrored.")
+	cmd.Flags().StringSliceVar(&excludeOperators, "exclude-operators", nil, "Managed types whose OPERATOR images to skip (you run your own cluster-wide operator), comma-separated: clickhouse,mysql,redis,object-store. The managed data-plane service is still mirrored.")
+	cmd.Flags().StringSliceVar(&excludeManaged, "exclude-managed", nil, "Managed types to skip ENTIRELY — operator AND data-plane images (you use an external service), comma-separated: clickhouse,mysql,redis,object-store. Kafka cannot be excluded.")
 	// TESTING ONLY, hidden from --help: pull the server manifest from a non-upstream
 	// OCI repo (e.g. a local Tilt registry serving unreleased wandb/core manifest
 	// changes) instead of us-docker.pkg.dev. Not a supported customer workflow.
@@ -144,18 +154,25 @@ external databases).`,
 
 type mirrorItem struct {
 	src string // full upstream OCI reference, e.g. quay.io/jetstack/cert-manager-controller:v1.20.2
-	dst string // full target reference,  e.g. localhost:5000/jetstack/cert-manager-controller:v1.20.2
+	dst string // full target reference, e.g. localhost:5000/jetstack/cert-manager-controller:v1.20.2
 }
 
-// buildMirrorPlan returns the static set of artifacts Iteration 1 mirrors.
-// cert-manager and nginx-gateway versions come from pkg/operator so the
-// install side and mirror side stay in lockstep automatically.
-func buildMirrorPlan(target, operatorChartVersion string) []mirrorItem {
+// buildMirrorPlan returns the OCI chart artifacts wsm mirrors plus the component
+// images each chart (operator/cert-manager/nginx-gateway/kube-state-metrics) deploys.
+// Chart artifacts and the operator binary are fixed version-pinned refs; component
+// images are derived by rendering each chart, so the set always matches a real install
+// with no hand-maintained list.
+//
+// fromMirror renders the tool charts from their pushed copies under target (for check,
+// which needs registry access only) instead of upstream (for mirror). insecure skips
+// TLS verification for a self-signed mirror source.
+func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, fromMirror, insecure bool) ([]mirrorItem, error) {
 	certManagerVersion := operator.CertManagerVersion
 	nginxGatewayVersion := operator.NginxGatewayVersion
+	ksmChartVersion := operator.KubeStateMetricsVersion
 
+	// OCI chart artifacts + the operator binary image (fixed refs, not rendered).
 	plan := []mirrorItem{
-		// Operator OCI chart + binary image
 		{
 			src: "us-docker.pkg.dev/wandb-production/public/wandb/charts/operator:" + operatorChartVersion,
 			dst: target + "/wandb/charts/operator:" + operatorChartVersion,
@@ -164,88 +181,76 @@ func buildMirrorPlan(target, operatorChartVersion string) []mirrorItem {
 			src: "us-docker.pkg.dev/wandb-production/public/wandb/operator:" + operatorChartVersion,
 			dst: target + "/wandb/operator:" + operatorChartVersion,
 		},
-
-		// cert-manager OCI chart
 		{
 			src: "quay.io/jetstack/charts/cert-manager:" + certManagerVersion,
 			dst: target + "/jetstack/charts/cert-manager:" + certManagerVersion,
 		},
-	}
-
-	for _, comp := range []string{"controller", "webhook", "cainjector", "acmesolver", "startupapicheck"} {
-		plan = append(plan, mirrorItem{
-			src: "quay.io/jetstack/cert-manager-" + comp + ":" + certManagerVersion,
-			dst: target + "/jetstack/cert-manager-" + comp + ":" + certManagerVersion,
-		})
-	}
-
-	// nginx-gateway-fabric chart + 2 images (control plane + data plane)
-	plan = append(plan,
-		mirrorItem{
+		{
 			src: "ghcr.io/nginx/charts/nginx-gateway-fabric:" + nginxGatewayVersion,
 			dst: target + "/nginx/charts/nginx-gateway-fabric:" + nginxGatewayVersion,
 		},
-		mirrorItem{
-			src: "ghcr.io/nginx/nginx-gateway-fabric:" + nginxGatewayVersion,
-			dst: target + "/nginx/nginx-gateway-fabric:" + nginxGatewayVersion,
-		},
-		mirrorItem{
-			src: "ghcr.io/nginx/nginx-gateway-fabric/nginx:" + nginxGatewayVersion,
-			dst: target + "/nginx/nginx-gateway-fabric/nginx:" + nginxGatewayVersion,
-		},
-	)
-
-	// kube-state-metrics chart + image. The install rewrites image.registry to the
-	// mirror host, keeping the repository path — so the image dst must match that.
-	ksmChartVersion := operator.KubeStateMetricsVersion
-	ksmImageTag := operator.KubeStateMetricsImageTag
-	plan = append(plan,
-		mirrorItem{
+		{
 			src: "ghcr.io/prometheus-community/charts/kube-state-metrics:" + ksmChartVersion,
 			dst: target + "/prometheus-community/charts/kube-state-metrics:" + ksmChartVersion,
 		},
-		mirrorItem{
-			src: "registry.k8s.io/kube-state-metrics/kube-state-metrics:" + ksmImageTag,
-			dst: target + "/kube-state-metrics/kube-state-metrics:" + ksmImageTag,
-		},
-	)
+	}
 
-	return plan
+	// pick selects the upstream chart ref (mirror) or its pushed copy under target
+	// (check); rendered image refs are upstream either way, so they translate() to
+	// the same mirror destinations.
+	pick := func(upstream, mirrored string) string {
+		if fromMirror {
+			return mirrored
+		}
+		return upstream
+	}
+	toolCharts := []struct {
+		images   func(context.Context, string, bool) ([]string, error)
+		upstream string
+		mirrored string
+	}{
+		{operator.CertManagerImages, "oci://quay.io/jetstack/charts/cert-manager", "oci://" + target + "/jetstack/charts/cert-manager"},
+		{operator.NginxGatewayImages, "oci://ghcr.io/nginx/charts/nginx-gateway-fabric", "oci://" + target + "/nginx/charts/nginx-gateway-fabric"},
+		{operator.KubeStateMetricsImages, "oci://ghcr.io/prometheus-community/charts/kube-state-metrics", "oci://" + target + "/prometheus-community/charts/kube-state-metrics"},
+	}
+	for _, tc := range toolCharts {
+		imgs, err := tc.images(ctx, pick(tc.upstream, tc.mirrored), insecure)
+		if err != nil {
+			return nil, err
+		}
+		for _, img := range imgs {
+			plan = append(plan, mirrorItem{src: img, dst: translate(img, target)})
+		}
+	}
+
+	return plan, nil
 }
 
-func buildManagedImagePlan(target string) []mirrorItem {
-	images := []string{
-		// Tier 2 — subchart operator images (default-enabled subcharts).
-		"alpine/k8s:1.35.4", // altinity-clickhouse-operator.crdHook
-		"altinity/clickhouse-operator:0.26.3",
-		"altinity/metrics-exporter:0.26.3",
-		"chrislusf/seaweedfs-operator:1.0.21",
-		"ghcr.io/cybozu-go/moco:0.36.0",
-		"quay.io/opstree/redis-operator:v0.22.2",
-
-		// Tier 3 — data-plane server images.
-		"altinity/clickhouse-server:25.8.16.10002.altinitystable",
-		"altinity/clickhouse-keeper:25.8.16.10002.altinitystable",
-		// Kafka (Bufstream): broker + etcd + aws-cli bucket-ensure init image.
-		"us-docker.pkg.dev/buf-images-1/buf/images/bufstream:0.4.15",
-		"quay.io/coreos/etcd:v3.5.31",
-		"amazon/aws-cli:2.35.10",
-		// moco injects agent/fluent-bit/mysqld_exporter sidecars; all must be mirrored.
-		"ghcr.io/cybozu-go/moco/mysql:8.4.8",
-		"ghcr.io/cybozu-go/moco-agent:0.16.0",
-		"ghcr.io/cybozu-go/moco/fluent-bit:5.0.2.1",
-		"ghcr.io/cybozu-go/moco/mysqld_exporter:0.19.0.1",
-		"quay.io/opstree/redis:v7.0.15",
-		"quay.io/opstree/redis-sentinel:v7.0.12",
-		"quay.io/opstree/redis-exporter:v1.44.0",
-		"chrislusf/seaweedfs:4.35",
+// buildManagedImagePlan returns the managed-service operator + moco-sidecar images,
+// derived by rendering the operator chart so the set matches a real install with no
+// hand-maintained list. (The data-plane server images come from the manifest.)
+// chartRepo is the render source — upstream when mirroring, the mirror's own copy
+// when checking an air-gapped registry. exclusions drops excluded types' operator
+// images (their subcharts are disabled in the render). The W&B operator-binary image
+// is skipped: buildMirrorPlan mirrors it under W&B's path convention, which
+// translate() wouldn't reproduce. insecure skips TLS for a self-signed source.
+func buildManagedImagePlan(ctx context.Context, target, chartRepo, operatorChartVersion string, exclusions managedExclusions, insecure bool) ([]mirrorItem, error) {
+	if exclusions.allOperatorsExcluded() {
+		return nil, nil
+	}
+	imgs, err := operator.OperatorChartImages(ctx, chartRepo, operatorChartVersion, exclusions.disabledSubcharts(), insecure)
+	if err != nil {
+		return nil, fmt.Errorf("derive operator chart images: %w", err)
 	}
 
-	plan := make([]mirrorItem, 0, len(images))
-	for _, img := range images {
+	plan := make([]mirrorItem, 0, len(imgs))
+	for _, img := range imgs {
+		if strings.HasPrefix(img, wandbPublicPrefix) {
+			continue
+		}
 		plan = append(plan, mirrorItem{src: img, dst: translate(img, target)})
 	}
-	return plan
+	return plan, nil
 }
 
 func mirrorOne(

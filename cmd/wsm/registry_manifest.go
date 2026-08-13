@@ -30,6 +30,8 @@ import (
 	"oras.land/oras-go/v2/registry/remote/auth"
 	"oras.land/oras-go/v2/registry/remote/credentials"
 	"oras.land/oras-go/v2/registry/remote/retry"
+
+	yamlv3 "gopkg.in/yaml.v3"
 	"sigs.k8s.io/yaml"
 )
 
@@ -54,6 +56,7 @@ const wandbPublicPrefix = "us-docker.pkg.dev/wandb-production/public/"
 func mirrorServerManifest(
 	ctx context.Context,
 	target, version, manifestSource string,
+	exclusions managedExclusions,
 	insecure, dryRun bool,
 	srcCtx, dstCtx *types.SystemContext,
 	policyCtx *signature.PolicyContext,
@@ -79,7 +82,7 @@ func mirrorServerManifest(
 		return fmt.Errorf("pull server manifest: %w", err)
 	}
 
-	refs, err := collectManifestImages(files)
+	refs, err := collectManifestImages(files, exclusions)
 	if err != nil {
 		return fmt.Errorf("enumerate manifest images: %w", err)
 	}
@@ -87,14 +90,22 @@ func mirrorServerManifest(
 		return fmt.Errorf("server manifest %s:%s referenced no images", source, version)
 	}
 
-	// Map each unique source repository to its mirror location once; the same
-	// mapping drives both image copying and the in-manifest rewrite.
-	repoRewrite := map[string]string{}
-	for _, ref := range refs {
-		repoRewrite[ref.Repository] = rewriteRepoForMirror(target, ref.Repository)
+	// Require the manifest to publish the ClickHouse Keeper image (see
+	// checkClickhouseKeeper); skipped when ClickHouse is excluded.
+	if !exclusions.excludeServer("clickhouse") {
+		if err := checkClickhouseKeeper(files); err != nil {
+			return err
+		}
 	}
 
-	fmt.Printf("  %d application image(s) referenced:\n", len(refs))
+	// One mapping from upstream ref to mirror repository drives both the image
+	// copy and the in-manifest rewrite, so they cannot drift.
+	mirrored := map[string]string{}
+	for _, ref := range refs {
+		mirrored[ref.GetImage("")] = rewriteRepoForMirror(target, upstreamRepo(ref))
+	}
+
+	fmt.Printf("  %d image(s) referenced:\n", len(refs))
 	for _, ref := range refs {
 		src := ref.GetImage("")
 		dst := mirrorImageRef(target, ref)
@@ -126,10 +137,13 @@ func mirrorServerManifest(
 
 	// Rewrite the manifest YAML files and re-push as a fresh OCI artifact.
 	rewritten := map[string][]byte{}
-	for name, data := range files {
-		out := data
-		for oldRepo, newRepo := range repoRewrite {
-			out = replaceRepo(out, oldRepo, newRepo)
+	for _, name := range sortedKeys(files) {
+		out, unknown, err := rewriteManifestImages(files[name], mirrored)
+		if err != nil {
+			return fmt.Errorf("rewrite %s: %w", name, err)
+		}
+		for _, u := range unknown {
+			fmt.Printf("  ⚠ %s references %s, which is not in the mirror plan — left unrewritten\n", name, u)
 		}
 		rewritten[name] = out
 	}
@@ -336,10 +350,11 @@ func extractManifestYAML(ctx context.Context, fetcher content.Fetcher, desc ocis
 	}
 }
 
-// collectManifestImages parses each manifest YAML file and returns the unique
-// image references across applications (including init/sidecar containers) and
-// migration jobs.
-func collectManifestImages(files map[string][]byte) ([]wmanifest.ImageRef, error) {
+// collectManifestImages returns the unique images the manifest references: the W&B
+// application/migration images plus the managed data-plane images the operator reads
+// from the infra sections. exclusions drops the data-plane images for excluded types
+// (Kafka is always included). mirror and check must pass the same exclusions.
+func collectManifestImages(files map[string][]byte, exclusions managedExclusions) ([]wmanifest.ImageRef, error) {
 	seen := map[string]struct{}{}
 	var refs []wmanifest.ImageRef
 	add := func(ref wmanifest.ImageRef) {
@@ -372,8 +387,105 @@ func collectManifestImages(files map[string][]byte) ([]wmanifest.ImageRef, error
 		for _, mig := range m.Migrations {
 			add(mig.Image)
 		}
+		addInfraImages(m, add, exclusions)
 	}
 	return refs, nil
+}
+
+// addInfraImages enumerates the managed data-plane images from the manifest's infra
+// sections. The MySQL "exporter" key is skipped: moco has no per-cluster
+// exporter-image override (v0.34.0), so the operator ignores it and deploys the
+// moco-chart exporter instead — mirroring the manifest value would push an unused
+// image. TODO: drop the skip once the manifest stops emitting it.
+func addInfraImages(m wmanifest.Manifest, add func(wmanifest.ImageRef), exclusions managedExclusions) {
+	addSection := func(cfgs map[string]wmanifest.InfraConfig, skipKeys map[string]bool) {
+		for _, inst := range sortedInstanceKeys(cfgs) {
+			images := cfgs[inst].Images
+			for _, key := range sortedImageKeys(images) {
+				if skipKeys[key] {
+					continue
+				}
+				add(images[key])
+			}
+		}
+	}
+	if !exclusions.excludeServer("object-store") {
+		addSection(m.Bucket, nil)
+	}
+	if !exclusions.excludeServer("clickhouse") {
+		addSection(m.Clickhouse, nil)
+		addSection(m.ClickhouseKeeper, nil)
+	}
+	if !exclusions.excludeServer("mysql") {
+		addSection(m.Mysql, map[string]bool{"exporter": true})
+	}
+	if !exclusions.excludeServer("redis") {
+		addSection(m.Redis, nil)
+	}
+	// Kafka is always mirrored — it cannot be excluded.
+	for _, key := range sortedImageKeys(m.Kafka.Images) {
+		add(m.Kafka.Images[key])
+	}
+}
+
+func sortedInstanceKeys(m map[string]wmanifest.InfraConfig) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedImageKeys(m map[string]wmanifest.ImageRef) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// upstreamRepo returns an image ref's full source repository, folding a split-out
+// registry host back into the path (docker.io/altinity/clickhouse-server) so both
+// the legacy embedded encoding and the newer registry/repository split map through
+// rewriteRepoForMirror identically.
+func upstreamRepo(ref wmanifest.ImageRef) string {
+	if ref.Registry != "" {
+		return ref.Registry + "/" + ref.Repository
+	}
+	return ref.Repository
+}
+
+// checkClickhouseKeeper rejects a manifest that deploys managed ClickHouse without a
+// Keeper image. Manifests before ~0.84 left clickhouseKeeper empty and the operator
+// fell back to an unexported constant wsm can't read, so wsm couldn't mirror the
+// Keeper image the operator pulls; the fix is W&B server >= 0.84.0. Sections are
+// merged across files since they may live in different ones.
+func checkClickhouseKeeper(files map[string][]byte) error {
+	hasServer, hasKeeper := false, false
+	for _, name := range sortedKeys(files) {
+		var m wmanifest.Manifest
+		if err := yaml.Unmarshal(files[name], &m); err != nil {
+			return fmt.Errorf("parse %s: %w", name, err)
+		}
+		for _, inst := range m.Clickhouse {
+			if _, ok := inst.Images["server"]; ok {
+				hasServer = true
+			}
+		}
+		for _, inst := range m.ClickhouseKeeper {
+			if _, ok := inst.Images["keeper"]; ok {
+				hasKeeper = true
+			}
+		}
+	}
+	if hasServer && !hasKeeper {
+		return fmt.Errorf("server manifest does not publish a ClickHouse Keeper image " +
+			"(clickhouseKeeper.*.images.keeper); wsm cannot derive it. Mirror with W&B " +
+			"server version >= 0.84.0, or pass --skip-managed-images if you run external ClickHouse")
+	}
+	return nil
 }
 
 // rewriteRepoForMirror maps an upstream image repository to its location in the
@@ -395,54 +507,150 @@ func rewriteRepoForMirror(target, repo string) string {
 }
 
 // mirrorImageRef returns the full mirror reference (repo + tag/digest) for an
-// upstream image reference.
+// upstream image reference. It folds any split-out registry host into the path
+// first, so split (registry+repository) and legacy (embedded) refs land at the
+// same flattened <mirror>/<path> location.
 func mirrorImageRef(target string, ref wmanifest.ImageRef) string {
 	mirrored := wmanifest.ImageRef{
-		Repository: rewriteRepoForMirror(target, ref.Repository),
+		Repository: rewriteRepoForMirror(target, upstreamRepo(ref)),
 		Tag:        ref.Tag,
 		Digest:     ref.Digest,
 	}
 	return mirrored.GetImage("")
 }
 
-// replaceRepo replaces every standalone occurrence of oldRepo with newRepo in
-// data. A match is "standalone" only when neither the preceding nor following
-// byte continues a repository path, so replacing "…/weave-trace" never touches
-// "…/weave-trace-server".
-func replaceRepo(data []byte, oldRepo, newRepo string) []byte {
-	if oldRepo == "" || oldRepo == newRepo {
-		return data
+// rewriteManifestImages rewrites one manifest file's image refs to the mirror and
+// drops the inert MySQL exporter. It edits the YAML node tree (not raw bytes) so it
+// handles both image-ref encodings and preserves comments and fields wsm's pinned
+// struct doesn't model. mirrored maps an upstream GetImage("") to its mirror
+// repository; only refs present there are rewritten (so every rewrite was pushed),
+// and the rest are returned for the caller to warn on.
+func rewriteManifestImages(data []byte, mirrored map[string]string) ([]byte, []string, error) {
+	var doc yamlv3.Node
+	if err := yamlv3.Unmarshal(data, &doc); err != nil {
+		return nil, nil, err
 	}
-	old := []byte(oldRepo)
-	var out bytes.Buffer
-	for i := 0; i < len(data); {
-		if bytes.HasPrefix(data[i:], old) {
-			beforeOK := i == 0 || !isRepoPathByte(data[i-1])
-			afterIdx := i + len(old)
-			afterOK := afterIdx == len(data) || !isRepoPathByte(data[afterIdx])
-			if beforeOK && afterOK {
-				out.WriteString(newRepo)
-				i = afterIdx
-				continue
-			}
+	if len(doc.Content) == 0 {
+		return data, nil, nil
+	}
+	root := doc.Content[0]
+	pruneMysqlExporter(root)
+
+	var unknown []string
+	changed := false
+	forEachImageRefNode(root, func(n *yamlv3.Node) {
+		ref := nodeImageRef(n)
+		if ref.Repository == "" {
+			return
 		}
-		out.WriteByte(data[i])
-		i++
+		newRepo, ok := mirrored[ref.GetImage("")]
+		if !ok {
+			unknown = append(unknown, ref.GetImage(""))
+			return
+		}
+		setNodeMirrorRepo(n, newRepo)
+		changed = true
+	})
+
+	if !changed {
+		return data, unknown, nil
 	}
-	return out.Bytes()
+	out, err := yamlv3.Marshal(&doc)
+	if err != nil {
+		return nil, unknown, err
+	}
+	return out, unknown, nil
 }
 
-// isRepoPathByte reports whether b can appear inside a repository path segment
-// (used to detect token boundaries). ':' is deliberately excluded so a tag
-// separator counts as a boundary.
-func isRepoPathByte(b byte) bool {
-	switch {
-	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9':
-		return true
-	case b == '/', b == '.', b == '-', b == '_':
-		return true
-	default:
-		return false
+// pruneMysqlExporter removes the (inert) exporter entry from every mysql instance's
+// images map so no dead upstream ref survives in the mirrored manifest. See
+// addInfraImages for why the exporter image is not mirrored.
+func pruneMysqlExporter(root *yamlv3.Node) {
+	mysql := mappingValue(root, "mysql")
+	if mysql == nil || mysql.Kind != yamlv3.MappingNode {
+		return
+	}
+	for i := 1; i < len(mysql.Content); i += 2 {
+		inst := mysql.Content[i]
+		if inst.Kind != yamlv3.MappingNode {
+			continue
+		}
+		if images := mappingValue(inst, "images"); images != nil && images.Kind == yamlv3.MappingNode {
+			removeMappingKey(images, "exporter")
+		}
+	}
+}
+
+// forEachImageRefNode calls fn on each image-ref mapping (one with a "repository"
+// key) without recursing into it.
+func forEachImageRefNode(n *yamlv3.Node, fn func(*yamlv3.Node)) {
+	switch n.Kind {
+	case yamlv3.DocumentNode:
+		for _, c := range n.Content {
+			forEachImageRefNode(c, fn)
+		}
+	case yamlv3.MappingNode:
+		if mappingValue(n, "repository") != nil {
+			fn(n)
+			return
+		}
+		for i := 1; i < len(n.Content); i += 2 {
+			forEachImageRefNode(n.Content[i], fn)
+		}
+	case yamlv3.SequenceNode:
+		for _, c := range n.Content {
+			forEachImageRefNode(c, fn)
+		}
+	}
+}
+
+func nodeImageRef(n *yamlv3.Node) wmanifest.ImageRef {
+	get := func(k string) string {
+		if v := mappingValue(n, k); v != nil {
+			return v.Value
+		}
+		return ""
+	}
+	return wmanifest.ImageRef{
+		Registry:   get("registry"),
+		Repository: get("repository"),
+		Tag:        get("tag"),
+		Digest:     get("digest"),
+	}
+}
+
+// setNodeMirrorRepo sets the repository to newRepo and removes any split-out registry
+// key, so the operator resolves the ref to exactly newRepo:<tag>.
+func setNodeMirrorRepo(n *yamlv3.Node, newRepo string) {
+	if v := mappingValue(n, "repository"); v != nil {
+		v.Value = newRepo
+		v.Tag = "!!str"
+		v.Style = 0
+	}
+	removeMappingKey(n, "registry")
+}
+
+func mappingValue(n *yamlv3.Node, key string) *yamlv3.Node {
+	if n == nil || n.Kind != yamlv3.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return n.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func removeMappingKey(n *yamlv3.Node, key string) {
+	if n == nil || n.Kind != yamlv3.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			n.Content = append(n.Content[:i], n.Content[i+2:]...)
+			return
+		}
 	}
 }
 

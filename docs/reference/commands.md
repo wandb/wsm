@@ -426,10 +426,10 @@ Scope: the operator OCI chart + binary image, and the cert-manager, nginx-gatewa
 | `--operator-chart-version` | `2.0.0-beta.3` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
 | `--wandb-version` | — | W&B server version (e.g. `0.84.0`). When set, also mirror the server manifest and every application + managed data-plane image it references, rewriting them to point at the mirror. |
 | `--exclude-operators` | — | Comma-separated managed types (`clickhouse`, `mysql`, `redis`, `object-store`) whose **operator** images to skip — for when you run your own cluster-wide operator. The managed data-plane service is still mirrored. |
-| `--exclude-managed` | — | Comma-separated managed types to skip **entirely** — operator *and* data-plane images — for when you use an external service. `kafka` cannot be excluded. |
-| `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store`. Kafka is always mirrored. |
+| `--exclude-managed` | — | Comma-separated managed types to skip **entirely** — operator *and* data-plane images — for when you use an external service. |
+| `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store`. |
 
-The two exclusion flags cover independent cases: `--exclude-operators <type>` mirrors the managed data-plane service but not W&B's operator for it (you bring your own); `--exclude-managed <type>` skips the type completely (you bring an external service). Kafka is always mirrored and is not a valid value for either.
+The two exclusion flags cover independent cases: `--exclude-operators <type>` mirrors the managed data-plane service but not W&B's operator for it (you bring your own); `--exclude-managed <type>` skips the type completely (you bring an external service).
 
 Auth is read from your Docker config (`~/.docker/config.json`). Run `docker login <mirror-host>` before this command for any registry that requires credentials.
 
@@ -451,7 +451,7 @@ wsm registry check --registry <host> --wandb-version <version> [flags]
 | `--wandb-version` | — | W&B server version that was mirrored; when set, also check the server manifest and every application image it references. |
 | `--operator-chart-version` | `2.0.0-beta.3` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
 | `--exclude-operators` | — | Managed types whose operator images to skip checking (match `--exclude-operators` you mirrored with). |
-| `--exclude-managed` | — | Managed types to skip checking entirely (match `--exclude-managed` you mirrored with). Kafka cannot be excluded. |
+| `--exclude-managed` | — | Managed types to skip checking entirely (match `--exclude-managed` you mirrored with). |
 | `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store` (match the flag you mirrored with). |
 | `--insecure` | `false` | Skip TLS verification when contacting the registry. |
 | `--fail-on-missing` | `false` | Exit non-zero if any artifact is missing. |

@@ -135,12 +135,25 @@ func registryCheckCmd() *cobra.Command {
 			// check and mirror always agree. (The old path discovered a different,
 			// v1-derived image set under different names, so it reported every
 			// freshly-mirrored image as "missing".)
+			// Render the charts FROM THE MIRROR so check needs only registry access.
 			var targets []string
-			for _, it := range buildMirrorPlan(registry, operatorChartVersion) {
+			mirrorPlan, err := buildMirrorPlan(ctx, registry, operatorChartVersion, true, insecure)
+			if err != nil {
+				return err
+			}
+			for _, it := range mirrorPlan {
 				targets = append(targets, it.dst)
 			}
 			if !skipManaged {
-				for _, it := range buildManagedImagePlan(registry) {
+				// Render the operator chart FROM THE MIRROR (its bundled subcharts
+				// travel with it), so check needs only registry access — no upstream.
+				// The rendered image refs are upstream regardless of chart source, so
+				// they translate to the same mirror destinations.
+				managed, err := buildManagedImagePlan(ctx, registry, "oci://"+registry+"/wandb/charts", operatorChartVersion, insecure)
+				if err != nil {
+					return err
+				}
+				for _, it := range managed {
 					targets = append(targets, it.dst)
 				}
 			}
@@ -157,7 +170,7 @@ func registryCheckCmd() *cobra.Command {
 				files, err := pullManifestYAMLFrom(ctx, manifestRepo, wandbVersion, insecure)
 				if err != nil {
 					manifestWarn = fmt.Sprintf("could not read server manifest %s:%s — application images not checked (%v)", manifestRepo, wandbVersion, err)
-				} else if refs, err := collectManifestImages(files); err != nil {
+				} else if refs, err := collectManifestImages(files, !skipManaged); err != nil {
 					manifestWarn = fmt.Sprintf("could not parse server manifest %s:%s — application images not checked (%v)", manifestRepo, wandbVersion, err)
 				} else {
 					for _, r := range refs {

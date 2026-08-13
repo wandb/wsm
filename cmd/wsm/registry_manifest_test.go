@@ -83,6 +83,15 @@ redis:
         tag: "v7.0.15"
 `
 
+func mustEx(t *testing.T, ops, mgd []string, skip bool) managedExclusions {
+	t.Helper()
+	ex, err := parseManagedExclusions(ops, mgd, skip)
+	if err != nil {
+		t.Fatalf("parseManagedExclusions(%v,%v,%v): %v", ops, mgd, skip, err)
+	}
+	return ex
+}
+
 func imageSet(refs []wmanifest.ImageRef) map[string]struct{} {
 	out := map[string]struct{}{}
 	for _, r := range refs {
@@ -94,7 +103,7 @@ func imageSet(refs []wmanifest.ImageRef) map[string]struct{} {
 func TestCollectManifestImages_Managed(t *testing.T) {
 	files := map[string][]byte{"manifest.yaml": []byte(testManifest)}
 
-	refs, err := collectManifestImages(files, true)
+	refs, err := collectManifestImages(files, mustEx(t, nil, nil, false))
 	if err != nil {
 		t.Fatalf("collectManifestImages: %v", err)
 	}
@@ -130,18 +139,67 @@ func TestCollectManifestImages_Managed(t *testing.T) {
 func TestCollectManifestImages_SkipManaged(t *testing.T) {
 	files := map[string][]byte{"manifest.yaml": []byte(testManifest)}
 
-	refs, err := collectManifestImages(files, false)
+	// --skip-managed-images excludes clickhouse/mysql/redis/object-store — but NOT
+	// kafka, which is always mirrored. So the set is app+migration images plus the
+	// kafka data-plane images.
+	refs, err := collectManifestImages(files, mustEx(t, nil, nil, true))
 	if err != nil {
 		t.Fatalf("collectManifestImages: %v", err)
 	}
 	got := imageSet(refs)
-	if len(got) != 3 {
-		t.Fatalf("skip-managed image count = %d, want 3 (apps+migrations only); got=%v", len(got), sortedSet(got))
+
+	wantPresent := []string{
+		"us-docker.pkg.dev/wandb-production/public/wandb/anaconda2:0.84.0",
+		"us-docker.pkg.dev/wandb-production/public/wandb/frontend-nginx:0.84.0",
+		"us-docker.pkg.dev/wandb-production/public/wandb/migrations:0.84.0",
+		"us-docker.pkg.dev/buf-images-1/buf/images/bufstream:0.4.15",
+		"quay.io/coreos/etcd:v3.5.31",
+		"amazon/aws-cli:2.35.10",
 	}
-	for img := range got {
-		if !strings.Contains(img, "/wandb/") {
-			t.Errorf("skip-managed enumerated a non-app image: %q", img)
+	for _, w := range wantPresent {
+		if _, ok := got[w]; !ok {
+			t.Errorf("expected %q present under skip-managed; got=%v", w, sortedSet(got))
 		}
+	}
+	// The excluded managed servers must be gone.
+	for _, bad := range []string{"clickhouse-server", "clickhouse-keeper", "opstree/redis", "moco/mysql", "seaweedfs"} {
+		for img := range got {
+			if strings.Contains(img, bad) {
+				t.Errorf("excluded managed image %q should be skipped", img)
+			}
+		}
+	}
+	if len(got) != len(wantPresent) {
+		t.Errorf("skip-managed image count = %d, want %d; got=%v", len(got), len(wantPresent), sortedSet(got))
+	}
+}
+
+func TestCollectManifestImages_ExcludeOneType(t *testing.T) {
+	files := map[string][]byte{"manifest.yaml": []byte(testManifest)}
+
+	// --exclude-managed mysql drops the mysql server image but keeps everything else.
+	refs, err := collectManifestImages(files, mustEx(t, nil, []string{"mysql"}, false))
+	if err != nil {
+		t.Fatalf("collectManifestImages: %v", err)
+	}
+	got := imageSet(refs)
+	if _, ok := got["ghcr.io/cybozu-go/moco/mysql:8.4.8"]; ok {
+		t.Errorf("mysql server image should be excluded")
+	}
+	for _, keep := range []string{"docker.io/altinity/clickhouse-server:25.8", "quay.io/opstree/redis:v7.0.15", "quay.io/coreos/etcd:v3.5.31"} {
+		if _, ok := got[keep]; !ok {
+			t.Errorf("non-excluded image %q should remain; got=%v", keep, sortedSet(got))
+		}
+	}
+
+	// --exclude-operators mysql is an operator-axis exclusion: it must NOT drop the
+	// mysql server image (still a managed service).
+	refs2, err := collectManifestImages(files, mustEx(t, []string{"mysql"}, nil, false))
+	if err != nil {
+		t.Fatalf("collectManifestImages: %v", err)
+	}
+	if _, ok := imageSet(refs2)["ghcr.io/cybozu-go/moco/mysql:8.4.8"]; !ok {
+		t.Errorf("--exclude-operators mysql must not drop the mysql server image")
 	}
 }
 
@@ -149,7 +207,7 @@ func TestRewriteManifestImages(t *testing.T) {
 	const target = "mirror.test"
 	files := map[string][]byte{"manifest.yaml": []byte(testManifest)}
 
-	refs, err := collectManifestImages(files, true)
+	refs, err := collectManifestImages(files, mustEx(t, nil, nil, false))
 	if err != nil {
 		t.Fatalf("collectManifestImages: %v", err)
 	}
@@ -173,14 +231,14 @@ func TestRewriteManifestImages(t *testing.T) {
 			t.Errorf("rewritten manifest still references upstream host %q:\n%s", host, out)
 		}
 	}
-	// The inert mysql exporter key must be dropped entirely.
-	if strings.Contains(string(out), "prom/mysqld-exporter") || strings.Contains(string(out), "exporter") {
+	// The inert mysql exporter must be dropped entirely.
+	if strings.Contains(string(out), "prom/mysqld-exporter") {
 		t.Errorf("mysql exporter should be dropped from rewritten manifest:\n%s", out)
 	}
 
 	// Re-parse via the operator's own decoder and confirm every image now resolves
 	// to a mirror ref.
-	refs2, err := collectManifestImages(map[string][]byte{"manifest.yaml": out}, true)
+	refs2, err := collectManifestImages(map[string][]byte{"manifest.yaml": out}, mustEx(t, nil, nil, false))
 	if err != nil {
 		t.Fatalf("re-parse rewritten manifest: %v", err)
 	}

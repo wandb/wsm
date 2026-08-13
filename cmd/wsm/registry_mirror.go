@@ -25,6 +25,8 @@ func registryMirrorCmd() *cobra.Command {
 		operatorChartVersion string
 		wandbVersion         string
 		skipManaged          bool
+		excludeOperators     []string
+		excludeManaged       []string
 		manifestSource       string
 	)
 
@@ -61,6 +63,11 @@ external databases).`,
 			}
 			targetRegistry = strings.TrimRight(targetRegistry, "/")
 
+			ex, err := parseManagedExclusions(excludeOperators, excludeManaged, skipManaged)
+			if err != nil {
+				return err
+			}
+
 			ctx := context.Background()
 
 			// Render the charts from upstream (verified TLS) to learn the images to
@@ -69,23 +76,20 @@ external databases).`,
 			if err != nil {
 				return err
 			}
-			if !skipManaged {
-				// Managed MySQL/Redis/Kafka/ClickHouse/object-store services. The
-				// operator + sidecar images are derived by rendering the operator
-				// chart; the data-plane server images come from the manifest below.
-				// These pull from docker.io/quay.io/ghcr.io and are pushed to the
-				// mirror. At install they're retargeted to the mirror by Helm image
-				// values set from --mirror-registry (see pkg/operator.DeployOperator),
-				// or on a plain-HTTP local install by the node's containerd registry
-				// mirrors (wsm cluster create --insecure-registry-host).
-				// Render the operator chart from upstream (always verified TLS) to
-				// learn the managed images to pull and push.
-				managed, err := buildManagedImagePlan(ctx, targetRegistry, operator.OperatorChartRepo, operatorChartVersion, false)
-				if err != nil {
-					return err
-				}
-				items = append(items, managed...)
+			// Managed MySQL/Redis/Kafka/ClickHouse/object-store services. The operator
+			// + sidecar images are derived by rendering the operator chart (from
+			// upstream, verified TLS); the data-plane server images come from the
+			// manifest below. Excluded types are dropped per --exclude-operators /
+			// --exclude-managed. These pull from docker.io/quay.io/ghcr.io and are
+			// pushed to the mirror. At install they're retargeted to the mirror by Helm
+			// image values set from --mirror-registry (see pkg/operator.DeployOperator),
+			// or on a plain-HTTP local install by the node's containerd registry mirrors
+			// (wsm cluster create --insecure-registry-host).
+			managed, err := buildManagedImagePlan(ctx, targetRegistry, operator.OperatorChartRepo, operatorChartVersion, ex, false)
+			if err != nil {
+				return err
 			}
+			items = append(items, managed...)
 
 			fmt.Printf("Mirroring %d artifacts to %s\n\n", len(items), targetRegistry)
 
@@ -129,7 +133,7 @@ external databases).`,
 			// (weave-trace, weave-python, local, console, migrations, …) are only
 			// mirrored when a version is given, since they're version-specific.
 			if wandbVersion != "" {
-				if err := mirrorServerManifest(ctx, targetRegistry, wandbVersion, manifestSource, !skipManaged, insecure, dryRun, srcCtx, dstCtx, policyCtx); err != nil {
+				if err := mirrorServerManifest(ctx, targetRegistry, wandbVersion, manifestSource, ex, insecure, dryRun, srcCtx, dstCtx, policyCtx); err != nil {
 					return err
 				}
 			} else {
@@ -145,7 +149,9 @@ external databases).`,
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print the source → target mirroring plan without pushing")
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.3", "Operator chart version; also used as the tag for the operator binary image")
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version (e.g. 0.81.0); when set, also mirror the server manifest and every application image it references, rewriting them to point at the mirror")
-	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Don't mirror the managed-service operator + data-plane images (ClickHouse/Kafka/MySQL/Redis/object-store). Use when you run W&B against external databases.")
+	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Alias for --exclude-managed clickhouse,mysql,redis,object-store. Kafka is always mirrored.")
+	cmd.Flags().StringSliceVar(&excludeOperators, "exclude-operators", nil, "Managed types whose OPERATOR images to skip (you run your own cluster-wide operator), comma-separated: clickhouse,mysql,redis,object-store. The managed data-plane service is still mirrored.")
+	cmd.Flags().StringSliceVar(&excludeManaged, "exclude-managed", nil, "Managed types to skip ENTIRELY — operator AND data-plane images (you use an external service), comma-separated: clickhouse,mysql,redis,object-store. Kafka cannot be excluded.")
 	// TESTING ONLY, hidden from --help: pull the server manifest from a non-upstream
 	// OCI repo (e.g. a local Tilt registry serving unreleased wandb/core manifest
 	// changes) instead of us-docker.pkg.dev. Not a supported customer workflow.
@@ -246,10 +252,15 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 // in the server manifest), which translate() would not reproduce.
 // chartRepo is the OCI repo base the operator chart is rendered from — upstream
 // (operator.OperatorChartRepo) when mirroring, or the mirror's own copy
-// ("oci://<host>/wandb/charts") when checking an air-gapped registry. insecure
-// skips TLS verification for a self-signed mirror source.
-func buildManagedImagePlan(ctx context.Context, target, chartRepo, operatorChartVersion string, insecure bool) ([]mirrorItem, error) {
-	imgs, err := operator.OperatorChartImages(ctx, chartRepo, operatorChartVersion, insecure)
+// ("oci://<host>/wandb/charts") when checking an air-gapped registry. ex drops the
+// operator images for excluded managed types (the operator chart is rendered with
+// those subcharts disabled). insecure skips TLS verification for a self-signed
+// mirror source.
+func buildManagedImagePlan(ctx context.Context, target, chartRepo, operatorChartVersion string, ex managedExclusions, insecure bool) ([]mirrorItem, error) {
+	if ex.allOperatorsExcluded() {
+		return nil, nil
+	}
+	imgs, err := operator.OperatorChartImages(ctx, chartRepo, operatorChartVersion, ex.disabledSubcharts(), insecure)
 	if err != nil {
 		return nil, fmt.Errorf("derive operator chart images: %w", err)
 	}

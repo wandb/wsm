@@ -56,7 +56,8 @@ const wandbPublicPrefix = "us-docker.pkg.dev/wandb-production/public/"
 func mirrorServerManifest(
 	ctx context.Context,
 	target, version, manifestSource string,
-	includeManaged, insecure, dryRun bool,
+	ex managedExclusions,
+	insecure, dryRun bool,
 	srcCtx, dstCtx *types.SystemContext,
 	policyCtx *signature.PolicyContext,
 ) error {
@@ -81,7 +82,7 @@ func mirrorServerManifest(
 		return fmt.Errorf("pull server manifest: %w", err)
 	}
 
-	refs, err := collectManifestImages(files, includeManaged)
+	refs, err := collectManifestImages(files, ex)
 	if err != nil {
 		return fmt.Errorf("enumerate manifest images: %w", err)
 	}
@@ -89,11 +90,11 @@ func mirrorServerManifest(
 		return fmt.Errorf("server manifest %s:%s referenced no images", source, version)
 	}
 
-	// When mirroring the managed data-plane images, require the manifest to
-	// publish the ones the operator would otherwise resolve from an internal
-	// constant wsm cannot see (ClickHouse Keeper). Fail early with a clear
-	// message rather than producing an incomplete mirror.
-	if includeManaged {
+	// When mirroring the managed ClickHouse data-plane images, require the manifest
+	// to publish the Keeper image the operator would otherwise resolve from an
+	// internal constant wsm cannot see. Fail early with a clear message rather than
+	// producing an incomplete mirror. Skipped when ClickHouse is excluded.
+	if !ex.excludeServer("clickhouse") {
 		if err := checkClickhouseKeeper(files); err != nil {
 			return err
 		}
@@ -354,12 +355,12 @@ func extractManifestYAML(ctx context.Context, fetcher content.Fetcher, desc ocis
 
 // collectManifestImages parses each manifest YAML file and returns the unique
 // image references across applications (including init/sidecar containers) and
-// migration jobs. When includeManaged is true it also enumerates the managed
-// data-plane images the operator reads from the manifest's infra sections
-// (object store, ClickHouse, MySQL, Redis, Kafka) — the tier-3 images wsm used
-// to hard-code. includeManaged should track --skip-managed-images so mirror and
-// check agree on the set.
-func collectManifestImages(files map[string][]byte, includeManaged bool) ([]wmanifest.ImageRef, error) {
+// migration jobs, plus the managed data-plane images the operator reads from the
+// manifest's infra sections (object store, ClickHouse, MySQL, Redis, Kafka) — the
+// tier-3 images wsm used to hard-code. ex drops the data-plane images for excluded
+// managed types (Kafka is always included; it cannot be excluded). mirror and check
+// must pass the same ex so they agree on the set.
+func collectManifestImages(files map[string][]byte, ex managedExclusions) ([]wmanifest.ImageRef, error) {
 	seen := map[string]struct{}{}
 	var refs []wmanifest.ImageRef
 	add := func(ref wmanifest.ImageRef) {
@@ -392,9 +393,7 @@ func collectManifestImages(files map[string][]byte, includeManaged bool) ([]wman
 		for _, mig := range m.Migrations {
 			add(mig.Image)
 		}
-		if includeManaged {
-			addInfraImages(m, add)
-		}
+		addInfraImages(m, add, ex)
 	}
 	return refs, nil
 }
@@ -408,23 +407,32 @@ func collectManifestImages(files map[string][]byte, includeManaged bool) ([]wman
 // emitting mysql.*.images.exporter. (The moco sidecars — agent/fluent-bit/the
 // real exporter — and every managed *operator* image are chart-derived, not
 // manifest-derived, so they are handled separately.)
-func addInfraImages(m wmanifest.Manifest, add func(wmanifest.ImageRef)) {
-	addSection := func(cfgs map[string]wmanifest.InfraConfig, skip map[string]bool) {
+func addInfraImages(m wmanifest.Manifest, add func(wmanifest.ImageRef), ex managedExclusions) {
+	addSection := func(cfgs map[string]wmanifest.InfraConfig, skipKeys map[string]bool) {
 		for _, inst := range sortedInstanceKeys(cfgs) {
 			images := cfgs[inst].Images
 			for _, key := range sortedImageKeys(images) {
-				if skip[key] {
+				if skipKeys[key] {
 					continue
 				}
 				add(images[key])
 			}
 		}
 	}
-	addSection(m.Bucket, nil)
-	addSection(m.Clickhouse, nil)
-	addSection(m.ClickhouseKeeper, nil)
-	addSection(m.Mysql, map[string]bool{"exporter": true})
-	addSection(m.Redis, nil)
+	if !ex.excludeServer("object-store") {
+		addSection(m.Bucket, nil)
+	}
+	if !ex.excludeServer("clickhouse") {
+		addSection(m.Clickhouse, nil)
+		addSection(m.ClickhouseKeeper, nil)
+	}
+	if !ex.excludeServer("mysql") {
+		addSection(m.Mysql, map[string]bool{"exporter": true})
+	}
+	if !ex.excludeServer("redis") {
+		addSection(m.Redis, nil)
+	}
+	// Kafka is always mirrored — it cannot be excluded.
 	for _, key := range sortedImageKeys(m.Kafka.Images) {
 		add(m.Kafka.Images[key])
 	}

@@ -111,11 +111,17 @@ func RenderChartImages(ctx context.Context, chartRef, version string, values map
 // binary, the bundled managed-service operator images (moco/redis/seaweedfs/
 // altinity), and the moco sidecars injected via controller args. Rendered with the
 // same non-mirror values DeployOperator installs with, so the set matches a real
-// install. insecure is passed through for a self-signed mirror source.
-func OperatorChartImages(ctx context.Context, chartRepo, chartVersion string, insecure bool) ([]string, error) {
+// install. disabledSubcharts are managed-service operator subcharts to turn off
+// (via <name>.enabled=false) so their operator images — and, for moco, the injected
+// sidecars — are not derived; pass the subcharts for types the caller excludes.
+// insecure is passed through for a self-signed mirror source.
+func OperatorChartImages(ctx context.Context, chartRepo, chartVersion string, disabledSubcharts []string, insecure bool) ([]string, error) {
 	values := map[string]any{
 		"wandb":          map[string]any{"install": false},
 		"wandb-operator": map[string]any{"image": map[string]any{"pullPolicy": "Always"}},
+	}
+	for _, sc := range disabledSubcharts {
+		values[sc] = map[string]any{"enabled": false}
 	}
 	return RenderChartImages(ctx, chartRepo+"/operator", chartVersion, values, insecure)
 }

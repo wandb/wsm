@@ -76,7 +76,7 @@ spec:
 // Network-dependent: renders the real operator chart. Skips if the registry is
 // unreachable so it never breaks offline/CI runs.
 func TestOperatorChartImages_Real(t *testing.T) {
-	imgs, err := OperatorChartImages(context.Background(), OperatorChartRepo, "2.0.0-beta.3", false)
+	imgs, err := OperatorChartImages(context.Background(), OperatorChartRepo, "2.0.0-beta.3", nil, false)
 	if err != nil {
 		t.Skipf("cannot reach operator chart registry: %v", err)
 	}

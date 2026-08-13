@@ -223,9 +223,20 @@ v0.34.0**:
   renders the tool charts from the mirror (air-gapped). Only the OCI **chart artifacts**
   and the operator binary remain fixed refs (version-pinned, not image lists). Covered by
   `pkg/operator/render_test.go`.
-- **Stage 3 — flags + consistency.** Add the §6 flags to mirror + check. Make mirror /
-  check / install call one derivation path. Add golden-image CI tests (see untracked
-  `pkg/operator/operator_test.go`) so drift fails CI, not customers.
+- **Stage 3 — scoping flags. ✅ DONE.** `cmd/wsm/registry_managed.go` adds the
+  `managedExclusions` model (two axes: `--exclude-operators` = operator images only;
+  `--exclude-managed` = operator + server images) with `parseManagedExclusions`
+  validating values and rejecting `kafka`/unknowns. `--skip-managed-images` is now an
+  alias for `--exclude-managed clickhouse,mysql,redis,object-store`. Exclusions thread
+  through the derivation: excluded operators disable their subchart in the operator-chart
+  render (dropping the operator image and, for moco, its sidecars); excluded managed
+  types skip their manifest infra sections; the keeper check is skipped when ClickHouse
+  is excluded. Flags added to both `mirror` and `check`. Verified end-to-end via dry-run
+  (`--exclude-managed mysql` drops moco+sidecars; `--exclude-operators clickhouse` drops
+  the altinity operator but keeps the manifest's clickhouse-server/keeper; `--exclude-*
+  kafka` errors). Tested in `registry_managed_test.go` + `registry_manifest_test.go`.
+  Kafka is always mirrored. Follow-up (not done): mirror matching `--set <subchart>.enabled=false`
+  toggles on `deploy-v2 operator` so a customer's install doesn't fight their own operator.
 - **Operator repo (separate PR):** raise the mysqld_exporter constraint (§7) and, if
   agreed, the keeper-const export.
 

@@ -101,6 +101,8 @@ func registryCheckCmd() *cobra.Command {
 		operatorChartVersion string
 		wandbVersion         string
 		skipManaged          bool
+		excludeOperators     []string
+		excludeManaged       []string
 	)
 
 	cmd := &cobra.Command{
@@ -131,6 +133,11 @@ func registryCheckCmd() *cobra.Command {
 			registry = strings.TrimRight(registry, "/")
 			ctx := context.Background()
 
+			ex, err := parseManagedExclusions(excludeOperators, excludeManaged, skipManaged)
+			if err != nil {
+				return err
+			}
+
 			// Build the same destination set 'wsm registry mirror' pushes, so
 			// check and mirror always agree. (The old path discovered a different,
 			// v1-derived image set under different names, so it reported every
@@ -144,18 +151,16 @@ func registryCheckCmd() *cobra.Command {
 			for _, it := range mirrorPlan {
 				targets = append(targets, it.dst)
 			}
-			if !skipManaged {
-				// Render the operator chart FROM THE MIRROR (its bundled subcharts
-				// travel with it), so check needs only registry access — no upstream.
-				// The rendered image refs are upstream regardless of chart source, so
-				// they translate to the same mirror destinations.
-				managed, err := buildManagedImagePlan(ctx, registry, "oci://"+registry+"/wandb/charts", operatorChartVersion, insecure)
-				if err != nil {
-					return err
-				}
-				for _, it := range managed {
-					targets = append(targets, it.dst)
-				}
+			// Render the operator chart FROM THE MIRROR (its bundled subcharts travel
+			// with it), so check needs only registry access — no upstream. The rendered
+			// image refs are upstream regardless of chart source, so they translate to
+			// the same mirror destinations. Excluded operators are dropped per ex.
+			managed, err := buildManagedImagePlan(ctx, registry, "oci://"+registry+"/wandb/charts", operatorChartVersion, ex, insecure)
+			if err != nil {
+				return err
+			}
+			for _, it := range managed {
+				targets = append(targets, it.dst)
 			}
 
 			// The application images are listed inside the mirrored server
@@ -170,7 +175,7 @@ func registryCheckCmd() *cobra.Command {
 				files, err := pullManifestYAMLFrom(ctx, manifestRepo, wandbVersion, insecure)
 				if err != nil {
 					manifestWarn = fmt.Sprintf("could not read server manifest %s:%s — application images not checked (%v)", manifestRepo, wandbVersion, err)
-				} else if refs, err := collectManifestImages(files, !skipManaged); err != nil {
+				} else if refs, err := collectManifestImages(files, ex); err != nil {
 					manifestWarn = fmt.Sprintf("could not parse server manifest %s:%s — application images not checked (%v)", manifestRepo, wandbVersion, err)
 				} else {
 					for _, r := range refs {
@@ -225,7 +230,9 @@ func registryCheckCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&failOnMissing, "fail-on-missing", false, "Exit non-zero if any artifact is missing")
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.3", "Operator chart version that was mirrored (must match 'wsm registry mirror')")
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version that was mirrored; when set, also check the server manifest and every application image it references")
-	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Don't check the managed-service operator + data-plane images (match the flag you mirrored with)")
+	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Alias for --exclude-managed clickhouse,mysql,redis,object-store (match the flag you mirrored with)")
+	cmd.Flags().StringSliceVar(&excludeOperators, "exclude-operators", nil, "Managed types whose operator images to skip checking (match --exclude-operators you mirrored with)")
+	cmd.Flags().StringSliceVar(&excludeManaged, "exclude-managed", nil, "Managed types to skip checking entirely (match --exclude-managed you mirrored with). Kafka cannot be excluded.")
 	return cmd
 }
 

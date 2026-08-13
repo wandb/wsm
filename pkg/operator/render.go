@@ -155,7 +155,7 @@ func extractImages(manifests string) []string {
 		}
 		var node yamlv3.Node
 		if err := yamlv3.Unmarshal([]byte(doc), &node); err != nil {
-			continue // skip anything that isn't valid YAML
+			continue
 		}
 		walkImages(&node, add)
 	}
@@ -170,7 +170,7 @@ func walkImages(n *yamlv3.Node, add func(string)) {
 			walkImages(c, add)
 		}
 	case yamlv3.MappingNode:
-		// {registry?, repository, tag?/digest?} image-ref map (e.g. a CR's image).
+		// An image-ref map (e.g. a CR's image: {repository, tag}).
 		if repo := scalarChild(n, "repository"); repo != "" {
 			add(joinImageRef(scalarChild(n, "registry"), repo, scalarChild(n, "tag"), scalarChild(n, "digest")))
 		}
@@ -213,7 +213,6 @@ func addArgImages(seq *yamlv3.Node, add func(string)) {
 	}
 }
 
-// scalarChild returns the scalar value of key in a mapping node, or "".
 func scalarChild(n *yamlv3.Node, key string) string {
 	if n == nil || n.Kind != yamlv3.MappingNode {
 		return ""

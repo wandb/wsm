@@ -41,8 +41,7 @@ type managedExclusions struct {
 	managed   map[string]bool
 }
 
-// excludeOperator reports whether the type's operator images should be skipped
-// (either axis excludes the operator).
+// excludeOperator is true when either axis excludes the type's operator.
 func (e managedExclusions) excludeOperator(t string) bool {
 	return e.operators[t] || e.managed[t]
 }

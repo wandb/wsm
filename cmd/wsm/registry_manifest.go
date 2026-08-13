@@ -524,8 +524,7 @@ func mirrorImageRef(target string, ref wmanifest.ImageRef) string {
 // handles both image-ref encodings and preserves comments and fields wsm's pinned
 // struct doesn't model. mirrored maps an upstream GetImage("") to its mirror
 // repository; only refs present there are rewritten (so every rewrite was pushed),
-// and the rest are returned for the caller to warn on. Unchanged input is returned
-// as-is.
+// and the rest are returned for the caller to warn on.
 func rewriteManifestImages(data []byte, mirrored map[string]string) ([]byte, []string, error) {
 	var doc yamlv3.Node
 	if err := yamlv3.Unmarshal(data, &doc); err != nil {
@@ -582,8 +581,8 @@ func pruneMysqlExporter(root *yamlv3.Node) {
 	}
 }
 
-// forEachImageRefNode invokes fn on every mapping node that looks like an image
-// reference (has a "repository" key). It does not recurse into a matched node.
+// forEachImageRefNode calls fn on each image-ref mapping (one with a "repository"
+// key) without recursing into it.
 func forEachImageRefNode(n *yamlv3.Node, fn func(*yamlv3.Node)) {
 	switch n.Kind {
 	case yamlv3.DocumentNode:
@@ -605,7 +604,6 @@ func forEachImageRefNode(n *yamlv3.Node, fn func(*yamlv3.Node)) {
 	}
 }
 
-// nodeImageRef reads an image-ref mapping node into an ImageRef.
 func nodeImageRef(n *yamlv3.Node) wmanifest.ImageRef {
 	get := func(k string) string {
 		if v := mappingValue(n, k); v != nil {
@@ -621,9 +619,8 @@ func nodeImageRef(n *yamlv3.Node) wmanifest.ImageRef {
 	}
 }
 
-// setNodeMirrorRepo points an image-ref node at newRepo (already the full flattened
-// mirror repository) and drops any split-out registry key, so the operator resolves
-// it to exactly newRepo:<tag>.
+// setNodeMirrorRepo sets the repository to newRepo and removes any split-out registry
+// key, so the operator resolves the ref to exactly newRepo:<tag>.
 func setNodeMirrorRepo(n *yamlv3.Node, newRepo string) {
 	if v := mappingValue(n, "repository"); v != nil {
 		v.Value = newRepo
@@ -633,7 +630,6 @@ func setNodeMirrorRepo(n *yamlv3.Node, newRepo string) {
 	removeMappingKey(n, "registry")
 }
 
-// mappingValue returns the value node for key in a mapping node, or nil.
 func mappingValue(n *yamlv3.Node, key string) *yamlv3.Node {
 	if n == nil || n.Kind != yamlv3.MappingNode {
 		return nil
@@ -646,7 +642,6 @@ func mappingValue(n *yamlv3.Node, key string) *yamlv3.Node {
 	return nil
 }
 
-// removeMappingKey deletes key (and its value) from a mapping node if present.
 func removeMappingKey(n *yamlv3.Node, key string) {
 	if n == nil || n.Kind != yamlv3.MappingNode {
 		return

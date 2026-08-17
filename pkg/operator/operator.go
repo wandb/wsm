@@ -14,6 +14,7 @@ import (
 	appsv1 "github.com/wandb/operator/api/v1"
 	v2 "github.com/wandb/operator/api/v2"
 	"github.com/wandb/wsm/pkg/kubectl"
+	"github.com/wandb/wsm/pkg/license"
 	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/loader"
@@ -1247,6 +1248,22 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases, overrides []CROv
 	}
 
 	return nil
+}
+
+// UpdateLicense sets spec.wandb.license on the CR
+func UpdateLicense(ctx context.Context, name, namespace, licenseIn string) error {
+	licenseIn = strings.TrimSpace(licenseIn)
+	if licenseIn != "" {
+		if err := license.Validate(licenseIn); err != nil {
+			return err
+		}
+	}
+	cr, err := GetCR(ctx, name, namespace)
+	if err != nil {
+		return err
+	}
+	cr.Spec.Wandb.License = licenseIn
+	return ApplyCR(ctx, cr, nil)
 }
 
 // CROverride is a parsed `--cr-set path=value` entry applied to the CR just

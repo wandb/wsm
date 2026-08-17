@@ -466,6 +466,50 @@ wsm registry values --registry <host> [-o overrides.yaml]
 
 ---
 
+## `wsm license`
+
+Inspect and update the W&B license on an instance. The license lives at `spec.wandb.license` on the CR as a plaintext JWT.
+
+### `wsm license info`
+
+Decodes the license and prints its claims (expiry, max teams / users / view-only users, flags, deployment ID, and the `deploy.wandb.ai` link). Only claims present in the token are shown. Prints `no license set` when the field is empty.
+
+```bash
+wsm license info --context <ctx> [--json]
+```
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | — | **Required.** Name of the kubeconfig context to use |
+| `--wandb-name` | `wandb` | Name of the W&B instance |
+| `--wandb-namespace` | `wandb` | Namespace of the W&B instance |
+| `--json` | `false` | Print the decoded claims as JSON |
+
+### `wsm license set`
+
+Sets or clears the license on a live instance via a read-modify-write of `spec.wandb.license`. Refuses instances wsm did not deploy unless `--force`. At deploy time you can equivalently pass `--license` / `--license-file`, or the universal `--cr-set spec.wandb.license=<jwt>`.
+
+```bash
+wsm license set --context <ctx> (--license <jwt> | --license-file <path> | --clear)
+```
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | — | **Required.** Name of the kubeconfig context to use |
+| `--wandb-name` | `wandb` | Name of the W&B instance |
+| `--wandb-namespace` | `wandb` | Namespace of the W&B instance |
+| `--license` | — | W&B license string |
+| `--license-file` | — | Path to a file containing the W&B license |
+| `--clear` | `false` | Clear the license (set to empty) |
+| `--force` | `false` | Modify an install even without a wsm deployment marker |
+| `--dry-run` | `false` | Show what would change without applying |
+
+---
+
 ## Legacy Commands
 
 ### `wsm deploy` (Legacy v1 Operator)

@@ -272,7 +272,7 @@ Even with everything mirrored, a few things default to an online source. Each ha
 - **Registry pull credentials** — for an auth'd registry, `docker login` + `helm registry login` for `wsm`, and create an `imagePullSecret` for the operator + W&B namespaces so in-cluster pulls and the manifest fetch authenticate.
 
 **After the deploy completes**
-- **License** — apply your W&B license (`--license` / `--license-file` at deploy, or edit the CR's `spec.wandb.license` after). Without it the instance runs in a limited state.
+- **License** — apply your W&B license (`--license` / `--license-file` at deploy, or `wsm license set` after). Inspect the active license with `wsm license info`. Without it the instance runs in a limited state.
 - **External DNS + TLS for the W&B endpoint** — point your hostname at the gateway/ingress and provide the *serving* cert (this is the user-facing W&B URL — separate from the registry CA). Set it via `--wandb-hostname` and the networking/TLS flags.
 - **Verify readiness** — `kubectl get wandb -n <ns>` should report the managed services and app ready; `kubectl get pods -n <ns>` should be all Running.
 - **(If observability enabled)** mirror the telemetry stack images by hand — `wsm registry mirror` does not yet include them.

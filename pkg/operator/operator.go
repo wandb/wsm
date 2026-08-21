@@ -83,6 +83,20 @@ var (
 	apiDiscoveryRetryTimeout  = 2 * time.Minute
 )
 
+// ParseImagePullPolicy validates the operator image pull policy and returns it as a corev1.PullPolicy
+func ParseImagePullPolicy(policy string) (corev1.PullPolicy, error) {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case strings.ToLower(string(corev1.PullAlways)):
+		return corev1.PullAlways, nil
+	case strings.ToLower(string(corev1.PullIfNotPresent)):
+		return corev1.PullIfNotPresent, nil
+	case strings.ToLower(string(corev1.PullNever)):
+		return corev1.PullNever, nil
+	default:
+		return "", fmt.Errorf("invalid image pull policy %q: must be Always, IfNotPresent, or Never", policy)
+	}
+}
+
 // setNested walks (and creates) a chain of map[string]any keys, then sets the
 // leaf value at `path[len(path)-1]` to `value`. Mirrors apimachinery's nested
 // helpers but works on `map[string]any` (Helm release values) instead of
@@ -771,6 +785,8 @@ func DeployOperator(
 	telemetry TelemetryConfig,
 	wandbNamespace string,
 	openshift bool,
+	installTimeout time.Duration,
+	imagePullPolicy corev1.PullPolicy,
 ) error {
 	const chartName = "operator"
 	const releaseName = "wandb-operator"
@@ -807,8 +823,10 @@ func DeployOperator(
 		return fmt.Errorf("failed to check if release exists: %w", err)
 	}
 
-	operatorImage := map[string]interface{}{
-		"pullPolicy": "Always",
+	operatorImage := map[string]interface{}{}
+	// IfNotPresent is the chart default; leave it out of the release values.
+	if imagePullPolicy != corev1.PullIfNotPresent {
+		operatorImage["pullPolicy"] = string(imagePullPolicy)
 	}
 	if mirror != nil {
 		operatorImage["repository"] = mirror.Host + "/wandb/operator"
@@ -905,6 +923,9 @@ func DeployOperator(
 		upgradeClient.Version = chartVersion
 		upgradeClient.WaitStrategy = "hookOnly"
 		upgradeClient.ForceConflicts = true
+		if installTimeout > 0 {
+			upgradeClient.Timeout = installTimeout
+		}
 
 		// Get the chart
 		cp, err := upgradeClient.LocateChart(chartRef, settings)
@@ -930,6 +951,9 @@ func DeployOperator(
 		installClient.ReleaseName = releaseName
 		installClient.Version = chartVersion
 		installClient.WaitStrategy = "hookOnly"
+		if installTimeout > 0 {
+			installClient.Timeout = installTimeout
+		}
 
 		// Get the chart
 		cp, err := installClient.LocateChart(chartRef, settings)

@@ -403,6 +403,8 @@ func operatorDeployCmd() *cobra.Command {
 	var kindNodeImage string
 	var operatorChartVersion string
 	var operatorNamespace string
+	var operatorInstallTimeout time.Duration
+	var operatorImagePullPolicy string
 	var includeCR bool
 	var gatewayCRDURL string
 	var skipGatewayCRDs bool
@@ -442,6 +444,13 @@ func operatorDeployCmd() *cobra.Command {
 			}
 			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), f.gatewayClass, f.ingressClass); err != nil {
 				return err
+			}
+			operatorPullPolicy, err := operator.ParseImagePullPolicy(operatorImagePullPolicy)
+			if err != nil {
+				return fmt.Errorf("invalid --operator-image-pull-policy %q (%w)", operatorImagePullPolicy, err)
+			}
+			if operatorInstallTimeout < 0 {
+				return fmt.Errorf("--operator-install-timeout must not be negative: %s", operatorInstallTimeout)
 			}
 			crOverrides, err := operator.ParseCROverrides(f.crSet)
 			if err != nil {
@@ -485,6 +494,8 @@ func operatorDeployCmd() *cobra.Command {
 				workers,
 				operatorChartVersion,
 				operatorNamespace,
+				operatorInstallTimeout,
+				operatorPullPolicy,
 				f.createCA,
 				createAwsStorageClass,
 				createAwsIngressClass,
@@ -529,6 +540,8 @@ func operatorDeployCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.3", "Operator Chart version (e.g., v2.0.0)")
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
+	cmd.Flags().DurationVar(&operatorInstallTimeout, "operator-install-timeout", 0, "Helm timeout in seconds, minutes, or hours (for example 30s, 5m, or 1h; 0 uses Helm's default)")
+	cmd.Flags().StringVar(&operatorImagePullPolicy, "operator-image-pull-policy", string(corev1.PullIfNotPresent), "Operator image pull policy (Always, IfNotPresent, or Never; case-insensitive)")
 	cmd.Flags().StringVar(&installCertManagerMode, "install-cert-manager", certManagerInstallModeAuto, "Cert-manager install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
 	cmd.Flags().StringVar(&installNginxGatewayMode, "install-nginx-gateway", nginxGatewayInstallModeAuto, "Nginx-gateway-fabric install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
 	cmd.Flags().StringVar(&installKubeStateMetricsMode, "install-kube-state-metrics", operator.KubeStateMetricsInstallModeFalse, "kube-state-metrics install mode, applied only when --observability-mode=full: false (default; wsm won't install or remove KSM), auto (detect and reuse existing, else install), true (force install)")
@@ -800,6 +813,8 @@ func performDeploy(
 	workers int,
 	operatorChartVersion string,
 	operatorNamespace string,
+	operatorInstallTimeout time.Duration,
+	operatorPullPolicy corev1.PullPolicy,
 	createCA bool,
 	createAwsStorageClass bool,
 	createAwsIngressClass bool,
@@ -815,6 +830,7 @@ func performDeploy(
 	crOverrides []operator.CROverride,
 ) error {
 	ctx := context.Background()
+
 	installNginxGatewayMode = strings.ToLower(strings.TrimSpace(installNginxGatewayMode))
 	installCertManagerMode = strings.ToLower(strings.TrimSpace(installCertManagerMode))
 	installKubeStateMetricsMode = strings.ToLower(strings.TrimSpace(installKubeStateMetricsMode))
@@ -1014,7 +1030,7 @@ func performDeploy(
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
 	start := time.Now()
 
-	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetry, wandbNamespace, openshift); err != nil {
+	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetry, wandbNamespace, openshift, operatorInstallTimeout, operatorPullPolicy); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -1029,7 +1045,11 @@ func performDeploy(
 		}
 	}
 
-	if err := operator.WaitForOperator(ctx, operatorNamespace, 5*time.Minute); err != nil {
+	operatorReadinessTimeout := 5 * time.Minute
+	if operatorInstallTimeout > 0 {
+		operatorReadinessTimeout = operatorInstallTimeout
+	}
+	if err := operator.WaitForOperator(ctx, operatorNamespace, operatorReadinessTimeout); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}

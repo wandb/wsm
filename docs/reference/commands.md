@@ -250,6 +250,12 @@ wsm deploy-v2 wandb deploy --context prod \
   --oidc-issuer-url wandb-oidc:issuerUrl \
   --oidc-session-length 720h
 
+# Forward proxy: keep credentials in a Secret and append external NO_PROXY hosts
+wsm deploy-v2 wandb deploy --context prod \
+  --proxy-http-secret wandb-proxy:http-url \
+  --proxy-https-secret wandb-proxy:https-url \
+  --no-proxy s3.corp.example.com --no-proxy oidc.corp.example.com
+
 # Air-gapped: pull everything (app + DB images, server manifest) from one mirror
 wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --wandb-version 0.82.2
 

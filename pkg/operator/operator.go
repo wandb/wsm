@@ -1390,10 +1390,7 @@ func stripFieldsNotInCRDSchema(obj *unstructured.Unstructured) {
 	unstructured.RemoveNestedField(obj.Object, "status")
 
 	// OidcSpec is a by-value struct, so `omitempty` can't drop its zero value
-	// (serializes as oidc.*: {"key": ""}). Strip it unless a leaf is set, so
-	// configured OIDC (flags or --cr-file) still reaches the CRD.
-	// TODO(operator-bump): drop this once OidcSpec is a pointer upstream — the
-	// alpha.2 CRD already tolerates the empty block (verified on Kind).
+	// (its leaves serialize as empty {} blocks). Strip unless a leaf is set.
 	if !oidcConfigured(obj) {
 		unstructured.RemoveNestedField(obj.Object, "spec", "wandb", "oidc")
 	}
@@ -1431,8 +1428,8 @@ func isEmptyNestedMap(obj *unstructured.Unstructured, fields ...string) bool {
 	return err != nil || !found || len(m) == 0
 }
 
-// oidcConfigured reports whether spec.wandb.oidc has any leaf selector with a
-// non-empty name or key (a real reference, not the zero-value struct).
+// oidcConfigured reports whether spec.wandb.oidc has any leaf set, in either the
+// legacy {name,key} or the ValueOrSecret {value,valueFrom} shape.
 func oidcConfigured(obj *unstructured.Unstructured) bool {
 	oidc, found, err := unstructured.NestedMap(obj.Object, "spec", "wandb", "oidc")
 	if err != nil || !found {
@@ -1448,10 +1445,12 @@ func oidcConfigured(obj *unstructured.Unstructured) bool {
 		if !ok {
 			continue
 		}
-		if name, _, _ := unstructured.NestedString(selector, "name"); name != "" {
-			return true
+		for _, k := range []string{"name", "key", "value"} {
+			if s, _, _ := unstructured.NestedString(selector, k); s != "" {
+				return true
+			}
 		}
-		if key, _, _ := unstructured.NestedString(selector, "key"); key != "" {
+		if vf, found, _ := unstructured.NestedMap(selector, "valueFrom"); found && len(vf) > 0 {
 			return true
 		}
 	}

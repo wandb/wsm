@@ -1714,7 +1714,7 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 	// stripped by operator.ApplyCR when none is configured (stripFieldsNotInCRDSchema).
 	oidcRefs := []struct {
 		value string
-		field *corev1.SecretKeySelector
+		field *v2.ValueOrSecret
 		flag  string
 	}{
 		{f.oidcClientID, &wandbCR.Spec.Wandb.OIDC.ClientId, "--oidc-client-id"},
@@ -1726,7 +1726,7 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 		if ref.value == "" {
 			continue
 		}
-		if ref.field.Name != "" || ref.field.Key != "" {
+		if !ref.field.IsZero() {
 			fmt.Printf("ignoring %s: spec.wandb.oidc value already set by --cr-file\n", ref.flag)
 			continue
 		}
@@ -1734,10 +1734,10 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 		if !ok || secretName == "" || key == "" {
 			return fmt.Errorf("%s must be in <secret-name>:<key> form, got %q", ref.flag, ref.value)
 		}
-		*ref.field = corev1.SecretKeySelector{
+		*ref.field = v2.ValueFromSelector(corev1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
 			Key:                  key,
-		}
+		})
 	}
 
 	// sessionLength is a plain string leaf, not a selector. The W&B app consumes
@@ -1894,9 +1894,9 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 	return nil
 }
 
-// proxyValueFromFlags builds a *v2.ProxyValue from a literal-URL flag and a
+// proxyValueFromFlags builds a *v2.ValueOrSecret from a literal-URL flag and a
 // <secret>:<key> flag. The two are mutually exclusive; nil when neither is set.
-func proxyValueFromFlags(urlVal, secretVal, urlFlag, secretFlag string) (*v2.ProxyValue, error) {
+func proxyValueFromFlags(urlVal, secretVal, urlFlag, secretFlag string) (*v2.ValueOrSecret, error) {
 	if urlVal != "" && secretVal != "" {
 		return nil, fmt.Errorf("%s and %s are mutually exclusive", urlFlag, secretFlag)
 	}
@@ -1912,13 +1912,13 @@ func proxyValueFromFlags(urlVal, secretVal, urlFlag, secretFlag string) (*v2.Pro
 		if u.User != nil {
 			return nil, fmt.Errorf("%s must not embed credentials; use %s (a Secret ref) for a credentialed proxy URL", urlFlag, secretFlag)
 		}
-		return &v2.ProxyValue{Value: urlVal}, nil
+		return &v2.ValueOrSecret{Value: urlVal}, nil
 	case secretVal != "":
 		ref, err := parseSecretKeyRef(secretVal, secretFlag)
 		if err != nil {
 			return nil, err
 		}
-		return &v2.ProxyValue{ValueFrom: &v2.ProxyValueSource{SecretKeyRef: &ref}}, nil
+		return &v2.ValueOrSecret{ValueFrom: &v2.SecretValueSource{SecretKeyRef: &ref}}, nil
 	}
 	return nil, nil
 }

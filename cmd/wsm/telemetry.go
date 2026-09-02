@@ -74,10 +74,10 @@ func telemetryUICmd(ui telemetry.UI) *cobra.Command {
 				return fmt.Errorf("failed to read telemetry config from operator namespace %q (set --operator-namespace if the operator is installed elsewhere): %w", operatorNamespace, err)
 			}
 			fmt.Printf("Telemetry mode: %s\n", tc.Mode)
-			if tc.Mode == operator.TelemetryModeOff {
+			if tc.Mode == telemetry.ModeOff {
 				return fmt.Errorf("telemetry is not enabled on this install (mode=off); redeploy the operator with --observability-mode=full")
 			}
-			if ui.Name == "grafana" && tc.Mode != operator.TelemetryModeFull {
+			if ui.Name == "grafana" && tc.Mode != telemetry.ModeFull {
 				return fmt.Errorf("grafana is only deployed with --observability-mode=full (current mode: %s); try `wsm telemetry victoria`", tc.Mode)
 			}
 

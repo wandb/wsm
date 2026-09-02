@@ -88,6 +88,12 @@ wsm deploy-v2 operator --context prod --observability-mode full \
 # Force-install kube-state-metrics even if auto-detect would reuse an existing one
 wsm deploy-v2 operator --context prod --observability-mode full \
   --install-kube-state-metrics true
+
+# Forward telemetry to an external OTLP endpoint without installing Grafana
+wsm deploy-v2 operator --context prod --observability-mode forward \
+  --observability-forward-endpoint https://otel.example.com/v1/metrics \
+  --observability-forward-protocol http/protobuf \
+  --observability-forward-headers Authorization="Bearer ${OTEL_TOKEN}"
 ```
 
 ---
@@ -246,7 +252,7 @@ wsm deploy-v2 wandb deploy [flags]
 >   --cr-set spec.wandb.additionalHostnames='[wandb.corp.example.com]'
 > ```
 
-> **Observability.** `--observability-mode` is applied to the operator chart during `wsm deploy-v2 operator` (it enables the `victoria-metrics-operator` and, for `full`, the `grafana-operator` dependencies the chart requires) and also toggles per-service telemetry on the CR. `full` deploys Grafana and the Victoria Metrics/Logs/Traces stack as ClusterIP services in the W&B namespace — view Grafana with [`wsm telemetry grafana`](#wsm-telemetry) and VictoriaMetrics with [`wsm telemetry victoria`](#wsm-telemetry). `forward` ships OTLP data to `--observability-forward-endpoint` and does not run Grafana (VMUI is still available via `wsm telemetry victoria`).
+> **Observability.** `--observability-mode` is applied to the operator chart during `wsm deploy-v2 operator` (it enables the `victoria-metrics-operator` and, for `full`, the `grafana-operator` dependencies the chart requires, and opts the matching telemetry CRDs — VictoriaMetrics, plus Grafana for `full` — into the operator's crd-installer) and also toggles per-service telemetry on the CR. Enabling telemetry on an existing install is done in two steps — install the telemetry CRDs and wait for them to be established, then turn the stack on — so the operators don't race missing CRDs. `full` deploys Grafana and the Victoria Metrics/Logs/Traces stack as ClusterIP services in the W&B namespace — view Grafana with [`wsm telemetry grafana`](#wsm-telemetry) and VictoriaMetrics with [`wsm telemetry victoria`](#wsm-telemetry). `forward` ships OTLP data to `--observability-forward-endpoint` and does not run Grafana (VMUI is still available via `wsm telemetry victoria`).
 
 #### Examples
 

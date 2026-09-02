@@ -50,8 +50,9 @@ func init() {
 // TODO once an official release publishes a manifest, we should switch to looking
 // up the most recent non-dev release and not have a default.
 const (
-	defaultWandbVersion = "0.83.0"
-	minWandbVersion     = "0.80.0"
+	defaultWandbVersion         = "0.83.0"
+	minWandbVersion             = "0.80.0"
+	defaultOperatorChartVersion = "2.0.0-beta.4"
 )
 
 // defaultWandbSize is stamped into spec.size when --size is unset.
@@ -107,7 +108,7 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("object-store-storage-size", "", "Override the managed object store (SeaweedFS) storage size, e.g. 20Gi. Must be < 30Gi: the operator derives SeaweedFS volumeSizeLimitMB from this and the master rejects a limit >= 30000. Leave empty to use the size preset's default.")
 	cmd.PersistentFlags().String("wandb-hostname", "http://localhost:8080", "Hostname to use for the W&B instance")
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
-	cmd.PersistentFlags().String("wandb-version", "", fmt.Sprintf("Server manifest version (defaults to %s when unset; must be >= %s)", defaultWandbVersion, minWandbVersion))
+	cmd.PersistentFlags().String("wandb-version", "", fmt.Sprintf("Server manifest version (defaults to %s when unset; must be >= %s; a leading v is accepted)", defaultWandbVersion, minWandbVersion))
 	cmd.PersistentFlags().String("manifest-repository", "", "OCI repository for the server manifest (e.g. oci://harbor.corp/wandb/server-manifest). Defaults to oci://<mirror>/wandb/server-manifest when --mirror-registry is set, else the operator default.")
 	cmd.PersistentFlags().String("mirror-registry", "", "Install everything (charts, operator/infra images, and the W&B app/DB images) from this air-gapped mirror registry, e.g. harbor.corp:5443. Populate it first with 'wsm registry mirror --to <same-host>'.")
 	cmd.PersistentFlags().Bool("insecure-registry", false, "Use plain HTTP / skip TLS verification when talking to --mirror-registry")
@@ -477,7 +478,7 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
 	cmd.Flags().StringVar(&kindNodeImage, "kind-node-image", "", "Kind node image to use, e.g. myreg.example.com/kindest/node:v1.35.1@sha256:... (defaults to the upstream pinned image; only used with --setup-k8s-cluster)")
 
-	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.3", "Operator Chart version (e.g., v2.0.0)")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", defaultOperatorChartVersion, "Operator Chart version, e.g. 2.0.0-beta.4 (a leading v is accepted)")
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
 	cmd.Flags().DurationVar(&operatorInstallTimeout, "operator-install-timeout", 0, "Helm timeout in seconds, minutes, or hours (for example 30s, 5m, or 1h; 0 uses Helm's default)")
 	cmd.Flags().StringVar(&operatorImagePullPolicy, "operator-image-pull-policy", string(corev1.PullIfNotPresent), "Operator image pull policy (Always, IfNotPresent, or Never; case-insensitive)")
@@ -1603,8 +1604,10 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 		wandbCR.Spec.Wandb.Version = f.wandbVersion
 	}
 
-	// Enforce the minimum supported server on the resolved version (default,
-	// --wandb-version, or --cr-file). --cr-set is checked separately before apply.
+	// Accept a leading v (published server tags are unprefixed), then enforce the
+	// minimum supported server on the resolved version (default, --wandb-version,
+	// or --cr-file). --cr-set is checked separately before apply.
+	wandbCR.Spec.Wandb.Version = operator.NormalizeVersion(wandbCR.Spec.Wandb.Version)
 	if err := validateWandbVersion(wandbCR.Spec.Wandb.Version); err != nil {
 		return err
 	}

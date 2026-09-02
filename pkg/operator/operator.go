@@ -777,6 +777,15 @@ func nestedValue(values map[string]interface{}, keys ...string) (interface{}, bo
 }
 
 // DeployOperator deploys the W&B operator chart version specified.  The chart is called operator and is available in oci://us-docker.pkg.dev/wandb-production/public/wandb/charts
+// NormalizeVersion strips a leading "v" (e.g. v2.0.0-beta.4 -> 2.0.0-beta.4) so
+// a semver-tagged input matches the unprefixed OCI chart and server-manifest tags.
+func NormalizeVersion(version string) string {
+	if len(version) > 1 && version[0] == 'v' && version[1] >= '0' && version[1] <= '9' {
+		return version[1:]
+	}
+	return version
+}
+
 func DeployOperator(
 	ctx context.Context,
 	namespace string,
@@ -790,6 +799,8 @@ func DeployOperator(
 ) error {
 	const chartName = "operator"
 	const releaseName = "wandb-operator"
+
+	chartVersion = NormalizeVersion(chartVersion)
 
 	repositoryURL := "oci://us-docker.pkg.dev/wandb-production/public/wandb/charts"
 	if mirror != nil {
@@ -834,9 +845,6 @@ func DeployOperator(
 
 	telemetryValues := buildTelemetryValues(telemetry)
 	releaseValues := map[string]interface{}{
-		"wandb": map[string]interface{}{
-			"install": false,
-		},
 		"wandb-operator": map[string]interface{}{
 			"image": operatorImage,
 		},
@@ -1251,6 +1259,18 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases, overrides []CROv
 	// --cr-set overrides are applied last — after the template, --cr-file, typed
 	// flags, and the strip — so a set field always wins and is never removed. The
 	// CRD validates the result server-side on apply.
+	if err := applyCROverrides(obj, overrides); err != nil {
+		return err
+	}
+
+	if err := kubectl.ApplyUnstructured(ctx, obj); err != nil {
+		return fmt.Errorf("failed to apply CR: %w", err)
+	}
+
+	return nil
+}
+
+func applyCROverrides(obj *unstructured.Unstructured, overrides []CROverride) error {
 	for _, o := range overrides {
 		val := o.Value
 		// A number parsed for a string field (e.g. version=1.0) is set from the
@@ -1266,11 +1286,6 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases, overrides []CROv
 			return fmt.Errorf("failed to apply --cr-set %s: %w", strings.Join(o.Path, "."), err)
 		}
 	}
-
-	if err := kubectl.ApplyUnstructured(ctx, obj); err != nil {
-		return fmt.Errorf("failed to apply CR: %w", err)
-	}
-
 	return nil
 }
 
@@ -1321,7 +1336,15 @@ func ParseCROverrides(sets []string) ([]CROverride, error) {
 		if err != nil {
 			return nil, fmt.Errorf("--cr-set %q: %w", s, err)
 		}
-		overrides = append(overrides, CROverride{Path: strings.Split(path, "."), Value: value, Raw: rawValue})
+		override := CROverride{Path: strings.Split(path, "."), Value: value, Raw: rawValue}
+		if path == "spec.wandb.version" {
+			normalized := NormalizeVersion(OverrideStringValue(override))
+			override.Raw = normalized
+			if _, isString := override.Value.(string); isString {
+				override.Value = normalized
+			}
+		}
+		overrides = append(overrides, override)
 	}
 	return overrides, nil
 }

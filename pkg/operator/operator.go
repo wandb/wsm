@@ -834,6 +834,23 @@ func DeployOperator(
 	if err != nil {
 		return fmt.Errorf("failed to check if release exists: %w", err)
 	}
+	existingTelemetryMode := telemetry.ModeOff
+	existingTelemetryNamespace := wandbNamespace
+	if releaseExists {
+		rel, err := action.NewGet(actionConfig).Run(releaseName)
+		if err != nil {
+			return fmt.Errorf("failed to read operator release %q: %w", releaseName, err)
+		}
+		release, ok := rel.(*v1.Release)
+		if !ok {
+			return fmt.Errorf("unexpected release type for %q", releaseName)
+		}
+		values, _ := release.Config["telemetry"].(map[string]interface{})
+		existingTelemetryMode = telemetry.ParseValues(values).Mode
+		if installedNamespace, _ := values["namespace"].(string); installedNamespace != "" {
+			existingTelemetryNamespace = installedNamespace
+		}
+	}
 
 	operatorImage := map[string]interface{}{}
 	// IfNotPresent is the chart default; leave it out of the release values.
@@ -949,6 +966,15 @@ func DeployOperator(
 			return nil
 		}
 
+		if telemetry.CleanupRequired(existingTelemetryMode, telemetryConfig.Mode) {
+			fmt.Printf("\n  → Removing observability resources for mode change %q → %q...", existingTelemetryMode, telemetryConfig.Mode)
+			if err := telemetry.CleanupResources(ctx, existingTelemetryNamespace, existingTelemetryMode, telemetryConfig.Mode, 5*time.Minute); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+			fmt.Println(" ✓")
+		}
+
 		// Enabling telemetry on an existing release needs its CRDs installed and
 		// Established first, or the operators race missing CRDs. Skip once present.
 		if telemetryConfig.Mode == telemetry.ModeFull || telemetryConfig.Mode == telemetry.ModeForward {
@@ -973,16 +999,47 @@ func DeployOperator(
 			} else {
 				fmt.Println("\n  ✓ All required telemetry CRDs are already Established")
 			}
+
 			fmt.Printf("  → Enabling telemetry mode %q...", telemetryConfig.Mode)
 		} else {
 			fmt.Print("\n  → Turning off telemetry...")
 		}
 
-		if err := runUpgrade(releaseValues); err != nil {
+		controllersReady := true
+		if telemetryConfig.Mode == telemetry.ModeFull || telemetryConfig.Mode == telemetry.ModeForward {
+			controllersReady, err = telemetry.ControllersReady(ctx, namespace, telemetryConfig.Mode)
+			if err != nil {
+				return err
+			}
+		}
+
+		upgradeErr := runUpgrade(releaseValues)
+		waitedForControllers := false
+		if upgradeErr != nil && !controllersReady && telemetry.IsWebhookStartupError(upgradeErr) {
+			fmt.Println(" waiting for observability controllers")
+			fmt.Print("  → Waiting for observability controllers to become ready...")
+			if err := telemetry.WaitForControllers(ctx, namespace, telemetryConfig.Mode, 5*time.Minute); err != nil {
+				fmt.Println(" ✗")
+				return fmt.Errorf("%v; %w", upgradeErr, err)
+			}
+			fmt.Println(" ✓")
+			waitedForControllers = true
+			fmt.Printf("  → Retrying telemetry mode %q...", telemetryConfig.Mode)
+			upgradeErr = runUpgrade(releaseValues)
+		}
+		if upgradeErr != nil {
 			fmt.Println(" ✗")
-			return err
+			return upgradeErr
 		}
 		fmt.Println(" ✓")
+		if !controllersReady && !waitedForControllers {
+			fmt.Print("  → Waiting for observability controllers to become ready...")
+			if err := telemetry.WaitForControllers(ctx, namespace, telemetryConfig.Mode, 5*time.Minute); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+			fmt.Println(" ✓")
+		}
 	} else {
 		// Create install action
 		installClient := action.NewInstall(actionConfig)

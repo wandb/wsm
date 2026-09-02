@@ -2,9 +2,13 @@ package telemetry
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/wandb/wsm/pkg/kubectl"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -15,6 +19,9 @@ const (
 	ModeOff     = "off"
 	ModeFull    = "full"
 	ModeForward = "forward"
+
+	victoriaMetricsOperatorName = "wandb-operator-victoria-metrics-operator"
+	grafanaOperatorName         = "wandb-operator-grafana-operator"
 )
 
 func ValidMode(mode string) bool {
@@ -148,6 +155,24 @@ var grafanaCRDNames = []string{
 	"grafanadashboards.grafana.integreatly.org",
 }
 
+var victoriaResourceGVRs = []schema.GroupVersionResource{
+	{Group: "operator.victoriametrics.com", Version: "v1beta1", Resource: "vmagents"},
+	{Group: "operator.victoriametrics.com", Version: "v1beta1", Resource: "vmalerts"},
+	{Group: "operator.victoriametrics.com", Version: "v1beta1", Resource: "vmrules"},
+	{Group: "operator.victoriametrics.com", Version: "v1beta1", Resource: "vmnodescrapes"},
+	{Group: "operator.victoriametrics.com", Version: "v1beta1", Resource: "vmservicescrapes"},
+	{Group: "operator.victoriametrics.com", Version: "v1beta1", Resource: "vmpodscrapes"},
+	{Group: "operator.victoriametrics.com", Version: "v1beta1", Resource: "vmsingles"},
+	{Group: "operator.victoriametrics.com", Version: "v1", Resource: "vlsingles"},
+	{Group: "operator.victoriametrics.com", Version: "v1", Resource: "vtsingles"},
+}
+
+var grafanaResourceGVRs = []schema.GroupVersionResource{
+	{Group: "grafana.integreatly.org", Version: "v1beta1", Resource: "grafanas"},
+	{Group: "grafana.integreatly.org", Version: "v1beta1", Resource: "grafanadatasources"},
+	{Group: "grafana.integreatly.org", Version: "v1beta1", Resource: "grafanadashboards"},
+}
+
 // crdNames are all CRDs instantiated by the telemetry chart for a mode. Keep
 // this list aligned with the chart resources so the final Helm upgrade cannot
 // race an API that the CRD-preparation upgrade has not Established yet.
@@ -211,6 +236,123 @@ func WaitForCRDs(ctx context.Context, mode string, timeout time.Duration) error 
 		}
 		return true, nil
 	})
+}
+
+// CleanupRequired reports whether a mode transition disables a controller.
+func CleanupRequired(fromMode, toMode string) bool {
+	return len(resourcesToRemove(fromMode, toMode)) > 0
+}
+
+// CleanupResources deletes telemetry CRs before their controllers are disabled.
+func CleanupResources(ctx context.Context, namespace, fromMode, toMode string, timeout time.Duration) error {
+	resources := resourcesToRemove(fromMode, toMode)
+	if len(resources) == 0 {
+		return nil
+	}
+
+	_, dyn, err := kubectl.GetDynamicClientset()
+	if err != nil {
+		return err
+	}
+	selector := "app.kubernetes.io/component=telemetry"
+	for _, gvr := range resources {
+		err := dyn.Resource(gvr).Namespace(namespace).DeleteCollection(
+			ctx,
+			metav1.DeleteOptions{},
+			metav1.ListOptions{LabelSelector: selector},
+		)
+		if err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("delete %s telemetry resources: %w", gvr.Resource, err)
+		}
+	}
+
+	err = wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		for _, gvr := range resources {
+			list, err := dyn.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+			if errors.IsNotFound(err) {
+				continue
+			}
+			if err != nil {
+				return false, err
+			}
+			if len(list.Items) > 0 {
+				return false, nil
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		return fmt.Errorf("wait for telemetry resources to be removed: %w", err)
+	}
+	return nil
+}
+
+func resourcesToRemove(fromMode, toMode string) []schema.GroupVersionResource {
+	var resources []schema.GroupVersionResource
+	if fromMode == ModeFull && toMode != ModeFull {
+		resources = append(resources, grafanaResourceGVRs...)
+	}
+	if fromMode != ModeOff && toMode == ModeOff {
+		resources = append(resources, victoriaResourceGVRs...)
+	}
+	return resources
+}
+
+// ControllersReady reports whether the controllers required by mode are ready.
+func ControllersReady(ctx context.Context, namespace, mode string) (bool, error) {
+	_, cs, err := kubectl.GetClientset()
+	if err != nil {
+		return false, err
+	}
+
+	deploymentNames := []string{victoriaMetricsOperatorName}
+	if mode == ModeFull {
+		deploymentNames = append(deploymentNames, grafanaOperatorName)
+	}
+	for _, name := range deploymentNames {
+		deployment, err := cs.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+		if errors.IsNotFound(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("get observability controller deployment %s/%s: %w", namespace, name, err)
+		}
+		if deployment.DeletionTimestamp != nil || deployment.Status.AvailableReplicas < 1 {
+			return false, nil
+		}
+	}
+
+	endpointSlices, err := cs.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: discoveryv1.LabelServiceName + "=" + victoriaMetricsOperatorName,
+	})
+	if err != nil {
+		return false, fmt.Errorf("get VictoriaMetrics operator webhook endpoints: %w", err)
+	}
+	for _, endpointSlice := range endpointSlices.Items {
+		for _, endpoint := range endpointSlice.Endpoints {
+			if len(endpoint.Addresses) > 0 && (endpoint.Conditions.Ready == nil || *endpoint.Conditions.Ready) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// WaitForControllers blocks until the controllers required by mode are ready.
+func WaitForControllers(ctx context.Context, namespace, mode string, timeout time.Duration) error {
+	err := wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		return ControllersReady(ctx, namespace, mode)
+	})
+	if err != nil {
+		return fmt.Errorf("observability controllers not ready: %w", err)
+	}
+	return nil
+}
+
+// IsWebhookStartupError reports a VictoriaMetrics webhook startup race.
+func IsWebhookStartupError(err error) bool {
+	return strings.Contains(err.Error(), "failed calling webhook") &&
+		strings.Contains(err.Error(), victoriaMetricsOperatorName)
 }
 
 // ParseValues is the inverse of BuildValues, reading a telemetry.* values block

@@ -1714,7 +1714,7 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 	// stripped by operator.ApplyCR when none is configured (stripFieldsNotInCRDSchema).
 	oidcRefs := []struct {
 		value string
-		field *corev1.SecretKeySelector
+		field *v2.ValueOrSecret
 		flag  string
 	}{
 		{f.oidcClientID, &wandbCR.Spec.Wandb.OIDC.ClientId, "--oidc-client-id"},
@@ -1726,7 +1726,7 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 		if ref.value == "" {
 			continue
 		}
-		if ref.field.Name != "" || ref.field.Key != "" {
+		if !ref.field.IsZero() {
 			fmt.Printf("ignoring %s: spec.wandb.oidc value already set by --cr-file\n", ref.flag)
 			continue
 		}
@@ -1734,10 +1734,10 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 		if !ok || secretName == "" || key == "" {
 			return fmt.Errorf("%s must be in <secret-name>:<key> form, got %q", ref.flag, ref.value)
 		}
-		*ref.field = corev1.SecretKeySelector{
+		*ref.field = v2.ValueFromSelector(corev1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
 			Key:                  key,
-		}
+		})
 	}
 
 	// sessionLength is a plain string leaf, not a selector. The W&B app consumes

@@ -67,68 +67,7 @@ const (
 	nginxGatewayInstallModeFalse = "false"
 )
 
-var (
-	wandbCR = &v2.WeightsAndBiases{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "apps.wandb.com/v2",
-			Kind:       "WeightsAndBiases",
-		},
-		Spec: v2.WeightsAndBiasesSpec{
-			Wandb: v2.WandbAppSpec{
-				Hostname: "http://localhost:8080",
-				Features: map[string]bool{},
-				InternalServiceAuth: v2.InternalServiceAuth{
-					Enabled: ptr.Bool(false),
-				},
-			},
-			// Managed infra is keyed by instance name; wsm builds the single
-			// reserved DefaultInstanceName instance. Kafka stays a struct.
-			MySQL: map[string]v2.MySQLSpec{
-				v2.DefaultInstanceName: {
-					ManagedMysql: &v2.ManagedMysqlSpec{
-						Telemetry: v2.Telemetry{
-							Enabled: false,
-						},
-					},
-				},
-			},
-			Redis: map[string]v2.RedisSpec{
-				v2.DefaultInstanceName: {
-					ManagedRedis: &v2.ManagedRedisSpec{
-						Telemetry: v2.Telemetry{
-							Enabled: false,
-						},
-					},
-				},
-			},
-			Kafka: v2.KafkaSpec{
-				ManagedKafka: &v2.ManagedKafkaSpec{
-					Telemetry: v2.Telemetry{
-						Enabled: false,
-					},
-				},
-			},
-			ObjectStore: map[string]v2.ObjectStoreSpec{
-				v2.DefaultInstanceName: {
-					ManagedObjectStore: &v2.ManagedObjectStoreSpec{
-						Telemetry: v2.Telemetry{
-							Enabled: false,
-						},
-					},
-				},
-			},
-			ClickHouse: map[string]v2.ClickHouseSpec{
-				v2.DefaultInstanceName: {
-					ManagedClickHouse: &v2.ManagedClickHouseSpec{
-						Telemetry: v2.Telemetry{
-							Enabled: false,
-						},
-					},
-				},
-			},
-		},
-	}
-)
+var wandbCR = operator.DefaultWandbCR()
 
 // DeployV2Cmd returns the deploy-v2 command with subcommands
 func DeployV2Cmd() *cobra.Command {

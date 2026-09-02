@@ -127,6 +127,12 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().Int32("objectstore-copies", 0, "Managed object store replica copies (spec.objectStore.managedObjectStore.copies; optional, operator default when unset)")
 	cmd.PersistentFlags().Bool("bucket-proxy", false, "Route object-store access through the W&B app instead of direct client access (spec.wandb.bucketProxy; optional, operator default when unset)")
 	cmd.PersistentFlags().Bool("admin-console", true, "Enable the admin console (spec.adminConsoleEnabled; disable with --admin-console=false)")
+	cmd.PersistentFlags().Bool("security-allow-user-team-creation", false, "Allow users to create teams (spec.wandb.security.allowUserTeamCreation; optional)")
+	cmd.PersistentFlags().Bool("security-disable-code-saving", false, "Disable code saving (spec.wandb.security.disableCodeSaving; optional)")
+	cmd.PersistentFlags().Bool("security-allow-anonymous-public-projects", false, "Allow anonymous access to public projects (spec.wandb.security.allowAnonymousPublicProjects; optional)")
+	cmd.PersistentFlags().Bool("security-disable-sso-provisioning", false, "Disable SSO user provisioning (spec.wandb.security.disableSSOProvisioning; optional)")
+	cmd.PersistentFlags().Bool("security-insecure-allow-apikey-admin-access", false, "Allow admin access via API key (insecure) (spec.wandb.security.insecureAllowAPIKeyAdminAccess; optional)")
+	cmd.PersistentFlags().Bool("security-hide-upgrade-banner", false, "Hide the upgrade banner (spec.wandb.security.hideUpgradeBanner; optional)")
 	// Forward-proxy egress (spec.global.proxy).
 	cmd.PersistentFlags().String("proxy-http-url", "", "Literal HTTP_PROXY URL, no credentials (spec.global.proxy.httpProxy.value; optional)")
 	cmd.PersistentFlags().String("proxy-https-url", "", "Literal HTTPS_PROXY URL, no credentials (spec.global.proxy.httpsProxy.value; optional)")
@@ -1389,6 +1395,7 @@ type wandbCRFlags struct {
 	objectStoreCopies *int32
 	bucketProxy       *bool
 	adminConsole      *bool
+	security          operator.SecurityFlags
 	// Air-gap install fields. mirrorRegistry is the one-stop mirror flag: it
 	// points the operator/subchart charts + images and the server manifest at the
 	// mirror (defaults manifestRepo). It does NOT set spec.global.imageRegistry.
@@ -1413,39 +1420,47 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 	crSet, _ := cmd.Flags().GetStringArray("cr-set")
 	noProxy, _ := cmd.Flags().GetStringArray("no-proxy")
 	return wandbCRFlags{
-		crFile:                 str("cr-file"),
-		wandbVersion:           str("wandb-version"),
-		wandbName:              str("wandb-name"),
-		wandbHostname:          str("wandb-hostname"),
-		gatewayClass:           str("gateway-class"),
-		ingressClass:           str("ingress-class"),
-		ingressName:            str("ingress-name"),
-		issuerName:             str("issuer-name"),
-		addIngressAnnotations:  boolean("add-ingress-annotations"),
-		license:                str("license"),
-		licenseFile:            str("license-file"),
-		telemetryMode:          str("observability-mode"),
-		wandbNamespace:         str("wandb-namespace"),
-		createCA:               boolean("create-ca"),
-		size:                   str("size"),
-		retentionPolicy:        str("retention-policy"),
-		oidcClientID:           str("oidc-client-id"),
-		oidcClientSecret:       str("oidc-client-secret"),
-		oidcIssuerURL:          str("oidc-issuer-url"),
-		oidcAuthMethod:         str("oidc-auth-method"),
-		oidcSessionLength:      str("oidc-session-length"),
-		imageRegistry:          str("image-registry"),
-		customCACertFiles:      certFiles,
-		imagePullSecrets:       imagePullSecrets,
-		customCAConfigMap:      str("custom-ca-configmap"),
-		proxyHTTPURL:           str("proxy-http-url"),
-		proxyHTTPSURL:          str("proxy-https-url"),
-		proxyHTTPSecret:        str("proxy-http-secret"),
-		proxyHTTPSSecret:       str("proxy-https-secret"),
-		noProxy:                noProxy,
-		objectStoreCopies:      changedInt32(cmd, "objectstore-copies"),
-		bucketProxy:            changedBool(cmd, "bucket-proxy"),
-		adminConsole:           changedBool(cmd, "admin-console"),
+		crFile:                str("cr-file"),
+		wandbVersion:          str("wandb-version"),
+		wandbName:             str("wandb-name"),
+		wandbHostname:         str("wandb-hostname"),
+		gatewayClass:          str("gateway-class"),
+		ingressClass:          str("ingress-class"),
+		ingressName:           str("ingress-name"),
+		issuerName:            str("issuer-name"),
+		addIngressAnnotations: boolean("add-ingress-annotations"),
+		license:               str("license"),
+		licenseFile:           str("license-file"),
+		telemetryMode:         str("observability-mode"),
+		wandbNamespace:        str("wandb-namespace"),
+		createCA:              boolean("create-ca"),
+		size:                  str("size"),
+		retentionPolicy:       str("retention-policy"),
+		oidcClientID:          str("oidc-client-id"),
+		oidcClientSecret:      str("oidc-client-secret"),
+		oidcIssuerURL:         str("oidc-issuer-url"),
+		oidcAuthMethod:        str("oidc-auth-method"),
+		oidcSessionLength:     str("oidc-session-length"),
+		imageRegistry:         str("image-registry"),
+		customCACertFiles:     certFiles,
+		imagePullSecrets:      imagePullSecrets,
+		customCAConfigMap:     str("custom-ca-configmap"),
+		proxyHTTPURL:          str("proxy-http-url"),
+		proxyHTTPSURL:         str("proxy-https-url"),
+		proxyHTTPSecret:       str("proxy-http-secret"),
+		proxyHTTPSSecret:      str("proxy-https-secret"),
+		noProxy:               noProxy,
+		objectStoreCopies:     changedInt32(cmd, "objectstore-copies"),
+		bucketProxy:           changedBool(cmd, "bucket-proxy"),
+		adminConsole:          changedBool(cmd, "admin-console"),
+		security: operator.SecurityFlags{
+			AllowUserTeamCreation:          changedBool(cmd, "security-allow-user-team-creation"),
+			DisableCodeSaving:              changedBool(cmd, "security-disable-code-saving"),
+			AllowAnonymousPublicProjects:   changedBool(cmd, "security-allow-anonymous-public-projects"),
+			DisableSSOProvisioning:         changedBool(cmd, "security-disable-sso-provisioning"),
+			InsecureAllowAPIKeyAdminAccess: changedBool(cmd, "security-insecure-allow-apikey-admin-access"),
+			HideUpgradeBanner:              changedBool(cmd, "security-hide-upgrade-banner"),
+		},
 		mirrorRegistry:         str("mirror-registry"),
 		insecureRegistry:       boolean("insecure-registry"),
 		registryCAFile:         str("registry-ca-file"),
@@ -1856,6 +1871,8 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 		// preserving an explicit true or false value from the file.
 		wandbCR.Spec.AdminConsoleEnabled = ptr.Bool(true)
 	}
+
+	operator.SetSecurity(wandbCR, f.security)
 
 	wandbCR.Namespace = f.wandbNamespace
 	return nil

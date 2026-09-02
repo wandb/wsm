@@ -11,6 +11,40 @@ import (
 	"knative.dev/pkg/ptr"
 )
 
+// SecurityFlags holds the spec.wandb.security toggles. A nil field is left
+// unset so the operator default applies.
+type SecurityFlags struct {
+	AllowUserTeamCreation          *bool
+	DisableCodeSaving              *bool
+	AllowAnonymousPublicProjects   *bool
+	DisableSSOProvisioning         *bool
+	InsecureAllowAPIKeyAdminAccess *bool
+	HideUpgradeBanner              *bool
+}
+
+// SetSecurity applies the provided security toggles to spec.wandb.security.
+func SetSecurity(cr *v2.WeightsAndBiases, f SecurityFlags) {
+	s := &cr.Spec.Wandb.Security
+	if f.AllowUserTeamCreation != nil {
+		s.AllowUserTeamCreation = *f.AllowUserTeamCreation
+	}
+	if f.DisableCodeSaving != nil {
+		s.DisableCodeSaving = *f.DisableCodeSaving
+	}
+	if f.AllowAnonymousPublicProjects != nil {
+		s.AllowAnonymousPublicProjects = *f.AllowAnonymousPublicProjects
+	}
+	if f.DisableSSOProvisioning != nil {
+		s.DisableSSOProvisioning = *f.DisableSSOProvisioning
+	}
+	if f.InsecureAllowAPIKeyAdminAccess != nil {
+		s.InsecureAllowAPIKeyAdminAccess = *f.InsecureAllowAPIKeyAdminAccess
+	}
+	if f.HideUpgradeBanner != nil {
+		s.HideUpgradeBanner = *f.HideUpgradeBanner
+	}
+}
+
 // ValidateImagePullSecretNames rejects values that cannot name a Kubernetes
 // Secret. All names are checked before callers mutate a CR.
 func ValidateImagePullSecretNames(names []string) error {

@@ -210,6 +210,12 @@ wsm deploy-v2 wandb deploy [flags]
 | `--objectstore-copies` | — | Managed object store replica copies (`spec.objectStore.managedObjectStore.copies`). Operator default applies when unset. Applies to the default managed instance only (see note below) |
 | `--bucket-proxy` | — | Route object-store access through the W&B app instead of direct client access (`spec.wandb.bucketProxy`). Operator default applies when unset |
 | `--admin-console` | `true` | Enable the admin console (`spec.adminConsoleEnabled`). Disable it with `--admin-console=false` |
+| `--security-allow-user-team-creation` | — | Allow users to create teams (`spec.wandb.security.allowUserTeamCreation`) |
+| `--security-disable-code-saving` | — | Disable code saving (`spec.wandb.security.disableCodeSaving`) |
+| `--security-allow-anonymous-public-projects` | — | Allow anonymous access to public projects (`spec.wandb.security.allowAnonymousPublicProjects`) |
+| `--security-disable-sso-provisioning` | — | Disable SSO user provisioning (`spec.wandb.security.disableSSOProvisioning`) |
+| `--security-insecure-allow-apikey-admin-access` | — | Allow admin access via API key, insecure (`spec.wandb.security.insecureAllowAPIKeyAdminAccess`) |
+| `--security-hide-upgrade-banner` | — | Hide the upgrade banner (`spec.wandb.security.hideUpgradeBanner`) |
 | `--cr-set` | — | Set an arbitrary CR field as `<path>=<value>`, e.g. `spec.wandb.version=0.82.2`; repeatable. Values are YAML-typed (`3`→number, `true`→bool, `[a,b]`→list). Overrides the built-in template, `--cr-file`, and the typed flags above (see note below) |
 | `--gateway-class` | `nginx` | Gateway class name (selects Gateway API mode; the default). Mutually exclusive with `--ingress-class` |
 | `--ingress-class` | — | Ingress class name (selects Ingress mode). Takes precedence over the default `--gateway-class`; setting both explicitly is an error |
@@ -270,6 +276,12 @@ wsm deploy-v2 wandb deploy --context prod --admin-console=false
 # Attach private-registry credentials to every W&B workload; repeat as needed
 wsm deploy-v2 wandb deploy --context prod \
   --image-pull-secret harbor-pull --image-pull-secret ecr-pull
+
+# Harden an SSO-managed deployment and suppress the in-app upgrade banner
+wsm deploy-v2 wandb deploy --context prod \
+  --security-disable-sso-provisioning \
+  --security-disable-code-saving \
+  --security-hide-upgrade-banner
 
 # Air-gapped: pull everything (app + DB images, server manifest) from one mirror
 wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --wandb-version 0.82.2

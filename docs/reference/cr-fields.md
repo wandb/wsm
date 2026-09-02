@@ -25,6 +25,7 @@ kind: WeightsAndBiases
 | `spec.kafka` | object | No | Kafka configuration (single instance; not keyed) |
 | `spec.objectStore` | map[string]object | No | Object store instances keyed by instance name (reserved key `default`) |
 | `spec.clickhouse` | map[string]object | No | ClickHouse instances keyed by instance name (reserved key `default`) |
+| `spec.adminConsoleEnabled` | bool | No | Enable the admin console. Defaults to `true`; disable with `--admin-console=false` |
 
 ---
 

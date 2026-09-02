@@ -50,7 +50,7 @@ func init() {
 // TODO once an official release publishes a manifest, we should switch to looking
 // up the most recent non-dev release and not have a default.
 const (
-	defaultWandbVersion         = "0.83.0"
+	defaultWandbVersion         = "0.84.0"
 	minWandbVersion             = "0.80.0"
 	defaultOperatorChartVersion = "2.0.0-beta.4"
 )
@@ -125,6 +125,7 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("custom-ca-configmap", "", "Name of a ConfigMap holding CA certificates to trust in W&B workloads (spec.global.caCertsConfigMap; optional)")
 	cmd.PersistentFlags().Int32("objectstore-copies", 0, "Managed object store replica copies (spec.objectStore.managedObjectStore.copies; optional, operator default when unset)")
 	cmd.PersistentFlags().Bool("bucket-proxy", false, "Route object-store access through the W&B app instead of direct client access (spec.wandb.bucketProxy; optional, operator default when unset)")
+	cmd.PersistentFlags().Bool("admin-console", true, "Enable the admin console (spec.adminConsoleEnabled; disable with --admin-console=false)")
 	// Forward-proxy egress (spec.global.proxy).
 	cmd.PersistentFlags().String("proxy-http-url", "", "Literal HTTP_PROXY URL, no credentials (spec.global.proxy.httpProxy.value; optional)")
 	cmd.PersistentFlags().String("proxy-https-url", "", "Literal HTTPS_PROXY URL, no credentials (spec.global.proxy.httpsProxy.value; optional)")
@@ -1385,6 +1386,7 @@ type wandbCRFlags struct {
 	noProxy           []string
 	objectStoreCopies *int32
 	bucketProxy       *bool
+	adminConsole      *bool
 	// Air-gap install fields. mirrorRegistry is the one-stop mirror flag: it
 	// points the operator/subchart charts + images and the server manifest at the
 	// mirror (defaults manifestRepo). It does NOT set spec.global.imageRegistry.
@@ -1439,6 +1441,7 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 		noProxy:                noProxy,
 		objectStoreCopies:      changedInt32(cmd, "objectstore-copies"),
 		bucketProxy:            changedBool(cmd, "bucket-proxy"),
+		adminConsole:           changedBool(cmd, "admin-console"),
 		mirrorRegistry:         str("mirror-registry"),
 		insecureRegistry:       boolean("insecure-registry"),
 		registryCAFile:         str("registry-ca-file"),
@@ -1830,6 +1833,14 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 
 	if f.bucketProxy != nil {
 		wandbCR.Spec.Wandb.BucketProxy = *f.bucketProxy
+	}
+
+	if f.adminConsole != nil {
+		wandbCR.Spec.AdminConsoleEnabled = f.adminConsole
+	} else if wandbCR.Spec.AdminConsoleEnabled == nil {
+		// Apply the CLI default when a --cr-file leaves the field unset, while
+		// preserving an explicit true or false value from the file.
+		wandbCR.Spec.AdminConsoleEnabled = ptr.Bool(true)
 	}
 
 	wandbCR.Namespace = f.wandbNamespace

@@ -16,6 +16,7 @@ func DefaultWandbCR() *v2.WeightsAndBiases {
 			Kind:       "WeightsAndBiases",
 		},
 		Spec: v2.WeightsAndBiasesSpec{
+			AdminConsoleEnabled: ptr.Bool(true),
 			Wandb: v2.WandbAppSpec{
 				Hostname: "http://localhost:8080",
 				Features: map[string]bool{},

@@ -3,6 +3,7 @@ package operator
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	v2 "github.com/wandb/operator/api/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -11,8 +12,7 @@ import (
 	"knative.dev/pkg/ptr"
 )
 
-// SecurityFlags holds the spec.wandb.security toggles. A nil field is left
-// unset so the operator default applies.
+// SecurityFlags are the spec.wandb.security toggles; a nil field is left unset.
 type SecurityFlags struct {
 	AllowUserTeamCreation          *bool
 	DisableCodeSaving              *bool
@@ -22,7 +22,7 @@ type SecurityFlags struct {
 	HideUpgradeBanner              *bool
 }
 
-// SetSecurity applies the provided security toggles to spec.wandb.security.
+// SetSecurity applies the toggles to spec.wandb.security.
 func SetSecurity(cr *v2.WeightsAndBiases, f SecurityFlags) {
 	s := &cr.Spec.Wandb.Security
 	if f.AllowUserTeamCreation != nil {
@@ -43,6 +43,29 @@ func SetSecurity(cr *v2.WeightsAndBiases, f SecurityFlags) {
 	if f.HideUpgradeBanner != nil {
 		s.HideUpgradeBanner = *f.HideUpgradeBanner
 	}
+}
+
+// SetRetention configures spec.wandb.retention; no-op when both args are unset.
+func SetRetention(cr *v2.WeightsAndBiases, artifactGC *bool, dataRetentionPeriod string) error {
+	if artifactGC == nil && dataRetentionPeriod == "" {
+		return nil
+	}
+	r := cr.Spec.Wandb.Retention
+	if r == nil {
+		r = &v2.RetentionSpec{}
+	}
+	if artifactGC != nil {
+		r.ArtifactGarbageCollection = *artifactGC
+	}
+	if dataRetentionPeriod != "" {
+		d, err := time.ParseDuration(dataRetentionPeriod)
+		if err != nil {
+			return fmt.Errorf("--data-retention-period must be a duration like 720h (units: h, m, s): %w", err)
+		}
+		r.DataRetentionPeriod = &metav1.Duration{Duration: d}
+	}
+	cr.Spec.Wandb.Retention = r
+	return nil
 }
 
 // ValidateImagePullSecretNames rejects values that cannot name a Kubernetes
@@ -68,9 +91,8 @@ func SetImagePullSecrets(cr *v2.WeightsAndBiases, names []string) error {
 	return nil
 }
 
-// DefaultWandbCR returns the base WeightsAndBiases wsm deploys: managed infra
-// keyed under the reserved default instance, telemetry off. Callers fill in
-// name, namespace, hostname, version and size before applying.
+// DefaultWandbCR returns the base CR wsm deploys: managed infra under the
+// default instance, telemetry off. Callers set name/namespace/hostname/version.
 func DefaultWandbCR() *v2.WeightsAndBiases {
 	return &v2.WeightsAndBiases{
 		TypeMeta: metav1.TypeMeta{

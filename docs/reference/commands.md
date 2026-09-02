@@ -216,6 +216,8 @@ wsm deploy-v2 wandb deploy [flags]
 | `--security-disable-sso-provisioning` | — | Disable SSO user provisioning (`spec.wandb.security.disableSSOProvisioning`) |
 | `--security-insecure-allow-apikey-admin-access` | — | Allow admin access via API key, insecure (`spec.wandb.security.insecureAllowAPIKeyAdminAccess`) |
 | `--security-hide-upgrade-banner` | — | Hide the upgrade banner (`spec.wandb.security.hideUpgradeBanner`) |
+| `--artifact-gc` | — | Enable artifact garbage collection (`spec.wandb.retention.artifactGarbageCollection`) |
+| `--data-retention-period` | — | Data retention period, e.g. `720h`; units: `h` (hours), `m` (minutes), `s` (seconds) (`spec.wandb.retention.dataRetentionPeriod`) |
 | `--cr-set` | — | Set an arbitrary CR field as `<path>=<value>`, e.g. `spec.wandb.version=0.82.2`; repeatable. Values are YAML-typed (`3`→number, `true`→bool, `[a,b]`→list). Overrides the built-in template, `--cr-file`, and the typed flags above (see note below) |
 | `--gateway-class` | `nginx` | Gateway class name (selects Gateway API mode; the default). Mutually exclusive with `--ingress-class` |
 | `--ingress-class` | — | Ingress class name (selects Ingress mode). Takes precedence over the default `--gateway-class`; setting both explicitly is an error |
@@ -282,6 +284,10 @@ wsm deploy-v2 wandb deploy --context prod \
   --security-disable-sso-provisioning \
   --security-disable-code-saving \
   --security-hide-upgrade-banner
+
+# Enable artifact garbage collection and retain application data for 30 days
+wsm deploy-v2 wandb deploy --context prod \
+  --artifact-gc --data-retention-period 720h
 
 # Air-gapped: pull everything (app + DB images, server manifest) from one mirror
 wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --wandb-version 0.82.2

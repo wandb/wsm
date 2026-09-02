@@ -41,6 +41,8 @@ kind: WeightsAndBiases
 | `oidc.clientId` / `oidc.clientSecret` / `oidc.issuerUrl` / `oidc.authMethod` | secretKeyRef | — | OIDC settings sourced from a Secret key (`--oidc-*` flags) |
 | `oidc.sessionLength` | string | — | OIDC session length, e.g. `720h` (`--oidc-session-length`) |
 | `security.*` | bool | operator default | Security toggles: `allowUserTeamCreation`, `disableCodeSaving`, `allowAnonymousPublicProjects`, `disableSSOProvisioning`, `insecureAllowAPIKeyAdminAccess`, `hideUpgradeBanner` (`--security-*` flags) |
+| `retention.artifactGarbageCollection` | bool | — | Enable artifact garbage collection (`--artifact-gc`) |
+| `retention.dataRetentionPeriod` | string | — | Data retention period, e.g. `720h`; units `h`/`m`/`s` (`--data-retention-period`) |
 
 ---
 

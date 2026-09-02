@@ -133,6 +133,8 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().Bool("security-disable-sso-provisioning", false, "Disable SSO user provisioning (spec.wandb.security.disableSSOProvisioning; optional)")
 	cmd.PersistentFlags().Bool("security-insecure-allow-apikey-admin-access", false, "Allow admin access via API key (insecure) (spec.wandb.security.insecureAllowAPIKeyAdminAccess; optional)")
 	cmd.PersistentFlags().Bool("security-hide-upgrade-banner", false, "Hide the upgrade banner (spec.wandb.security.hideUpgradeBanner; optional)")
+	cmd.PersistentFlags().Bool("artifact-gc", false, "Enable artifact garbage collection (spec.wandb.retention.artifactGarbageCollection; optional)")
+	cmd.PersistentFlags().String("data-retention-period", "", "Data retention period, e.g. 720h; units: h (hours), m (minutes), s (seconds) (spec.wandb.retention.dataRetentionPeriod; optional)")
 	// Forward-proxy egress (spec.global.proxy).
 	cmd.PersistentFlags().String("proxy-http-url", "", "Literal HTTP_PROXY URL, no credentials (spec.global.proxy.httpProxy.value; optional)")
 	cmd.PersistentFlags().String("proxy-https-url", "", "Literal HTTPS_PROXY URL, no credentials (spec.global.proxy.httpsProxy.value; optional)")
@@ -1387,15 +1389,17 @@ type wandbCRFlags struct {
 	imagePullSecrets      []string
 	customCAConfigMap     string
 	// spec.global.proxy: literal URL or <secret>:<key> per http/https.
-	proxyHTTPURL      string
-	proxyHTTPSURL     string
-	proxyHTTPSecret   string
-	proxyHTTPSSecret  string
-	noProxy           []string
-	objectStoreCopies *int32
-	bucketProxy       *bool
-	adminConsole      *bool
-	security          operator.SecurityFlags
+	proxyHTTPURL        string
+	proxyHTTPSURL       string
+	proxyHTTPSecret     string
+	proxyHTTPSSecret    string
+	noProxy             []string
+	objectStoreCopies   *int32
+	bucketProxy         *bool
+	adminConsole        *bool
+	security            operator.SecurityFlags
+	artifactGC          *bool
+	dataRetentionPeriod string
 	// Air-gap install fields. mirrorRegistry is the one-stop mirror flag: it
 	// points the operator/subchart charts + images and the server manifest at the
 	// mirror (defaults manifestRepo). It does NOT set spec.global.imageRegistry.
@@ -1461,6 +1465,8 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 			InsecureAllowAPIKeyAdminAccess: changedBool(cmd, "security-insecure-allow-apikey-admin-access"),
 			HideUpgradeBanner:              changedBool(cmd, "security-hide-upgrade-banner"),
 		},
+		artifactGC:             changedBool(cmd, "artifact-gc"),
+		dataRetentionPeriod:    str("data-retention-period"),
 		mirrorRegistry:         str("mirror-registry"),
 		insecureRegistry:       boolean("insecure-registry"),
 		registryCAFile:         str("registry-ca-file"),
@@ -1873,6 +1879,10 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 	}
 
 	operator.SetSecurity(wandbCR, f.security)
+
+	if err := operator.SetRetention(wandbCR, f.artifactGC, f.dataRetentionPeriod); err != nil {
+		return err
+	}
 
 	wandbCR.Namespace = f.wandbNamespace
 	return nil

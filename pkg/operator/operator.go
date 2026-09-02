@@ -834,9 +834,6 @@ func DeployOperator(
 
 	telemetryValues := buildTelemetryValues(telemetry)
 	releaseValues := map[string]interface{}{
-		"wandb": map[string]interface{}{
-			"install": false,
-		},
 		"wandb-operator": map[string]interface{}{
 			"image": operatorImage,
 		},

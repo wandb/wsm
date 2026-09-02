@@ -777,6 +777,15 @@ func nestedValue(values map[string]interface{}, keys ...string) (interface{}, bo
 }
 
 // DeployOperator deploys the W&B operator chart version specified.  The chart is called operator and is available in oci://us-docker.pkg.dev/wandb-production/public/wandb/charts
+// NormalizeVersion strips a leading "v" (e.g. v2.0.0-beta.4 -> 2.0.0-beta.4) so
+// a semver-tagged input matches the unprefixed OCI chart and server-manifest tags.
+func NormalizeVersion(version string) string {
+	if len(version) > 1 && version[0] == 'v' && version[1] >= '0' && version[1] <= '9' {
+		return version[1:]
+	}
+	return version
+}
+
 func DeployOperator(
 	ctx context.Context,
 	namespace string,
@@ -790,6 +799,8 @@ func DeployOperator(
 ) error {
 	const chartName = "operator"
 	const releaseName = "wandb-operator"
+
+	chartVersion = NormalizeVersion(chartVersion)
 
 	repositoryURL := "oci://us-docker.pkg.dev/wandb-production/public/wandb/charts"
 	if mirror != nil {

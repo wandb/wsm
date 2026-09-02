@@ -122,6 +122,7 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("image-registry", "", "Retarget container images to this registry for air-gapped installs (spec.global.imageRegistry; optional). Usually you only need --mirror-registry, which does not set spec.global.imageRegistry.")
 	_ = cmd.PersistentFlags().MarkDeprecated("image-registry", "use --mirror-registry, or --cr-set spec.global.imageRegistry=<host> for a different data-plane registry")
 	cmd.PersistentFlags().StringArray("custom-ca-cert-file", nil, "Path to a PEM CA certificate to trust in W&B workloads; repeatable (spec.global.customCACerts; optional)")
+	cmd.PersistentFlags().StringArray("image-pull-secret", nil, "Name of a dockerconfigjson Secret for private-registry image pulls; repeatable (spec.global.imagePullSecrets; optional)")
 	cmd.PersistentFlags().String("custom-ca-configmap", "", "Name of a ConfigMap holding CA certificates to trust in W&B workloads (spec.global.caCertsConfigMap; optional)")
 	cmd.PersistentFlags().Int32("objectstore-copies", 0, "Managed object store replica copies (spec.objectStore.managedObjectStore.copies; optional, operator default when unset)")
 	cmd.PersistentFlags().Bool("bucket-proxy", false, "Route object-store access through the W&B app instead of direct client access (spec.wandb.bucketProxy; optional, operator default when unset)")
@@ -1377,6 +1378,7 @@ type wandbCRFlags struct {
 	oidcSessionLength     string
 	imageRegistry         string
 	customCACertFiles     []string
+	imagePullSecrets      []string
 	customCAConfigMap     string
 	// spec.global.proxy: literal URL or <secret>:<key> per http/https.
 	proxyHTTPURL      string
@@ -1407,6 +1409,7 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 	boolean := func(name string) bool { v, _ := cmd.Flags().GetBool(name); return v }
 
 	certFiles, _ := cmd.Flags().GetStringArray("custom-ca-cert-file")
+	imagePullSecrets, _ := cmd.Flags().GetStringArray("image-pull-secret")
 	crSet, _ := cmd.Flags().GetStringArray("cr-set")
 	noProxy, _ := cmd.Flags().GetStringArray("no-proxy")
 	return wandbCRFlags{
@@ -1433,6 +1436,7 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 		oidcSessionLength:      str("oidc-session-length"),
 		imageRegistry:          str("image-registry"),
 		customCACertFiles:      certFiles,
+		imagePullSecrets:       imagePullSecrets,
 		customCAConfigMap:      str("custom-ca-configmap"),
 		proxyHTTPURL:           str("proxy-http-url"),
 		proxyHTTPSURL:          str("proxy-https-url"),
@@ -1566,6 +1570,13 @@ func normalizeMirrorManifestSource(f *wandbCRFlags, willReconcile bool) error {
 }
 
 func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
+	if cmd.Flags().Changed("image-pull-secret") && len(f.imagePullSecrets) == 0 {
+		return errors.New("--image-pull-secret must not be empty")
+	}
+	if err := operator.ValidateImagePullSecretNames(f.imagePullSecrets); err != nil {
+		return err
+	}
+
 	if f.crFile != "" {
 		var err error
 		wandbCR, err = readCRFile(f.crFile)
@@ -1721,6 +1732,9 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 			return fmt.Errorf("failed to read custom CA cert file %q: %w", certFile, err)
 		}
 		wandbCR.Spec.Global.CustomCACerts = append(wandbCR.Spec.Global.CustomCACerts, string(pem))
+	}
+	if err := operator.SetImagePullSecrets(wandbCR, f.imagePullSecrets); err != nil {
+		return err
 	}
 
 	// spec.global.proxy: a proxy flag overrides the --cr-file value for that leaf

@@ -200,6 +200,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--oidc-session-length` | — | OIDC session length, e.g. `720h` (`spec.wandb.oidc.sessionLength`). Optional; `--cr-file` wins if it already set the value |
 | `--image-registry` | — | **Deprecated.** Retarget container images to this registry (`spec.global.imageRegistry`). Use `--mirror-registry`, or `--cr-set spec.global.imageRegistry=<host>` for a different data-plane registry. |
 | `--custom-ca-cert-file` | — | Path to a PEM CA certificate to trust in W&B workloads; repeatable, each file's contents is appended to `spec.global.customCACerts` |
+| `--image-pull-secret` | — | Name of a `dockerconfigjson` Secret for private-registry image pulls; repeatable, appended to `spec.global.imagePullSecrets` |
 | `--custom-ca-configmap` | — | Name of a ConfigMap holding CA certificates to trust in W&B workloads (`spec.global.caCertsConfigMap`) |
 | `--proxy-http-url` | — | Literal `HTTP_PROXY` URL, no credentials (`spec.global.proxy.httpProxy.value`). Mutually exclusive with `--proxy-http-secret` |
 | `--proxy-https-url` | — | Literal `HTTPS_PROXY` URL, no credentials (`spec.global.proxy.httpsProxy.value`). Mutually exclusive with `--proxy-https-secret` |
@@ -265,6 +266,10 @@ wsm deploy-v2 wandb deploy --context prod \
 
 # The admin console is enabled by default; explicitly disable it when not wanted
 wsm deploy-v2 wandb deploy --context prod --admin-console=false
+
+# Attach private-registry credentials to every W&B workload; repeat as needed
+wsm deploy-v2 wandb deploy --context prod \
+  --image-pull-secret harbor-pull --image-pull-secret ecr-pull
 
 # Air-gapped: pull everything (app + DB images, server manifest) from one mirror
 wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --wandb-version 0.82.2

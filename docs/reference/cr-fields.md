@@ -87,6 +87,7 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 | `imageRegistry` | string | Retarget container images to this registry for air-gapped installs (`--image-registry`) |
 | `customCACerts` | []string | PEM-encoded CA certificates to trust in W&B workloads (`--custom-ca-cert-file`, repeatable) |
 | `caCertsConfigMap` | string | Name of a ConfigMap holding CA certificates to trust (`--custom-ca-configmap`) |
+| `imagePullSecrets` | []object | `dockerconfigjson` Secret references for private-registry image pulls (`--image-pull-secret`, repeatable) |
 | `proxy.httpProxy` | object | Forward proxy for HTTP egress: `value` (literal URL, `--proxy-http-url`) or `valueFrom.secretKeyRef` (`--proxy-http-secret`, for a credentialed URL) |
 | `proxy.httpsProxy` | object | Forward proxy for HTTPS egress (`--proxy-https-url` / `--proxy-https-secret`) |
 | `proxy.noProxy` | []string | Extra `NO_PROXY` entries appended to the operator's in-cluster exclusions (`--no-proxy`, repeatable) |

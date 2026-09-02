@@ -1,10 +1,38 @@
 package operator
 
 import (
+	"fmt"
+	"strings"
+
 	v2 "github.com/wandb/operator/api/v2"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"knative.dev/pkg/ptr"
 )
+
+// ValidateImagePullSecretNames rejects values that cannot name a Kubernetes
+// Secret. All names are checked before callers mutate a CR.
+func ValidateImagePullSecretNames(names []string) error {
+	for _, name := range names {
+		if problems := validation.IsDNS1123Subdomain(name); len(problems) > 0 {
+			return fmt.Errorf("--image-pull-secret %q is not a valid Kubernetes Secret name: %s", name, strings.Join(problems, "; "))
+		}
+	}
+	return nil
+}
+
+// SetImagePullSecrets validates every name before appending any Secret refs to
+// spec.global.imagePullSecrets.
+func SetImagePullSecrets(cr *v2.WeightsAndBiases, names []string) error {
+	if err := ValidateImagePullSecretNames(names); err != nil {
+		return err
+	}
+	for _, name := range names {
+		cr.Spec.Global.ImagePullSecrets = append(cr.Spec.Global.ImagePullSecrets, corev1.LocalObjectReference{Name: name})
+	}
+	return nil
+}
 
 // DefaultWandbCR returns the base WeightsAndBiases wsm deploys: managed infra
 // keyed under the reserved default instance, telemetry off. Callers fill in

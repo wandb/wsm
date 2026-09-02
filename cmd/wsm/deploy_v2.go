@@ -15,6 +15,7 @@ import (
 	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/operator"
 	"github.com/wandb/wsm/pkg/serverversion"
+	"github.com/wandb/wsm/pkg/telemetry"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -381,7 +382,7 @@ func operatorDeployCmd() *cobra.Command {
 			f := wandbCRFlagsFrom(cmd)
 			createAwsIngressClass, _ := cmd.Flags().GetBool("create-aws-ingress-class")
 			createAwsStorageClass, _ := cmd.Flags().GetBool("create-aws-storage-class")
-			telemetry := telemetryConfigFrom(cmd)
+			telemetryConfig := telemetryConfigFrom(cmd)
 			wait, _ := cmd.Flags().GetBool("wait")
 
 			// The CR only reconciles this run when --include-cr is set; otherwise the
@@ -390,13 +391,13 @@ func operatorDeployCmd() *cobra.Command {
 				return err
 			}
 
-			if err := validateObservabilityMode(telemetry.Mode); err != nil {
+			if err := validateObservabilityMode(telemetryConfig.Mode); err != nil {
 				return err
 			}
 			if err := validateKubeStateMetricsInstallMode(installKubeStateMetricsMode); err != nil {
 				return err
 			}
-			if telemetry.Mode == operator.TelemetryModeForward && telemetry.ForwardEndpoint == "" {
+			if telemetryConfig.Mode == telemetry.ModeForward && telemetryConfig.ForwardEndpoint == "" {
 				return fmt.Errorf("--observability-mode=forward requires --observability-forward-endpoint")
 			}
 			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), f.gatewayClass, f.ingressClass); err != nil {
@@ -446,7 +447,7 @@ func operatorDeployCmd() *cobra.Command {
 				includeCR,
 				wait,
 				clusterName,
-				telemetry,
+				telemetryConfig,
 				f.wandbNamespace,
 				workers,
 				operatorChartVersion,
@@ -765,7 +766,7 @@ func performDeploy(
 	includeCR bool,
 	wait bool,
 	clusterName string,
-	telemetry operator.TelemetryConfig,
+	telemetryConfig telemetry.Config,
 	wandbNamespace string,
 	workers int,
 	operatorChartVersion string,
@@ -804,11 +805,11 @@ func performDeploy(
 	// KSM only makes sense with the in-cluster telemetry stack (full). A bare =false
 	// is hands-off: wsm neither installs nor removes it.
 	manageKubeStateMetrics := installKubeStateMetricsMode != operator.KubeStateMetricsInstallModeFalse
-	installKubeStateMetrics := manageKubeStateMetrics && telemetry.Mode == operator.TelemetryModeFull
+	installKubeStateMetrics := manageKubeStateMetrics && telemetryConfig.Mode == telemetry.ModeFull
 
 	// Turn on the operator chart's KSM scrape (off by default) whenever we're
 	// managing KSM under full, so its kube_* metrics actually get collected.
-	telemetry.ScrapeKubeStateMetrics = installKubeStateMetrics
+	telemetryConfig.ScrapeKubeStateMetrics = installKubeStateMetrics
 
 	// Calculate total steps based on flags
 	totalSteps := 2 // Always: ensure cert-manager, deploy operator
@@ -959,7 +960,7 @@ func performDeploy(
 		}
 		ksmOwned = false
 		fmt.Println(" ✓")
-	} else if telemetry.Mode == operator.TelemetryModeFull {
+	} else if telemetryConfig.Mode == telemetry.ModeFull {
 		// full telemetry but KSM disabled: warn that kube_* metrics won't be collected.
 		fmt.Println("→ Skipping kube-state-metrics (--install-kube-state-metrics=false); kube_* metrics won't be collected")
 	}
@@ -987,7 +988,7 @@ func performDeploy(
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
 	start := time.Now()
 
-	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetry, wandbNamespace, openshift, operatorInstallTimeout, operatorPullPolicy); err != nil {
+	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetryConfig, wandbNamespace, openshift, operatorInstallTimeout, operatorPullPolicy); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -1496,12 +1497,12 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 	}
 }
 
-// telemetryConfigFrom reads the operator-chart telemetry flags into the operator domain type.
+// telemetryConfigFrom reads the operator-chart telemetry flags into a telemetry.Config.
 // These flags live on `deploy-v2 operator` only (see operatorDeployCmd).
-func telemetryConfigFrom(cmd *cobra.Command) operator.TelemetryConfig {
+func telemetryConfigFrom(cmd *cobra.Command) telemetry.Config {
 	str := func(name string) string { v, _ := cmd.Flags().GetString(name); return v }
 	headers, _ := cmd.Flags().GetStringToString("observability-forward-headers")
-	return operator.TelemetryConfig{
+	return telemetry.Config{
 		Mode:              str("observability-mode"),
 		ForwardEndpoint:   str("observability-forward-endpoint"),
 		OtelSecretName:    str("observability-otel-secret"),
@@ -1860,7 +1861,7 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 	// the one wsm's template builds. A --cr-file that keys managed infra under a
 	// different instance name won't be touched by these flags; author such CRs
 	// with telemetry/copies set directly.
-	if f.telemetryMode != "" && f.telemetryMode != operator.TelemetryModeOff {
+	if f.telemetryMode != "" && f.telemetryMode != telemetry.ModeOff {
 		// The map value is a struct copy, but ManagedX are pointers, so mutating
 		// through them reaches the pointee — no write-back to the map needed.
 		if m, ok := wandbCR.Spec.MySQL[v2.DefaultInstanceName]; ok && m.ManagedMysql != nil {

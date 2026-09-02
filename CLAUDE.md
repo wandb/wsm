@@ -67,7 +67,7 @@ This is the single most important architectural fact about v2. The implication i
 ### Hand-bumped per release
 
 Constants in `cmd/wsm/deploy_v2.go` need updating each W&B/operator release. The two W&B server-version knobs sit together in one commented `const` block near the top of the file (search `W&B server version policy`):
-- `defaultWandbVersion` (currently `"0.83.0"`) — used when `--wandb-version` is unset.
+- `defaultWandbVersion` (currently `"0.84.0"`) — used when `--wandb-version` is unset.
 - `minWandbVersion` (currently `"0.80.0"`) — the oldest server wsm will deploy; a resolved version below it (via `--wandb-version`, `--cr-file`, or `--cr-set spec.wandb.version`) is rejected up front by `validateWandbVersion`. Raise it when dropping support for old servers.
 - The default of `--operator-chart-version` flag (currently `"2.0.0-beta.4"`).
 

@@ -187,7 +187,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--wandb-name` | `wandb` | Name of the W&B instance |
 | `--wandb-namespace` | `wandb` | Kubernetes namespace for the CR |
 | `--wandb-hostname` | `http://localhost:8080` | External URL for accessing W&B |
-| `--wandb-version` | — | Server manifest version (defaults to built-in stable version; a leading `v` is accepted). Cross-checked against the published [`wandb/local`](https://hub.docker.com/r/wandb/local/tags) tags — see the note below. List valid values with [`wsm deploy-v2 wandb list-versions`](#wsm-deploy-v2-wandb-list-versions) |
+| `--wandb-version` | — | Server manifest version (defaults to `0.84.0`; a leading `v` is accepted). Cross-checked against the published [`wandb/local`](https://hub.docker.com/r/wandb/local/tags) tags — see the note below. List valid values with [`wsm deploy-v2 wandb list-versions`](#wsm-deploy-v2-wandb-list-versions) |
 | `--mirror-registry` | — | Install the W&B instance from this mirror. Defaults `--manifest-repository` to `oci://<mirror>/wandb/server-manifest` (charts, operator/infra images, and the rewritten app images come from the mirror). The managed data-plane images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) keep their upstream refs and reach the mirror via each node's container-runtime registry mirror — not `spec.global.imageRegistry`. Populate the mirror first with `wsm registry mirror`. |
 | `--manifest-repository` | — | Server manifest source. Accepts an OCI repository (`oci://…`, pulled over HTTPS) **or** a local `file://` path mounted onto the operator pod (the no-TLS option for plain-HTTP / insecure air-gap installs; a plain-HTTP `oci://` mirror is rejected). Auto-set to `oci://<mirror>/wandb/server-manifest` when `--mirror-registry` is provided and this is unset. |
 | `--size` | `dev` | Deployment size profile: `dev`, `micro`, `small`, `medium`, `large`, `xlarge`, `xxlarge` |
@@ -208,6 +208,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--no-proxy` | — | Extra `NO_PROXY` entry appended to the operator's in-cluster exclusions (`spec.global.proxy.noProxy`); repeatable. Use for external endpoints (e.g. a BYOB object store) that must bypass the proxy |
 | `--objectstore-copies` | — | Managed object store replica copies (`spec.objectStore.managedObjectStore.copies`). Operator default applies when unset. Applies to the default managed instance only (see note below) |
 | `--bucket-proxy` | — | Route object-store access through the W&B app instead of direct client access (`spec.wandb.bucketProxy`). Operator default applies when unset |
+| `--admin-console` | `true` | Enable the admin console (`spec.adminConsoleEnabled`). Disable it with `--admin-console=false` |
 | `--cr-set` | — | Set an arbitrary CR field as `<path>=<value>`, e.g. `spec.wandb.version=0.82.2`; repeatable. Values are YAML-typed (`3`→number, `true`→bool, `[a,b]`→list). Overrides the built-in template, `--cr-file`, and the typed flags above (see note below) |
 | `--gateway-class` | `nginx` | Gateway class name (selects Gateway API mode; the default). Mutually exclusive with `--ingress-class` |
 | `--ingress-class` | — | Ingress class name (selects Ingress mode). Takes precedence over the default `--gateway-class`; setting both explicitly is an error |
@@ -241,8 +242,8 @@ wsm deploy-v2 wandb deploy --context prod
 
 # Pin a specific server version; an optional leading v is normalized for both flags
 # and --cr-set overrides
-wsm deploy-v2 wandb deploy --context prod --wandb-version v0.83.0
-wsm deploy-v2 wandb deploy --context prod --cr-set spec.wandb.version=v0.83.0
+wsm deploy-v2 wandb deploy --context prod --wandb-version v0.84.0
+wsm deploy-v2 wandb deploy --context prod --cr-set spec.wandb.version=v0.84.0
 
 # TLS with a self-signed CA (https hostname triggers cert-manager wiring)
 wsm deploy-v2 wandb deploy --context prod \
@@ -261,6 +262,9 @@ wsm deploy-v2 wandb deploy --context prod \
   --proxy-http-secret wandb-proxy:http-url \
   --proxy-https-secret wandb-proxy:https-url \
   --no-proxy s3.corp.example.com --no-proxy oidc.corp.example.com
+
+# The admin console is enabled by default; explicitly disable it when not wanted
+wsm deploy-v2 wandb deploy --context prod --admin-console=false
 
 # Air-gapped: pull everything (app + DB images, server manifest) from one mirror
 wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --wandb-version 0.82.2

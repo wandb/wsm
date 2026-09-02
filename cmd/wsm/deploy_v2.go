@@ -127,6 +127,21 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().Int32("objectstore-copies", 0, "Managed object store replica copies (spec.objectStore.managedObjectStore.copies; optional, operator default when unset)")
 	cmd.PersistentFlags().Bool("bucket-proxy", false, "Route object-store access through the W&B app instead of direct client access (spec.wandb.bucketProxy; optional, operator default when unset)")
 	cmd.PersistentFlags().Bool("admin-console", true, "Enable the admin console (spec.adminConsoleEnabled; disable with --admin-console=false)")
+	cmd.PersistentFlags().Bool("security-allow-user-team-creation", false, "Allow users to create teams (spec.wandb.security.allowUserTeamCreation; optional)")
+	cmd.PersistentFlags().Bool("security-disable-code-saving", false, "Disable code saving (spec.wandb.security.disableCodeSaving; optional)")
+	cmd.PersistentFlags().Bool("security-allow-anonymous-public-projects", false, "Allow anonymous access to public projects (spec.wandb.security.allowAnonymousPublicProjects; optional)")
+	cmd.PersistentFlags().Bool("security-disable-sso-provisioning", false, "Disable SSO user provisioning (spec.wandb.security.disableSSOProvisioning; optional)")
+	cmd.PersistentFlags().Bool("security-insecure-allow-apikey-admin-access", false, "Allow admin access via API key (insecure) (spec.wandb.security.insecureAllowAPIKeyAdminAccess; optional)")
+	cmd.PersistentFlags().Bool("security-hide-upgrade-banner", false, "Hide the upgrade banner (spec.wandb.security.hideUpgradeBanner; optional)")
+	cmd.PersistentFlags().Bool("artifact-gc", false, "Enable artifact garbage collection (spec.wandb.retention.artifactGarbageCollection; optional)")
+	cmd.PersistentFlags().String("data-retention-period", "", "Data retention period, e.g. 720h; units: h (hours), m (minutes), s (seconds) (spec.wandb.retention.dataRetentionPeriod; optional)")
+	cmd.PersistentFlags().String("email-sink", "", "Email notification sink URL as <secret-name>:<key>; mutually exclusive with --smtp-* (spec.wandb.notifications.email.sink; optional)")
+	cmd.PersistentFlags().String("smtp-host", "", "SMTP host (spec.wandb.notifications.email.smtp.host; optional)")
+	cmd.PersistentFlags().String("smtp-port", "", "SMTP port (spec.wandb.notifications.email.smtp.port; optional)")
+	cmd.PersistentFlags().String("smtp-username", "", "SMTP username (spec.wandb.notifications.email.smtp.username; optional)")
+	cmd.PersistentFlags().String("smtp-password", "", "SMTP password as <secret-name>:<key> (spec.wandb.notifications.email.smtp.password; optional)")
+	cmd.PersistentFlags().String("slack-client-id", "", "Slack client ID (spec.wandb.notifications.slack.clientId; optional)")
+	cmd.PersistentFlags().String("slack-client-secret", "", "Slack client secret as <secret-name>:<key> (spec.wandb.notifications.slack.clientSecret; optional)")
 	// Forward-proxy egress (spec.global.proxy).
 	cmd.PersistentFlags().String("proxy-http-url", "", "Literal HTTP_PROXY URL, no credentials (spec.global.proxy.httpProxy.value; optional)")
 	cmd.PersistentFlags().String("proxy-https-url", "", "Literal HTTPS_PROXY URL, no credentials (spec.global.proxy.httpsProxy.value; optional)")
@@ -1381,14 +1396,19 @@ type wandbCRFlags struct {
 	imagePullSecrets      []string
 	customCAConfigMap     string
 	// spec.global.proxy: literal URL or <secret>:<key> per http/https.
-	proxyHTTPURL      string
-	proxyHTTPSURL     string
-	proxyHTTPSecret   string
-	proxyHTTPSSecret  string
-	noProxy           []string
-	objectStoreCopies *int32
-	bucketProxy       *bool
-	adminConsole      *bool
+	proxyHTTPURL        string
+	proxyHTTPSURL       string
+	proxyHTTPSecret     string
+	proxyHTTPSSecret    string
+	noProxy             []string
+	objectStoreCopies   *int32
+	bucketProxy         *bool
+	adminConsole        *bool
+	security            operator.SecurityFlags
+	artifactGC          *bool
+	dataRetentionPeriod string
+	notifyEmail         operator.EmailInputs
+	notifySlack         operator.SlackInputs
 	// Air-gap install fields. mirrorRegistry is the one-stop mirror flag: it
 	// points the operator/subchart charts + images and the server manifest at the
 	// mirror (defaults manifestRepo). It does NOT set spec.global.imageRegistry.
@@ -1413,39 +1433,60 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 	crSet, _ := cmd.Flags().GetStringArray("cr-set")
 	noProxy, _ := cmd.Flags().GetStringArray("no-proxy")
 	return wandbCRFlags{
-		crFile:                 str("cr-file"),
-		wandbVersion:           str("wandb-version"),
-		wandbName:              str("wandb-name"),
-		wandbHostname:          str("wandb-hostname"),
-		gatewayClass:           str("gateway-class"),
-		ingressClass:           str("ingress-class"),
-		ingressName:            str("ingress-name"),
-		issuerName:             str("issuer-name"),
-		addIngressAnnotations:  boolean("add-ingress-annotations"),
-		license:                str("license"),
-		licenseFile:            str("license-file"),
-		telemetryMode:          str("observability-mode"),
-		wandbNamespace:         str("wandb-namespace"),
-		createCA:               boolean("create-ca"),
-		size:                   str("size"),
-		retentionPolicy:        str("retention-policy"),
-		oidcClientID:           str("oidc-client-id"),
-		oidcClientSecret:       str("oidc-client-secret"),
-		oidcIssuerURL:          str("oidc-issuer-url"),
-		oidcAuthMethod:         str("oidc-auth-method"),
-		oidcSessionLength:      str("oidc-session-length"),
-		imageRegistry:          str("image-registry"),
-		customCACertFiles:      certFiles,
-		imagePullSecrets:       imagePullSecrets,
-		customCAConfigMap:      str("custom-ca-configmap"),
-		proxyHTTPURL:           str("proxy-http-url"),
-		proxyHTTPSURL:          str("proxy-https-url"),
-		proxyHTTPSecret:        str("proxy-http-secret"),
-		proxyHTTPSSecret:       str("proxy-https-secret"),
-		noProxy:                noProxy,
-		objectStoreCopies:      changedInt32(cmd, "objectstore-copies"),
-		bucketProxy:            changedBool(cmd, "bucket-proxy"),
-		adminConsole:           changedBool(cmd, "admin-console"),
+		crFile:                str("cr-file"),
+		wandbVersion:          str("wandb-version"),
+		wandbName:             str("wandb-name"),
+		wandbHostname:         str("wandb-hostname"),
+		gatewayClass:          str("gateway-class"),
+		ingressClass:          str("ingress-class"),
+		ingressName:           str("ingress-name"),
+		issuerName:            str("issuer-name"),
+		addIngressAnnotations: boolean("add-ingress-annotations"),
+		license:               str("license"),
+		licenseFile:           str("license-file"),
+		telemetryMode:         str("observability-mode"),
+		wandbNamespace:        str("wandb-namespace"),
+		createCA:              boolean("create-ca"),
+		size:                  str("size"),
+		retentionPolicy:       str("retention-policy"),
+		oidcClientID:          str("oidc-client-id"),
+		oidcClientSecret:      str("oidc-client-secret"),
+		oidcIssuerURL:         str("oidc-issuer-url"),
+		oidcAuthMethod:        str("oidc-auth-method"),
+		oidcSessionLength:     str("oidc-session-length"),
+		imageRegistry:         str("image-registry"),
+		customCACertFiles:     certFiles,
+		imagePullSecrets:      imagePullSecrets,
+		customCAConfigMap:     str("custom-ca-configmap"),
+		proxyHTTPURL:          str("proxy-http-url"),
+		proxyHTTPSURL:         str("proxy-https-url"),
+		proxyHTTPSecret:       str("proxy-http-secret"),
+		proxyHTTPSSecret:      str("proxy-https-secret"),
+		noProxy:               noProxy,
+		objectStoreCopies:     changedInt32(cmd, "objectstore-copies"),
+		bucketProxy:           changedBool(cmd, "bucket-proxy"),
+		adminConsole:          changedBool(cmd, "admin-console"),
+		security: operator.SecurityFlags{
+			AllowUserTeamCreation:          changedBool(cmd, "security-allow-user-team-creation"),
+			DisableCodeSaving:              changedBool(cmd, "security-disable-code-saving"),
+			AllowAnonymousPublicProjects:   changedBool(cmd, "security-allow-anonymous-public-projects"),
+			DisableSSOProvisioning:         changedBool(cmd, "security-disable-sso-provisioning"),
+			InsecureAllowAPIKeyAdminAccess: changedBool(cmd, "security-insecure-allow-apikey-admin-access"),
+			HideUpgradeBanner:              changedBool(cmd, "security-hide-upgrade-banner"),
+		},
+		artifactGC:          changedBool(cmd, "artifact-gc"),
+		dataRetentionPeriod: str("data-retention-period"),
+		notifyEmail: operator.EmailInputs{
+			Sink:         str("email-sink"),
+			SMTPHost:     str("smtp-host"),
+			SMTPPort:     str("smtp-port"),
+			SMTPUsername: str("smtp-username"),
+			SMTPPassword: str("smtp-password"),
+		},
+		notifySlack: operator.SlackInputs{
+			ClientID:     str("slack-client-id"),
+			ClientSecret: str("slack-client-secret"),
+		},
 		mirrorRegistry:         str("mirror-registry"),
 		insecureRegistry:       boolean("insecure-registry"),
 		registryCAFile:         str("registry-ca-file"),
@@ -1855,6 +1896,20 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 		// Apply the CLI default when a --cr-file leaves the field unset, while
 		// preserving an explicit true or false value from the file.
 		wandbCR.Spec.AdminConsoleEnabled = ptr.Bool(true)
+	}
+
+	operator.SetSecurity(wandbCR, f.security)
+
+	if err := operator.SetRetention(wandbCR, f.artifactGC, f.dataRetentionPeriod); err != nil {
+		return err
+	}
+
+	notifications, err := operator.MergeNotifications(wandbCR.Spec.Wandb.Notifications, f.notifyEmail, f.notifySlack)
+	if err != nil {
+		return err
+	}
+	if notifications != nil {
+		wandbCR.Spec.Wandb.Notifications = notifications
 	}
 
 	wandbCR.Namespace = f.wandbNamespace

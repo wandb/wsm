@@ -40,6 +40,12 @@ kind: WeightsAndBiases
 | `internalServiceAuth.enabled` | bool | `false` | Enable internal service authentication |
 | `oidc.clientId` / `oidc.clientSecret` / `oidc.issuerUrl` / `oidc.authMethod` | secretKeyRef | — | OIDC settings sourced from a Secret key (`--oidc-*` flags) |
 | `oidc.sessionLength` | string | — | OIDC session length, e.g. `720h` (`--oidc-session-length`) |
+| `security.*` | bool | operator default | Security toggles: `allowUserTeamCreation`, `disableCodeSaving`, `allowAnonymousPublicProjects`, `disableSSOProvisioning`, `insecureAllowAPIKeyAdminAccess`, `hideUpgradeBanner` (`--security-*` flags) |
+| `retention.artifactGarbageCollection` | bool | — | Enable artifact garbage collection (`--artifact-gc`) |
+| `retention.dataRetentionPeriod` | string | — | Data retention period, e.g. `720h`; units `h`/`m`/`s` (`--data-retention-period`) |
+| `notifications.email.sink` | value-or-secret | — | Email sink URL (`--email-sink`, a Secret ref) |
+| `notifications.email.smtp.*` | value-or-secret | — | SMTP `host`/`port`/`username` (literals) and `password` (a Secret ref) (`--smtp-*`) |
+| `notifications.slack.clientId` / `clientSecret` | value-or-secret | — | Slack client ID (literal) and secret (a Secret ref) (`--slack-client-id` / `--slack-client-secret`) |
 
 ---
 

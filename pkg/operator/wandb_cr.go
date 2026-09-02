@@ -68,6 +68,137 @@ func SetRetention(cr *v2.WeightsAndBiases, artifactGC *bool, dataRetentionPeriod
 	return nil
 }
 
+// ParseValueOrSecret turns a literal or a "<name>:<key>" secret ref into a
+// v2.ValueOrSecret. Both empty yields the zero value; both set is an error.
+func ParseValueOrSecret(literal, secretRef string) (v2.ValueOrSecret, error) {
+	if literal != "" && secretRef != "" {
+		return v2.ValueOrSecret{}, fmt.Errorf("a literal value and a secret ref are mutually exclusive")
+	}
+	if literal != "" {
+		return v2.LiteralValue(literal), nil
+	}
+	if secretRef == "" {
+		return v2.ValueOrSecret{}, nil
+	}
+	name, key, ok := strings.Cut(secretRef, ":")
+	if !ok || name == "" || key == "" {
+		return v2.ValueOrSecret{}, fmt.Errorf("secret ref must be <secret-name>:<key>, got %q", secretRef)
+	}
+	return v2.ValueFromSelector(corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: name},
+		Key:                  key,
+	}), nil
+}
+
+// EmailInputs and SlackInputs carry notification flag values. Sink, SMTPPassword
+// and ClientSecret take a "<name>:<key>" secret ref; the rest are literals.
+type EmailInputs struct {
+	Sink         string
+	SMTPHost     string
+	SMTPPort     string
+	SMTPUsername string
+	SMTPPassword string
+}
+
+type SlackInputs struct {
+	ClientID     string
+	ClientSecret string
+}
+
+// MergeNotifications overlays notification flags onto an existing CR-file
+// value. Unset flag groups and leaves are preserved; email accepts a sink or
+// SMTP, not both.
+func MergeNotifications(existing *v2.NotificationsSpec, email EmailInputs, slack SlackInputs) (*v2.NotificationsSpec, error) {
+	n := existing.DeepCopy()
+	if n == nil {
+		n = &v2.NotificationsSpec{}
+	}
+
+	if err := mergeEmail(n, email); err != nil {
+		return nil, err
+	}
+	if err := mergeSlack(n, slack); err != nil {
+		return nil, err
+	}
+	if n.Email == nil && n.Slack == nil {
+		return nil, nil
+	}
+	return n, nil
+}
+
+func mergeEmail(n *v2.NotificationsSpec, in EmailInputs) error {
+	smtpSet := in.SMTPHost != "" || in.SMTPPort != "" || in.SMTPUsername != "" || in.SMTPPassword != ""
+	if in.Sink != "" && smtpSet {
+		return fmt.Errorf("--email-sink and --smtp-* are mutually exclusive")
+	}
+	if in.Sink != "" {
+		sink, err := ParseValueOrSecret("", in.Sink)
+		if err != nil {
+			return err
+		}
+		n.Email = &v2.EmailSpec{Sink: &sink}
+		return nil
+	}
+	if !smtpSet {
+		return nil
+	}
+
+	// Preserve SMTP leaves supplied by --cr-file, but switch away from an
+	// existing sink when any SMTP flag explicitly selects the SMTP arm.
+	smtp := &v2.EmailSMTPSpec{}
+	if n.Email != nil && n.Email.SMTP != nil {
+		smtp = n.Email.SMTP.DeepCopy()
+	}
+	if in.SMTPHost != "" {
+		smtp.Host = v2.LiteralValue(in.SMTPHost)
+	}
+	if in.SMTPPort != "" {
+		smtp.Port = v2.LiteralValue(in.SMTPPort)
+	}
+	if in.SMTPUsername != "" {
+		smtp.Username = v2.LiteralValue(in.SMTPUsername)
+	}
+	if in.SMTPPassword != "" {
+		password, err := ParseValueOrSecret("", in.SMTPPassword)
+		if err != nil {
+			return err
+		}
+		smtp.Password = password
+	}
+	// The webhook requires all four SMTP fields after flags and --cr-file merge.
+	if smtp.Host.IsZero() || smtp.Port.IsZero() || smtp.Username.IsZero() || smtp.Password.IsZero() {
+		return fmt.Errorf("SMTP email needs host, port, username, and password from --smtp-* flags or --cr-file")
+	}
+	n.Email = &v2.EmailSpec{SMTP: smtp}
+	return nil
+}
+
+func mergeSlack(n *v2.NotificationsSpec, in SlackInputs) error {
+	if in.ClientID == "" && in.ClientSecret == "" {
+		return nil
+	}
+	slack := &v2.SlackSpec{}
+	if n.Slack != nil {
+		slack = n.Slack.DeepCopy()
+	}
+	if in.ClientID != "" {
+		slack.ClientID = v2.LiteralValue(in.ClientID)
+	}
+	if in.ClientSecret != "" {
+		secret, err := ParseValueOrSecret("", in.ClientSecret)
+		if err != nil {
+			return err
+		}
+		slack.ClientSecret = secret
+	}
+	// The webhook requires both Slack fields after flags and --cr-file merge.
+	if slack.ClientID.IsZero() || slack.ClientSecret.IsZero() {
+		return fmt.Errorf("slack needs client ID and client secret from --slack-* flags or --cr-file")
+	}
+	n.Slack = slack
+	return nil
+}
+
 // ValidateImagePullSecretNames rejects values that cannot name a Kubernetes
 // Secret. All names are checked before callers mutate a CR.
 func ValidateImagePullSecretNames(names []string) error {

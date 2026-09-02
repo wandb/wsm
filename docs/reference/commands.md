@@ -218,6 +218,11 @@ wsm deploy-v2 wandb deploy [flags]
 | `--security-hide-upgrade-banner` | — | Hide the upgrade banner (`spec.wandb.security.hideUpgradeBanner`) |
 | `--artifact-gc` | — | Enable artifact garbage collection (`spec.wandb.retention.artifactGarbageCollection`) |
 | `--data-retention-period` | — | Data retention period, e.g. `720h`; units: `h` (hours), `m` (minutes), `s` (seconds) (`spec.wandb.retention.dataRetentionPeriod`) |
+| `--email-sink` | — | Email notification sink URL as `<secret-name>:<key>`; mutually exclusive with `--smtp-*` (`spec.wandb.notifications.email.sink`) |
+| `--smtp-host` / `--smtp-port` / `--smtp-username` | — | SMTP server settings. Host, port, username, and password must all be present after merging flags with `--cr-file` (`spec.wandb.notifications.email.smtp.*`) |
+| `--smtp-password` | — | SMTP password as `<secret-name>:<key>` (`spec.wandb.notifications.email.smtp.password`). May complete SMTP settings supplied by `--cr-file` |
+| `--slack-client-id` | — | Slack client ID. Client ID and secret must both be present after merging flags with `--cr-file` (`spec.wandb.notifications.slack.clientId`) |
+| `--slack-client-secret` | — | Slack client secret as `<secret-name>:<key>` (`spec.wandb.notifications.slack.clientSecret`). May complete Slack settings supplied by `--cr-file` |
 | `--cr-set` | — | Set an arbitrary CR field as `<path>=<value>`, e.g. `spec.wandb.version=0.82.2`; repeatable. Values are YAML-typed (`3`→number, `true`→bool, `[a,b]`→list). Overrides the built-in template, `--cr-file`, and the typed flags above (see note below) |
 | `--gateway-class` | `nginx` | Gateway class name (selects Gateway API mode; the default). Mutually exclusive with `--ingress-class` |
 | `--ingress-class` | — | Ingress class name (selects Ingress mode). Takes precedence over the default `--gateway-class`; setting both explicitly is an error |
@@ -288,6 +293,17 @@ wsm deploy-v2 wandb deploy --context prod \
 # Enable artifact garbage collection and retain application data for 30 days
 wsm deploy-v2 wandb deploy --context prod \
   --artifact-gc --data-retention-period 720h
+
+# Configure an email sink and Slack; sensitive values stay in Kubernetes Secrets
+wsm deploy-v2 wandb deploy --context prod \
+  --email-sink wandb-notifications:email-sink \
+  --slack-client-id wandb-prod \
+  --slack-client-secret wandb-notifications:slack-client-secret
+
+# Configure authenticated SMTP instead of an email sink
+wsm deploy-v2 wandb deploy --context prod \
+  --smtp-host smtp.example.com --smtp-port 587 \
+  --smtp-username wandb --smtp-password wandb-notifications:smtp-password
 
 # Air-gapped: pull everything (app + DB images, server manifest) from one mirror
 wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --wandb-version 0.82.2

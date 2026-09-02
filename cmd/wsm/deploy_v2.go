@@ -135,6 +135,13 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().Bool("security-hide-upgrade-banner", false, "Hide the upgrade banner (spec.wandb.security.hideUpgradeBanner; optional)")
 	cmd.PersistentFlags().Bool("artifact-gc", false, "Enable artifact garbage collection (spec.wandb.retention.artifactGarbageCollection; optional)")
 	cmd.PersistentFlags().String("data-retention-period", "", "Data retention period, e.g. 720h; units: h (hours), m (minutes), s (seconds) (spec.wandb.retention.dataRetentionPeriod; optional)")
+	cmd.PersistentFlags().String("email-sink", "", "Email notification sink URL as <secret-name>:<key>; mutually exclusive with --smtp-* (spec.wandb.notifications.email.sink; optional)")
+	cmd.PersistentFlags().String("smtp-host", "", "SMTP host (spec.wandb.notifications.email.smtp.host; optional)")
+	cmd.PersistentFlags().String("smtp-port", "", "SMTP port (spec.wandb.notifications.email.smtp.port; optional)")
+	cmd.PersistentFlags().String("smtp-username", "", "SMTP username (spec.wandb.notifications.email.smtp.username; optional)")
+	cmd.PersistentFlags().String("smtp-password", "", "SMTP password as <secret-name>:<key> (spec.wandb.notifications.email.smtp.password; optional)")
+	cmd.PersistentFlags().String("slack-client-id", "", "Slack client ID (spec.wandb.notifications.slack.clientId; optional)")
+	cmd.PersistentFlags().String("slack-client-secret", "", "Slack client secret as <secret-name>:<key> (spec.wandb.notifications.slack.clientSecret; optional)")
 	// Forward-proxy egress (spec.global.proxy).
 	cmd.PersistentFlags().String("proxy-http-url", "", "Literal HTTP_PROXY URL, no credentials (spec.global.proxy.httpProxy.value; optional)")
 	cmd.PersistentFlags().String("proxy-https-url", "", "Literal HTTPS_PROXY URL, no credentials (spec.global.proxy.httpsProxy.value; optional)")
@@ -1400,6 +1407,8 @@ type wandbCRFlags struct {
 	security            operator.SecurityFlags
 	artifactGC          *bool
 	dataRetentionPeriod string
+	notifyEmail         operator.EmailInputs
+	notifySlack         operator.SlackInputs
 	// Air-gap install fields. mirrorRegistry is the one-stop mirror flag: it
 	// points the operator/subchart charts + images and the server manifest at the
 	// mirror (defaults manifestRepo). It does NOT set spec.global.imageRegistry.
@@ -1465,8 +1474,19 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 			InsecureAllowAPIKeyAdminAccess: changedBool(cmd, "security-insecure-allow-apikey-admin-access"),
 			HideUpgradeBanner:              changedBool(cmd, "security-hide-upgrade-banner"),
 		},
-		artifactGC:             changedBool(cmd, "artifact-gc"),
-		dataRetentionPeriod:    str("data-retention-period"),
+		artifactGC:          changedBool(cmd, "artifact-gc"),
+		dataRetentionPeriod: str("data-retention-period"),
+		notifyEmail: operator.EmailInputs{
+			Sink:         str("email-sink"),
+			SMTPHost:     str("smtp-host"),
+			SMTPPort:     str("smtp-port"),
+			SMTPUsername: str("smtp-username"),
+			SMTPPassword: str("smtp-password"),
+		},
+		notifySlack: operator.SlackInputs{
+			ClientID:     str("slack-client-id"),
+			ClientSecret: str("slack-client-secret"),
+		},
 		mirrorRegistry:         str("mirror-registry"),
 		insecureRegistry:       boolean("insecure-registry"),
 		registryCAFile:         str("registry-ca-file"),
@@ -1882,6 +1902,14 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 
 	if err := operator.SetRetention(wandbCR, f.artifactGC, f.dataRetentionPeriod); err != nil {
 		return err
+	}
+
+	notifications, err := operator.MergeNotifications(wandbCR.Spec.Wandb.Notifications, f.notifyEmail, f.notifySlack)
+	if err != nil {
+		return err
+	}
+	if notifications != nil {
+		wandbCR.Spec.Wandb.Notifications = notifications
 	}
 
 	wandbCR.Namespace = f.wandbNamespace

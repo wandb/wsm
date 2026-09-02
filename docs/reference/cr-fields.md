@@ -43,6 +43,9 @@ kind: WeightsAndBiases
 | `security.*` | bool | operator default | Security toggles: `allowUserTeamCreation`, `disableCodeSaving`, `allowAnonymousPublicProjects`, `disableSSOProvisioning`, `insecureAllowAPIKeyAdminAccess`, `hideUpgradeBanner` (`--security-*` flags) |
 | `retention.artifactGarbageCollection` | bool | — | Enable artifact garbage collection (`--artifact-gc`) |
 | `retention.dataRetentionPeriod` | string | — | Data retention period, e.g. `720h`; units `h`/`m`/`s` (`--data-retention-period`) |
+| `notifications.email.sink` | value-or-secret | — | Email sink URL (`--email-sink`, a Secret ref) |
+| `notifications.email.smtp.*` | value-or-secret | — | SMTP `host`/`port`/`username` (literals) and `password` (a Secret ref) (`--smtp-*`) |
+| `notifications.slack.clientId` / `clientSecret` | value-or-secret | — | Slack client ID (literal) and secret (a Secret ref) (`--slack-client-id` / `--slack-client-secret`) |
 
 ---
 

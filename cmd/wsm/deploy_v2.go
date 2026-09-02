@@ -108,7 +108,7 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("object-store-storage-size", "", "Override the managed object store (SeaweedFS) storage size, e.g. 20Gi. Must be < 30Gi: the operator derives SeaweedFS volumeSizeLimitMB from this and the master rejects a limit >= 30000. Leave empty to use the size preset's default.")
 	cmd.PersistentFlags().String("wandb-hostname", "http://localhost:8080", "Hostname to use for the W&B instance")
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
-	cmd.PersistentFlags().String("wandb-version", "", fmt.Sprintf("Server manifest version (defaults to %s when unset; must be >= %s)", defaultWandbVersion, minWandbVersion))
+	cmd.PersistentFlags().String("wandb-version", "", fmt.Sprintf("Server manifest version (defaults to %s when unset; must be >= %s; a leading v is accepted)", defaultWandbVersion, minWandbVersion))
 	cmd.PersistentFlags().String("manifest-repository", "", "OCI repository for the server manifest (e.g. oci://harbor.corp/wandb/server-manifest). Defaults to oci://<mirror>/wandb/server-manifest when --mirror-registry is set, else the operator default.")
 	cmd.PersistentFlags().String("mirror-registry", "", "Install everything (charts, operator/infra images, and the W&B app/DB images) from this air-gapped mirror registry, e.g. harbor.corp:5443. Populate it first with 'wsm registry mirror --to <same-host>'.")
 	cmd.PersistentFlags().Bool("insecure-registry", false, "Use plain HTTP / skip TLS verification when talking to --mirror-registry")
@@ -1604,8 +1604,10 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 		wandbCR.Spec.Wandb.Version = f.wandbVersion
 	}
 
-	// Enforce the minimum supported server on the resolved version (default,
-	// --wandb-version, or --cr-file). --cr-set is checked separately before apply.
+	// Accept a leading v (published server tags are unprefixed), then enforce the
+	// minimum supported server on the resolved version (default, --wandb-version,
+	// or --cr-file). --cr-set is checked separately before apply.
+	wandbCR.Spec.Wandb.Version = operator.NormalizeVersion(wandbCR.Spec.Wandb.Version)
 	if err := validateWandbVersion(wandbCR.Spec.Wandb.Version); err != nil {
 		return err
 	}

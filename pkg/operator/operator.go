@@ -1259,6 +1259,18 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases, overrides []CROv
 	// --cr-set overrides are applied last — after the template, --cr-file, typed
 	// flags, and the strip — so a set field always wins and is never removed. The
 	// CRD validates the result server-side on apply.
+	if err := applyCROverrides(obj, overrides); err != nil {
+		return err
+	}
+
+	if err := kubectl.ApplyUnstructured(ctx, obj); err != nil {
+		return fmt.Errorf("failed to apply CR: %w", err)
+	}
+
+	return nil
+}
+
+func applyCROverrides(obj *unstructured.Unstructured, overrides []CROverride) error {
 	for _, o := range overrides {
 		val := o.Value
 		// A number parsed for a string field (e.g. version=1.0) is set from the
@@ -1274,11 +1286,6 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases, overrides []CROv
 			return fmt.Errorf("failed to apply --cr-set %s: %w", strings.Join(o.Path, "."), err)
 		}
 	}
-
-	if err := kubectl.ApplyUnstructured(ctx, obj); err != nil {
-		return fmt.Errorf("failed to apply CR: %w", err)
-	}
-
 	return nil
 }
 
@@ -1329,7 +1336,15 @@ func ParseCROverrides(sets []string) ([]CROverride, error) {
 		if err != nil {
 			return nil, fmt.Errorf("--cr-set %q: %w", s, err)
 		}
-		overrides = append(overrides, CROverride{Path: strings.Split(path, "."), Value: value, Raw: rawValue})
+		override := CROverride{Path: strings.Split(path, "."), Value: value, Raw: rawValue}
+		if path == "spec.wandb.version" {
+			normalized := NormalizeVersion(OverrideStringValue(override))
+			override.Raw = normalized
+			if _, isString := override.Value.(string); isString {
+				override.Value = normalized
+			}
+		}
+		overrides = append(overrides, override)
 	}
 	return overrides, nil
 }

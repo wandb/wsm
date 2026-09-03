@@ -100,7 +100,7 @@ all). The charts, operator, and images never need TLS; only the `oci://` manifes
 | Registry | a throwaway `registry:2` (plain HTTP)                                                                                                                                                                                                                                                                                                                                                                                               | your Harbor / ECR / Artifactory / internal registry (HTTPS) |
 | Brings up | **everything** — databases, app, weave                                                                                                                                                                                                                                                                                                                                                                                              | **everything** |
 | Manifest delivery | `file://`, mounted into the operator pod (no registry TLS)                                                                                                                                                                                                                                                                                                                                                                          | `oci://`, pulled from the registry (needs a valid / trusted cert) |
-| **1. Set up + mirror** (online) | `docker run -d -p 5000:5000 --name local-registry registry:2`<br>`REG=host.docker.internal:5000`<br>`wsm registry mirror --to $REG --insecure --operator-chart-version <ver> --wandb-version <v>`<br> pushes charts + operator + managed + **app** images; the final manifest-push step fails on plain HTTP — expected. <br> **see ‡ below for steps to mirror manifest without TLS then continue to step 2**                       | `REG=<registry reachable from host, nodes, and pods>`<br>`wsm registry mirror --to $REG --operator-chart-version <ver> --wandb-version <v>`<br>_add `--insecure` only to skip verifying a self-signed push cert_<br>`wsm registry check --registry $REG --wandb-version <v> --fail-on-missing` |
+| **1. Set up + mirror** (online) | `docker run -d -p 5000:5000 --name local-registry registry:2`<br>`REG=host.docker.internal:5000`<br>`wsm registry mirror --to $REG --insecure --operator-chart-version <ver> --wandb-version <v>`<br> pushes charts + operator + managed + **app** images; the final manifest-push step fails on plain HTTP — expected. <br> **see ‡ below for steps to mirror manifest without TLS then continue to step 2**                       | `REG=<registry reachable from host, nodes, and pods>`<br>`wsm registry mirror --to $REG --operator-chart-version <ver> --wandb-version <v>`<br>_add `--insecure` only to skip verifying a self-signed push cert_<br>`wsm registry check --registry $REG --wandb-version <v> --fail-on-missing`<br>_**Amazon ECR:** run `wsm registry create-repos` first — ECR doesn't auto-create repos (see [Phase 1](#phase-1--mirror-everything-online))_ |
 | **2. Install** (offline) | `wsm cluster create --cluster-name airgap --insecure-registry-host $REG`<br>`wsm deploy-v2 operator --context kind-airgap --mirror-registry $REG --insecure-registry --operator-chart-version <ver> --skip-gateway-api-crds`<br>_mount the manifest onto the operator pod — see ‡ below_<br>`wsm deploy-v2 wandb deploy --context kind-airgap --manifest-repository file:///manifests --wandb-version <v>`<br>_no `--mirror-registry` on this path: the node's containerd mirrors (from `--insecure-registry-host`) retarget the managed DB images, and the mounted `file://` manifest carries the app refs. `--mirror-registry` on `wandb deploy` only defaults `--manifest-repository` to the mirror — it does **not** retarget the DB images_ | _if the registry CA is self-signed, first [make the nodes trust it](#make-the-nodes-trust-the-ca)_<br>`wsm deploy-v2 operator --context <ctx> --mirror-registry $REG --operator-chart-version <ver> --registry-ca-file ./ca.crt --skip-gateway-api-crds`<br>`wsm deploy-v2 wandb deploy --context <ctx> --mirror-registry $REG --wandb-version <v>`<br>_drop `--registry-ca-file` if the CA is already trusted by host + cluster._<br>_the managed DB images reach `$REG` via your nodes' container-runtime registry mirror (configure per node); `--mirror-registry` covers charts/operator/app images only_ |
 
 **‡ Deliver the manifest via `file://` (no registry TLS).** The published server manifest is an
@@ -165,6 +165,33 @@ they do:
                           docker pull …/server-manifest:<v>  →  manifest.yaml (+ sizing.yaml)
                         ← mounted onto the operator pod in Phase 2 and read via file://
 ```
+
+> **Amazon ECR: create the repositories first.** Unlike Harbor / Artifactory / GCR / a local
+> `registry:2` — which create a repository implicitly on first push — **ECR rejects a push to a
+> repository that doesn't exist** (`name unknown: The repository ... does not exist`).
+> `wsm registry mirror` fans out to dozens of distinct repo paths, so run `wsm registry create-repos`
+> once (same `--operator-chart-version` / `--wandb-version` / `--skip-managed-images` flags as
+> `mirror`) **before** mirroring:
+>
+> ```bash
+> REG=<acct>.dkr.ecr.<region>.amazonaws.com/<optional/prefix>
+>
+> # 1. authenticate Docker to ECR (also needed for the mirror push; the token lasts 12h)
+> aws ecr get-login-password --region <region> \
+>   | docker login --username AWS --password-stdin <acct>.dkr.ecr.<region>.amazonaws.com
+>
+> # 2. create every repo the mirror will push to (idempotent; add --dry-run to preview the list)
+> wsm registry create-repos --to $REG --operator-chart-version <ver> --wandb-version <v>
+>
+> # 3. mirror as usual (ECR's cert is publicly trusted — omit --insecure / --registry-ca-file)
+> wsm registry mirror --to $REG --operator-chart-version <ver> --wandb-version <v>
+> ```
+>
+> `create-repos` shells out to the `aws` CLI and needs IAM `ecr:CreateRepository`; it's idempotent
+> (existing repos are skipped). **Account gotcha:** ECR always creates repositories in the *caller's*
+> account, so make sure your active AWS identity is the same account as `$REG`
+> (`aws sts get-caller-identity` should match the account ID in the ECR host) — otherwise the repos,
+> and your `docker login`, land in the wrong account and pushes fail with cross-account `403`s.
 
 ### Phase 2 — install from the registry (offline)
 

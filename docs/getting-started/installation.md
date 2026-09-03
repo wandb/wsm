@@ -7,7 +7,7 @@ WSM is currently distributed as source code. A pre-built binary release pipeline
 - **Operating System**: Linux, macOS, or Windows (with WSL)
 - **git**: to clone this repository
 - **Shell**: Bash or compatible shell
-- **Go**: Version 1.26.3 or later (matches `go.mod`; older toolchains will not build)
+- **Go**: Version 1.27.1 or later (matches `go.mod`; older toolchains will not build)
 - **C compiler** (`gcc`): the build uses cgo via the `gpgme` dependency
 - **pkg-config** and **gpgme**: Required for Go build dependencies
 

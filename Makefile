@@ -1,6 +1,6 @@
-GO_VERSION = 1.25.0
+GO_VERSION = 1.27.1
 
-GOLANGCI_LINT_VERSION = v2.11.4
+GOLANGCI_LINT_VERSION = v2.13.2
 
 # Set environment variables to suppress linker warnings on macOS
 ifeq ($(shell uname),Darwin)
@@ -33,13 +33,13 @@ install: build
 install-lint:
 	@if ! [ -x "$$(command -v golangci-lint)" ]; then \
 		echo "Installing golangci-lint $(GOLANGCI_LINT_VERSION)..."; \
-		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin $(GOLANGCI_LINT_VERSION); \
+		curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $$(go env GOPATH)/bin $(GOLANGCI_LINT_VERSION); \
 	else \
 		CURRENT_VERSION=$$(golangci-lint version | head -n 1 | awk '{print $$4}'); \
 		TARGET_VERSION=$$(echo $(GOLANGCI_LINT_VERSION) | sed 's/^v//'); \
 		if [ "$$CURRENT_VERSION" != "$$TARGET_VERSION" ]; then \
 			echo "Updating golangci-lint from $$CURRENT_VERSION to $(GOLANGCI_LINT_VERSION)..."; \
-			curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin $(GOLANGCI_LINT_VERSION); \
+			curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $$(go env GOPATH)/bin $(GOLANGCI_LINT_VERSION); \
 		else \
 			echo "golangci-lint $(GOLANGCI_LINT_VERSION) is already installed"; \
 		fi \

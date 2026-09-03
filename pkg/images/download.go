@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/containers/image/v5/copy"
-	"github.com/containers/image/v5/directory"
-	"github.com/containers/image/v5/docker"
-	"github.com/containers/image/v5/signature"
-	"github.com/containers/image/v5/types"
+	"go.podman.io/image/v5/copy"
+	"go.podman.io/image/v5/directory"
+	"go.podman.io/image/v5/docker"
+	"go.podman.io/image/v5/signature"
+	"go.podman.io/image/v5/types"
 )
 
 func Download(image string, filename string, platform string) error {

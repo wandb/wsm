@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/containers/image/v5/copy"
-	"github.com/containers/image/v5/docker"
-	"github.com/containers/image/v5/signature"
-	"github.com/containers/image/v5/types"
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/operator"
+	"go.podman.io/image/v5/copy"
+	"go.podman.io/image/v5/docker"
+	"go.podman.io/image/v5/signature"
+	"go.podman.io/image/v5/types"
 )
 
 // registryMirrorCmd pulls every artifact wsm needs for a v2 install from its

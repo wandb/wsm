@@ -18,7 +18,7 @@ New deployments should use **v2**.
 
 ## Install
 
-Requires **Go 1.26+**. Build from source:
+Requires **Go 1.27.1+**. Build from source:
 
 ```bash
 git clone https://github.com/wandb/wsm

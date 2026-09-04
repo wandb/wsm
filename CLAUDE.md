@@ -25,7 +25,7 @@ make lint-fix       # golangci-lint --fix
 make safe-update-deps  # go get -u ./... && go mod tidy
 ```
 
-Go **1.26** is required (matches `go.mod` and CI). On macOS the Makefile sets `CGO_LDFLAGS=-Wl,-w` to suppress linker warnings from the `containers/image` dependency.
+Go **1.27.1** is required (matches `go.mod` and CI). On macOS the Makefile sets `CGO_LDFLAGS=-Wl,-w` to suppress linker warnings from the `containers/image` dependency.
 
 Two Helm SDKs are imported simultaneously by design:
 - `helm.sh/helm/v3` — used only by the legacy `pkg/helm` package serving v1 commands.

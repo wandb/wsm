@@ -8,12 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/containers/image/v5/copy"
-	"github.com/containers/image/v5/docker"
-	dockerarchive "github.com/containers/image/v5/docker/archive"
-	"github.com/containers/image/v5/signature"
-	"github.com/containers/image/v5/types"
 	"github.com/spf13/cobra"
+	"go.podman.io/image/v5/copy"
+	"go.podman.io/image/v5/docker"
+	dockerarchive "go.podman.io/image/v5/docker/archive"
+	"go.podman.io/image/v5/signature"
+	"go.podman.io/image/v5/types"
 )
 
 func registryPushCmd() *cobra.Command {

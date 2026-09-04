@@ -39,11 +39,11 @@ sudo dnf install -y gcc pkgconfig gpgme-devel
 ```
 
 > **Go version**: the distro `go-toolset` package is typically too old to build WSM
-> (`go.mod` pins **go 1.26.3**). Install an upstream Go 1.26.3+ from
+> (`go.mod` pins **go 1.27.1**). Install an upstream Go 1.27.1+ from
 > <https://go.dev/dl/> instead of `go-toolset`, e.g.:
 > ```bash
-> curl -fsSLO https://go.dev/dl/go1.26.3.linux-amd64.tar.gz
-> sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.3.linux-amd64.tar.gz
+> curl -fsSLO https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+> sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.27.1.linux-amd64.tar.gz
 > export PATH=$PATH:/usr/local/go/bin
 > ```
 

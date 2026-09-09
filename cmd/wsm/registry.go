@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containers/image/v5/docker"
-	"github.com/containers/image/v5/types"
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/helm"
 	"github.com/wandb/wsm/pkg/utils"
+	"go.podman.io/image/v5/docker"
+	"go.podman.io/image/v5/types"
 	"gopkg.in/yaml.v3"
 )
 

@@ -53,7 +53,7 @@ func init() {
 const (
 	defaultWandbVersion         = "0.84.0"
 	minWandbVersion             = "0.80.0"
-	defaultOperatorChartVersion = "2.0.0-beta.4"
+	defaultOperatorChartVersion = "2.0.0-beta.5"
 )
 
 // defaultWandbSize is stamped into spec.size when --size is unset.
@@ -496,7 +496,7 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
 	cmd.Flags().StringVar(&kindNodeImage, "kind-node-image", "", "Kind node image to use, e.g. myreg.example.com/kindest/node:v1.35.1@sha256:... (defaults to the upstream pinned image; only used with --setup-k8s-cluster)")
 
-	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", defaultOperatorChartVersion, "Operator Chart version, e.g. 2.0.0-beta.4 (a leading v is accepted)")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", defaultOperatorChartVersion, "Operator Chart version, e.g. 2.0.0-beta.5 (a leading v is accepted)")
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
 	cmd.Flags().DurationVar(&operatorInstallTimeout, "operator-install-timeout", 0, "Helm timeout in seconds, minutes, or hours (for example 30s, 5m, or 1h; 0 uses Helm's default)")
 	cmd.Flags().StringVar(&operatorImagePullPolicy, "operator-image-pull-policy", string(corev1.PullIfNotPresent), "Operator image pull policy (Always, IfNotPresent, or Never; case-insensitive)")

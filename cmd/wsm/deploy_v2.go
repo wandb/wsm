@@ -368,6 +368,8 @@ func operatorDeployCmd() *cobra.Command {
 	var skipGatewayCRDs bool
 	var allowUnsupportedArch bool
 	var openshift bool
+	var watchtowerEnableSecretWrites bool
+	var watchtowerEnableDBAdmin bool
 
 	cmd := &cobra.Command{
 		Use:   "operator",
@@ -466,6 +468,8 @@ func operatorDeployCmd() *cobra.Command {
 				skipGatewayCRDs,
 				allowUnsupportedArch,
 				openshift,
+				watchtowerEnableSecretWrites,
+				watchtowerEnableDBAdmin,
 				crOverrides,
 			); err != nil {
 				fmt.Printf("\n✗ Operator install failed: %v\n", err)
@@ -510,6 +514,8 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&skipGatewayCRDs, "skip-gateway-api-crds", false, "Assume the Gateway API CRDs are already installed; fail instead of fetching them from the internet")
 	cmd.Flags().BoolVar(&allowUnsupportedArch, "allow-unsupported-arch", false, "Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is published amd64-only and will crash under emulation on arm64 (e.g. Kind on Apple Silicon); set this only if you know your operator image is multi-arch.")
 	cmd.Flags().BoolVar(&openshift, "openshift", false, "Enable OpenShift compatibility for the operator and bundled managed-service pods")
+	cmd.Flags().BoolVar(&watchtowerEnableSecretWrites, "watchtower-enable-secret-writes", false, "Let Watchtower write Secrets in the install namespace (broad grant; see docs)")
+	cmd.Flags().BoolVar(&watchtowerEnableDBAdmin, "watchtower-enable-db-admin", false, "Enable Watchtower's email-domain DB migration (irreversible bulk rewrite; see docs)")
 
 	// Chart-only telemetry knobs. These configure the operator's telemetry Helm release, so they
 	// belong to `operator` alone — `wandb deploy` only applies the CR and can't honor them.
@@ -785,6 +791,8 @@ func performDeploy(
 	skipGatewayCRDs bool,
 	allowUnsupportedArch bool,
 	openshift bool,
+	watchtowerEnableSecretWrites bool,
+	watchtowerEnableDBAdmin bool,
 	crOverrides []operator.CROverride,
 ) error {
 	ctx := context.Background()
@@ -988,7 +996,7 @@ func performDeploy(
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
 	start := time.Now()
 
-	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetryConfig, wandbNamespace, openshift, operatorInstallTimeout, operatorPullPolicy); err != nil {
+	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetryConfig, wandbNamespace, openshift, watchtowerEnableSecretWrites, watchtowerEnableDBAdmin, operatorInstallTimeout, operatorPullPolicy); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}

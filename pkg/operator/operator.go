@@ -653,14 +653,8 @@ func applyOpenShiftValues(releaseValues map[string]interface{}) {
 	releaseValues["openshift"] = map[string]interface{}{"enabled": true}
 	mergeValues(releaseValues, "wandb-operator", map[string]interface{}{
 		"podSecurityContext": nullSC,
-		"containers": map[string]interface{}{
-			"operator": map[string]interface{}{
-				"env": map[string]interface{}{
-					"OPENSHIFT": map[string]interface{}{"value": "true"},
-				},
-			},
-		},
 	})
+	setNested(releaseValues, map[string]any{"value": "true"}, "wandb-operator", "containers", "operator", "env", "OPENSHIFT")
 	mergeValues(releaseValues, "redis-operator", map[string]interface{}{"podSecurityContext": nullSC})
 	mergeValues(releaseValues, "altinity-clickhouse-operator", map[string]interface{}{"podSecurityContext": nullSC})
 	mergeValues(releaseValues, "seaweedfs-operator", map[string]interface{}{"podSecurityContext": map[string]interface{}{
@@ -795,6 +789,8 @@ func DeployOperator(
 	telemetryConfig telemetry.Config,
 	wandbNamespace string,
 	openshift bool,
+	watchtowerEnableSecretWrites bool,
+	watchtowerEnableDBAdmin bool,
 	installTimeout time.Duration,
 	imagePullPolicy corev1.PullPolicy,
 ) error {
@@ -940,6 +936,15 @@ func DeployOperator(
 
 	if openshift {
 		applyOpenShiftValues(releaseValues)
+	}
+
+	// Opt-in Watchtower grants, forwarded to the operator container which passes
+	// them to Watchtower. Off by default; see docs/reference/commands.md for the risks.
+	if watchtowerEnableSecretWrites {
+		setNested(releaseValues, map[string]any{"value": "true"}, "wandb-operator", "containers", "operator", "env", "WATCHTOWER_ENABLE_SECRET_WRITES")
+	}
+	if watchtowerEnableDBAdmin {
+		setNested(releaseValues, map[string]any{"value": "true"}, "wandb-operator", "containers", "operator", "env", "WATCHTOWER_ENABLE_DB_ADMIN")
 	}
 
 	if releaseExists {

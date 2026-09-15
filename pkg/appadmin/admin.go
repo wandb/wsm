@@ -1,5 +1,32 @@
 package appadmin
 
+// The app-side contract this file depends on.
+//
+// Every query and mutation below is defined by gorilla's GraphQL schema, which
+// lives in the `core` repo at services/gorilla/schema.graphql. When one of these
+// calls starts failing for no apparent reason, that file is the place to check
+// first — an argument rename or a removed field shows up here as an unhelpful
+// "unknown field" or, worse, as a silently empty result.
+//
+// The exact definitions, as of writing:
+//
+//	users(after: String, before: String, first: Int, ids: [ID!], last: Int,
+//	      query: String, queryEmail: String, usernames: [String!]): UserConnection
+//	                                              schema.graphql:5820
+//	viewer(entityName: String): User              schema.graphql:5823
+//	updateUser(input: UpdateUserInput!): UpdateUserPayload @audit
+//	                                              schema.graphql:5184
+//	input UpdateUserInput { admin: Boolean, ... } schema.graphql:2515
+//
+// Two properties worth knowing because they are not obvious from the calls:
+//
+//   - `users` exposes queryEmail and usernames as SEPARATE arguments. Querying
+//     the wrong one returns an empty connection rather than an error, so a
+//     mis-chosen argument looks exactly like "no such user". FindUser picks based
+//     on whether the identifier contains "@".
+//   - updateUser carries @audit, so every grant and revoke is recorded on the app
+//     side. That is the audit trail for this action — nothing here duplicates it.
+
 import (
 	"context"
 	"errors"
@@ -46,8 +73,11 @@ func FindUser(ctx context.Context, addr string, creds Creds, identifier string) 
 	if err := GraphQL(ctx, addr, creds, query, map[string]any{"v": identifier}, &found); err != nil {
 		return User{}, err
 	}
+	// Deliberately generic, and deliberately not echoing the identifier: this
+	// package also backs Watchtower's web UI, where a message that distinguishes
+	// "no such account" from any other failure is a lookup oracle.
 	if len(found.Users.Edges) == 0 {
-		return User{}, fmt.Errorf("no W&B user matches %s", identifier)
+		return User{}, errors.New("user not found")
 	}
 	return found.Users.Edges[0].Node, nil
 }
@@ -93,16 +123,20 @@ func RequireAdmin(ctx context.Context, addr string, creds Creds) (string, error)
 }
 
 // SetAdmin grants or revokes instance-admin for one account and returns it as
-// the app reports it afterwards.
+// the app reports it afterwards, along with whether the flag actually moved.
 //
 // The mutation carries the CALLER's credentials, so the app enforces the real
 // rules — a non-admin cannot set the flag, and an admin cannot revoke their own —
 // and runs its own side effects (team-role propagation, billing). Its refusal
 // message is returned verbatim, since it explains the rule that was hit better
 // than any restatement here.
-func SetAdmin(ctx context.Context, addr string, creds Creds, identifier string, admin bool) (User, error) {
+//
+// `changed` is reported rather than inferred because the mutation is idempotent:
+// granting admin to an existing admin succeeds and looks identical to a real
+// promotion, which is misleading to report as one.
+func SetAdmin(ctx context.Context, addr string, creds Creds, identifier string, admin bool) (user User, changed bool, err error) {
 	if !creds.HasIdentity() {
-		return User{}, errors.New("no W&B credentials: changing admin status is authorized as the caller, so a W&B account or API key is required")
+		return User{}, false, errors.New("no W&B credentials: changing admin status is authorized as the caller, so a W&B account or API key is required")
 	}
 
 	// Look the account up first: the mutation needs the app's user ID, and
@@ -110,33 +144,38 @@ func SetAdmin(ctx context.Context, addr string, creds Creds, identifier string, 
 	// changed rather than trusting an identifier match.
 	target, err := FindUser(ctx, addr, creds, identifier)
 	if err != nil {
-		return User{}, err
+		return User{}, false, err
 	}
 
 	const mutation = `mutation($id: ID!, $admin: Boolean!) {
 		updateUser(input: {id: $id, admin: $admin}) { user { id username admin } }
 	}`
 	var updated struct {
-		UpdateUser struct {
-			User User `json:"user"`
+		UpdateUser *struct {
+			User *User `json:"user"`
 		} `json:"updateUser"`
 	}
 	if err := GraphQL(ctx, addr, creds, mutation,
 		map[string]any{"id": target.ID, "admin": admin}, &updated); err != nil {
-		return User{}, err
+		return User{}, false, err
 	}
 
-	// Prefer what the app reported; fall back to the looked-up account for
-	// fields the mutation does not return (it omits email).
-	result := updated.UpdateUser.User
+	// A null user with no `errors` entry is a real response shape — a resolver
+	// that failed after passing validation produces it. Filling Admin in from the
+	// REQUEST turned that into apparent success, so the CLI reported a change the
+	// app never made. Require the app to state the outcome instead.
+	if updated.UpdateUser == nil || updated.UpdateUser.User == nil {
+		return User{}, false, errors.New("the W&B app returned no updated user; the admin flag may not have changed — re-run to check")
+	}
+	result := *updated.UpdateUser.User
+	if result.ID == "" || result.Admin == nil {
+		return User{}, false, errors.New("the W&B app returned an incomplete user; the admin flag may not have changed — re-run to check")
+	}
+	// email is the one field the mutation does not select, so it is the only one
+	// backfilled from the lookup.
+	result.Email = target.Email
 	if result.Username == "" {
 		result.Username = target.Username
 	}
-	if result.Email == "" {
-		result.Email = target.Email
-	}
-	if result.Admin == nil {
-		result.Admin = &admin
-	}
-	return result, nil
+	return result, target.IsAdmin() != result.IsAdmin(), nil
 }

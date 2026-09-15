@@ -22,20 +22,16 @@ func UserCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "user",
 		Short: "Administer W&B user accounts on an instance",
-		Long: `Promote or demote instance admins, and migrate accounts between email domains.
+		Long: `Administer W&B user accounts on a running instance.
 
-These act on the W&B application's own data rather than on the CR, and the two
-take different routes:
+  admin                  grant or revoke instance-admin, through the app's own
+                         updateUser mutation, authorized as YOU.
+  migrate-email-domain   rewrite every account's email address from one domain
+                         to another. Irreversible; dry-runs unless --confirm.
 
-  admin                  the app's updateUser mutation, authorized as YOU. The app
-                         enforces its own rules, so you must be an instance admin
-                         and cannot revoke your own flag.
-  migrate-email-domain   SQL against the instance's MySQL, because the app offers
-                         no way to change another user's address. Irreversible,
-                         and requires --confirm after a dry run.
-
-Both need to reach in-cluster Services, so run them from inside the cluster or
-through a port-forward.`,
+Both reach in-cluster Services. Run them from inside the cluster, or from
+outside through a port-forward plus --app-address (which takes an https://
+prefix for any hop that leaves the cluster network).`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if kubeContext == "" {
 				return errors.New("--context is required")
@@ -58,8 +54,8 @@ through a port-forward.`,
 // appAddrFlags are shared by both subcommands: the app's GraphQL host:port and
 // the API key that authenticates to it.
 func addAppFlags(cmd *cobra.Command) {
-	cmd.Flags().String("app-address", "", "host:port serving the W&B app's GraphQL endpoint (default: $WANDB_APP_ADDRESS, else api:8080)")
-	cmd.Flags().String("api-key", "", "W&B API key of an instance admin (default: $WANDB_API_KEY)")
+	cmd.Flags().String("app-address", "", "address of the W&B app's GraphQL endpoint: host:port for an in-cluster Service, or https://host for anything outside the cluster (default: $WANDB_APP_ADDRESS, else api:8080)")
+	cmd.Flags().String("api-key", "", "W&B API key of an instance admin (default: $WANDB_API_KEY, which is preferred — a flag value lands in shell history and in process listings)")
 }
 
 // resolveAppCreds builds the credentials for the app from flags and environment.
@@ -84,7 +80,23 @@ func resolveAppCreds(cmd *cobra.Command) (string, appadmin.Creds, error) {
 	if key == "" {
 		return "", appadmin.Creds{}, errors.New("no API key: pass --api-key or set WANDB_API_KEY to an instance admin's key")
 	}
-	return addr, appadmin.Creds{Authorization: "Bearer " + key}, nil
+
+	// Normalize here so a malformed address is rejected before the credential is
+	// anywhere near a request. A bare host:port stays http:// — that is what an
+	// in-cluster Service is — and anything else must say https:// for itself.
+	base, err := appadmin.BaseURL(addr)
+	if err != nil {
+		return "", appadmin.Creds{}, err
+	}
+	return base, appadmin.Creds{Authorization: "Bearer " + key}, nil
+}
+
+// adminState renders the instance-admin flag for a terminal.
+func adminState(admin bool) string {
+	if admin {
+		return "an instance admin"
+	}
+	return "not an instance admin"
 }
 
 func userAdminCmd() *cobra.Command {
@@ -103,16 +115,18 @@ func userAdminCmd() *cobra.Command {
 				return err
 			}
 
-			user, err := appadmin.SetAdmin(cmd.Context(), addr, creds, args[0], grant)
+			user, changed, err := appadmin.SetAdmin(cmd.Context(), addr, creds, args[0], grant)
 			if err != nil {
 				return err
 			}
 
-			state := "no longer an admin"
-			if user.IsAdmin() {
-				state = "now an admin"
+			// Username only: the email came from the app and does not need to be
+			// echoed to a terminal or a log to confirm the right account changed.
+			if !changed {
+				fmt.Printf("%s was already %s; nothing changed\n", user.Username, adminState(user.IsAdmin()))
+				return nil
 			}
-			fmt.Printf("%s (%s) is %s\n", user.Username, user.Email, state)
+			fmt.Printf("%s is now %s\n", user.Username, adminState(user.IsAdmin()))
 			return nil
 		},
 	}
@@ -133,9 +147,11 @@ func userMigrateEmailDomainCmd() *cobra.Command {
 		Short: "Rewrite every account's email address from one domain to another",
 		Long: `Rewrite every account's email address from one domain to another.
 
-Runs as a dry run unless --confirm is passed: it reports how many accounts match
-and samples their addresses, then rolls back. The real run is IRREVERSIBLE — no
-record of the previous domain survives it.
+Runs as a dry run unless --confirm is passed: it reports how many accounts and
+how many rows match across every table that carries the address, and samples
+their addresses, without writing. The real run is IRREVERSIBLE — no record of
+the previous domain survives it — and is refused if the matching rows changed
+between the preview and the confirmation.
 
 Requires a W&B admin identity even though the write is made with the instance's
 own MySQL credential, so an irreversible bulk rewrite always has an accountable
@@ -176,21 +192,20 @@ W&B account behind it.`,
 			}
 			defer func() { _ = db.Close() }()
 
-			// Always dry-run first, so --confirm reports the same set it is about
-			// to rewrite rather than whatever the user saw earlier.
-			matched, _, samples, _, err := appadmin.MigrateEmailDomain(
-				cmd.Context(), db, oldDomain, newDomain, true, nil)
+			// Always plan first, so --confirm reports the same set it is about to
+			// rewrite rather than whatever the user saw on an earlier run.
+			plan, err := appadmin.PlanEmailDomainMigration(cmd.Context(), db, oldDomain, newDomain)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("%d account(s) match @%s\n", matched, oldDomain)
-			for _, s := range samples {
+			fmt.Printf("%d account(s) and %d row(s) match @%s\n", plan.Accounts, plan.Rows, oldDomain)
+			for _, s := range plan.Samples {
 				fmt.Printf("  %s\n", s)
 			}
-			if matched > len(samples) {
-				fmt.Printf("  … and %d more\n", matched-len(samples))
+			if plan.Accounts > len(plan.Samples) {
+				fmt.Printf("  … and %d more\n", plan.Accounts-len(plan.Samples))
 			}
-			if matched == 0 {
+			if plan.Empty() {
 				return nil
 			}
 			if !confirm {
@@ -198,17 +213,22 @@ W&B account behind it.`,
 				return nil
 			}
 
-			if !confirmOnStdin(fmt.Sprintf("Rewrite %d account(s) from @%s to @%s? This cannot be undone",
-				matched, oldDomain, newDomain)) {
+			if !confirmOnStdin(fmt.Sprintf("Rewrite %d account(s) / %d row(s) from @%s to @%s? This cannot be undone",
+				plan.Accounts, plan.Rows, oldDomain, newDomain)) {
 				return errors.New("aborted")
 			}
 
-			_, updated, _, _, err := appadmin.MigrateEmailDomain(
-				cmd.Context(), db, oldDomain, newDomain, false, nil)
+			// Passing the confirmed plan is what binds the write to the preview:
+			// ApplyEmailDomainMigration re-scans under FOR UPDATE and refuses if
+			// the fingerprint moved, so an account that started matching between
+			// the preview and the yes cannot be swept in unreviewed.
+			applied, err := appadmin.ApplyEmailDomainMigration(
+				cmd.Context(), db, oldDomain, newDomain, plan)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Rewrote %d account(s) to @%s (as %s)\n", updated, newDomain, who)
+			fmt.Printf("Rewrote %d account(s) / %d row(s) to @%s (as %s)\n",
+				applied.Accounts, applied.Rows, newDomain, who)
 			return nil
 		},
 	}

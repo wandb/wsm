@@ -22,12 +22,15 @@ package appadmin
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -53,9 +56,15 @@ func Connect(ctx context.Context, namespace, crName string) (*sql.DB, error) {
 		return nil, fmt.Errorf("read instance %s/%s: %w", namespace, crName, err)
 	}
 
+	// This is the same MySQL the operator provisions (or the external one it was
+	// pointed at): the credentials come from the status it publishes once the
+	// datastore is ready, so an instance mid-reconcile is reported as such rather
+	// than surfacing as a confusing connection failure.
 	status, ok := cr.Status.MySQLStatus[v2.DefaultInstanceName]
-	if !ok {
-		return nil, fmt.Errorf("instance %s/%s publishes no MySQL connection yet; it may still be reconciling", namespace, crName)
+	if !ok || status.Connection.Host.IsZero() {
+		return nil, fmt.Errorf(
+			"instance %s/%s has not published a MySQL connection yet — the operator writes status.mysqlStatus[%s].connection once MySQL is provisioned, so wait for the instance to finish reconciling and retry",
+			namespace, crName, v2.DefaultInstanceName)
 	}
 	conn := status.Connection
 
@@ -88,7 +97,7 @@ func Connect(ctx context.Context, namespace, crName string) (*sql.DB, error) {
 	// The operator publishes optional TLS material alongside the credentials.
 	// Ignoring it built a plaintext DSN, so an instance whose MySQL requires TLS
 	// could not connect at all — dry runs and migrations both failed.
-	tlsParam, err := resolveTLS(ctx, namespace, conn, resolve)
+	tlsParam, err := resolveTLS(ctx, namespace, crName, host, conn, resolve)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +162,7 @@ func secretResolver(ctx context.Context, namespace string) (func(string, v2.Valu
 // meaningful configuration.
 func resolveTLS(
 	ctx context.Context,
-	namespace string,
+	namespace, crName, host string,
 	conn v2.MysqlConnection,
 	resolve func(string, v2.ValueOrSecret) (string, error),
 ) (string, error) {
@@ -179,6 +188,14 @@ func resolveTLS(
 	key, err := read("sslKey", conn.SslKey)
 	if err != nil {
 		return "", err
+	}
+
+	// Validate the keypair BEFORE deciding whether TLS is on. A connection
+	// publishing only sslKey used to fall through the "no material" check below
+	// and return a PLAINTEXT dsn, so a half-configured TLS setup silently sent
+	// credentials and account data in the clear instead of failing loudly.
+	if (cert == "") != (key == "") {
+		return "", errors.New("MySQL TLS needs both sslCert and sslKey, or neither")
 	}
 
 	enabled, err := tlsRequested(tlsRaw)
@@ -212,10 +229,7 @@ func resolveTLS(
 		}
 		cfg.RootCAs = pool
 	}
-	if cert != "" || key != "" {
-		if cert == "" || key == "" {
-			return "", errors.New("MySQL TLS needs both sslCert and sslKey, or neither")
-		}
+	if cert != "" {
 		pair, err := tls.X509KeyPair([]byte(cert), []byte(key))
 		if err != nil {
 			return "", fmt.Errorf("MySQL client certificate: %w", err)
@@ -223,13 +237,21 @@ func resolveTLS(
 		cfg.Certificates = []tls.Certificate{pair}
 	}
 
-	// The driver looks configs up by name from a package-global registry, so the
-	// name is scoped per namespace to keep concurrent instances from colliding.
-	name := "wsm-appadmin-" + namespace
+	// The driver keeps TLS configs in a PROCESS-GLOBAL registry keyed by name, so
+	// the name has to identify this exact config. Keying it on the namespace alone
+	// collided whenever two WeightsAndBiases shared one: both registered
+	// "wsm-appadmin-<ns>", and whichever registration landed last decided which CA
+	// the other connection verified against. Hashing the material means a
+	// concurrent re-registration writes an identical config rather than a foreign
+	// one, so the race is no longer observable.
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%s%d:%s%d:%s",
+		len(ca), ca, len(cert), cert, len(key), key)))
+	name := fmt.Sprintf("wsm-appadmin-%s-%s-%s-%s",
+		namespace, crName, host, hex.EncodeToString(sum[:8]))
 	if err := mysqldriver.RegisterTLSConfig(name, cfg); err != nil {
 		return "", fmt.Errorf("register MySQL TLS config: %w", err)
 	}
-	return "&tls=" + name, nil
+	return "&tls=" + url.QueryEscape(name), nil
 }
 
 // tlsRequested reads the connection's `tls` field. The operator writes a

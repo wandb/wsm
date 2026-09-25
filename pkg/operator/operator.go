@@ -75,13 +75,7 @@ const (
 	// installs. Exported for the same reason as CertManagerVersion.
 	NginxGatewayVersion = "2.5.1"
 
-	gatewayApiCRDURL                     = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml"
-	completeServerAPIsDiscoveryErrSubstr = "unable to retrieve the complete list of server APIs"
-)
-
-var (
-	apiDiscoveryRetryInterval = 2 * time.Second
-	apiDiscoveryRetryTimeout  = 2 * time.Minute
+	gatewayApiCRDURL = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml"
 )
 
 // ParseImagePullPolicy validates the operator image pull policy and returns it as a corev1.PullPolicy
@@ -534,75 +528,33 @@ func DeleteNginxGateway(ctx context.Context) (removed bool, err error) {
 }
 
 // gatewayApiCRDsExist checks if Gateway API CRDs exist in the cluster
-func gatewayApiCRDsExist(ctx context.Context) (bool, error) {
+func gatewayApiCRDsExist(_ context.Context) (bool, error) {
 	_, cs, err := kubectl.GetClientset()
 	if err != nil {
 		return false, err
 	}
 
-	resources, err := discoverServerGroupsAndResourcesWithRetry(ctx, func() ([]*metav1.APIResourceList, error) {
-		_, resourceLists, discoveryErr := cs.Discovery().ServerGroupsAndResources()
-		return resourceLists, discoveryErr
-	})
-	if err != nil && resources == nil {
-		return false, err
-	}
-
-	foundGateways := false
-	foundHTTPRoutes := false
-	foundGRPCRoutes := false
-
-	for _, list := range resources {
-		gv, _ := schema.ParseGroupVersion(list.GroupVersion)
-		if gv.Group != "gateway.networking.k8s.io" {
-			continue
+	// Query only the Gateway API group-version(s) directly instead of doing a
+	// full server discovery. ServerGroupsAndResources enumerates *every* API
+	// group and fails hard when any aggregated API is unavailable — e.g. a
+	// stale metrics.k8s.io from a broken or absent metrics-server, a common
+	// condition on real clusters. A targeted lookup is immune to unrelated
+	// broken API groups.
+	found := map[string]bool{}
+	for _, gv := range []string{"gateway.networking.k8s.io/v1", "gateway.networking.k8s.io/v1alpha2"} {
+		list, err := cs.Discovery().ServerResourcesForGroupVersion(gv)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				continue // this version isn't served; try the next
+			}
+			return false, err
 		}
 		for _, resource := range list.APIResources {
-			switch resource.Name {
-			case "gateways":
-				foundGateways = true
-			case "httproutes":
-				foundHTTPRoutes = true
-			case "grpcroutes":
-				foundGRPCRoutes = true
-			}
+			found[resource.Name] = true
 		}
 	}
 
-	if foundGateways && foundHTTPRoutes && foundGRPCRoutes {
-		return true, nil
-	}
-
-	return false, err
-}
-
-func discoverServerGroupsAndResourcesWithRetry(
-	ctx context.Context,
-	discoverFn func() ([]*metav1.APIResourceList, error),
-) ([]*metav1.APIResourceList, error) {
-	var resources []*metav1.APIResourceList
-	var discoveryErr error
-
-	pollErr := wait.PollUntilContextTimeout(ctx, apiDiscoveryRetryInterval, apiDiscoveryRetryTimeout, true, func(context.Context) (bool, error) {
-		resources, discoveryErr = discoverFn()
-		if discoveryErr != nil && resources == nil {
-			if isRetryableServerAPIDiscoveryError(discoveryErr) {
-				return false, nil
-			}
-			return false, discoveryErr
-		}
-
-		return true, nil
-	})
-	if pollErr != nil {
-		return nil, pollErr
-	}
-
-	return resources, discoveryErr
-}
-
-func isRetryableServerAPIDiscoveryError(err error) bool {
-	return strings.Contains(err.Error(), completeServerAPIsDiscoveryErrSubstr)
+	return found["gateways"] && found["httproutes"] && found["grpcroutes"], nil
 }
 
 // installGatewayApiCRDs installs Gateway API CRDs from the given YAML URL.

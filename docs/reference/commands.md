@@ -30,7 +30,9 @@ wsm deploy-v2 operator [flags]
 | `--setup-k8s-cluster` | `false` | Create a Kind cluster before deploying |
 | `--cluster-name` | `kind` | Name of the Kind cluster (used with `--setup-k8s-cluster`) |
 | `--workers` | `0` | Number of Kind worker nodes |
-| `--operator-chart-version` | `2.0.0-beta.3` | Operator Helm chart version |
+| `--operator-chart-version` | `2.0.0-beta.5` | Operator Helm chart version (a leading `v` is accepted) |
+| `--operator-install-timeout` | `0s` | Helm timeout in seconds, minutes, or hours, such as `30s`, `5m`, or `1h`. `0` uses Helm's default. |
+| `--operator-image-pull-policy` | `IfNotPresent` | Operator image pull policy: `Always`, `IfNotPresent`, or `Never` (case-insensitive). |
 | `--operator-version` | — | Operator image version (defaults to chart value) |
 | `--operator-namespace` | `wandb-operators` | Namespace for the operator |
 | `--install-cert-manager` | `auto` | Cert-manager install mode: `auto`, `true`, `false` |
@@ -45,6 +47,8 @@ wsm deploy-v2 operator [flags]
 | `--skip-gateway-api-crds` | `false` | Assume the Gateway API CRDs are already installed; fail instead of fetching them from the internet. |
 | `--allow-unsupported-arch` | `false` | Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is amd64-only and crashes under emulation on arm64 (e.g. Kind on Apple Silicon); WSM fails fast on this by default. |
 | `--openshift` | `false` | Enable OpenShift compatibility for the operator and bundled managed-service pods (MySQL/moco, Redis, ClickHouse, SeaweedFS). The bundled frontend still can't run on OpenShift, so bring your own ingress — see [On-Prem Deployment](../deployment/on-prem.md). |
+| `--watchtower-enable-secret-writes` | `false` | Set `WATCHTOWER_ENABLE_SECRET_WRITES` on the operator, granting Watchtower `create/update/patch/delete` on Secrets in the install namespace. **Broad** — that namespace holds the database, object-store, OIDC, license and operator-managed credentials. Off by default; Watchtower can still reference Secrets an admin created out of band. |
+| `--watchtower-enable-db-admin` | `false` | Set `WATCHTOWER_ENABLE_DB_ADMIN` on the operator, enabling Watchtower's email-domain migration, which writes directly to the W&B application database. **Irreversible** bulk rewrite of user records; cluster mode only. Off by default. |
 | `--observability-forward-endpoint` | — | OTLP endpoint to forward telemetry to. **Required** when `--observability-mode=forward` |
 | `--observability-otel-secret` | — | Name of the OTEL connection secret (`telemetry.otel.secretName`). Chart default `wandb-otel-connection` if unset. Applied when mode is `full` or `forward` |
 | `--observability-otel-protocol` | — | OTEL exporter protocol, e.g. `http/protobuf` or `grpc` (`telemetry.otel.protocol`). Chart default if unset |
@@ -62,6 +66,10 @@ wsm deploy-v2 operator [flags]
 ```bash
 # Install just the operator (+ cert-manager, nginx-gateway) into an existing cluster
 wsm deploy-v2 operator --context my-cluster
+
+# Pin an operator chart version; an optional leading v is normalized for OCI
+wsm deploy-v2 operator --context my-cluster \
+  --operator-chart-version v2.0.0-beta.5
 
 # One shot: create a local Kind cluster, install the operator, and deploy the CR
 wsm deploy-v2 operator --context kind-wandb \
@@ -82,6 +90,12 @@ wsm deploy-v2 operator --context prod --observability-mode full \
 # Force-install kube-state-metrics even if auto-detect would reuse an existing one
 wsm deploy-v2 operator --context prod --observability-mode full \
   --install-kube-state-metrics true
+
+# Forward telemetry to an external OTLP endpoint without installing Grafana
+wsm deploy-v2 operator --context prod --observability-mode forward \
+  --observability-forward-endpoint https://otel.example.com/v1/metrics \
+  --observability-forward-protocol http/protobuf \
+  --observability-forward-headers Authorization="Bearer ${OTEL_TOKEN}"
 ```
 
 ---
@@ -181,7 +195,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--wandb-name` | `wandb` | Name of the W&B instance |
 | `--wandb-namespace` | `wandb` | Kubernetes namespace for the CR |
 | `--wandb-hostname` | `http://localhost:8080` | External URL for accessing W&B |
-| `--wandb-version` | — | Server manifest version (defaults to built-in stable version). Cross-checked against the published [`wandb/local`](https://hub.docker.com/r/wandb/local/tags) tags — see the note below. List valid values with [`wsm deploy-v2 wandb list-versions`](#wsm-deploy-v2-wandb-list-versions) |
+| `--wandb-version` | — | Server manifest version (defaults to `0.84.0`; a leading `v` is accepted). Cross-checked against the published [`wandb/local`](https://hub.docker.com/r/wandb/local/tags) tags — see the note below. List valid values with [`wsm deploy-v2 wandb list-versions`](#wsm-deploy-v2-wandb-list-versions) |
 | `--mirror-registry` | — | Install the W&B instance from this mirror. Defaults `--manifest-repository` to `oci://<mirror>/wandb/server-manifest` (charts, operator/infra images, and the rewritten app images come from the mirror). The managed data-plane images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) keep their upstream refs and reach the mirror via each node's container-runtime registry mirror — not `spec.global.imageRegistry`. Populate the mirror first with `wsm registry mirror`. |
 | `--manifest-repository` | — | Server manifest source. Accepts an OCI repository (`oci://…`, pulled over HTTPS) **or** a local `file://` path mounted onto the operator pod (the no-TLS option for plain-HTTP / insecure air-gap installs; a plain-HTTP `oci://` mirror is rejected). Auto-set to `oci://<mirror>/wandb/server-manifest` when `--mirror-registry` is provided and this is unset. |
 | `--size` | `dev` | Deployment size profile: `dev`, `micro`, `small`, `medium`, `large`, `xlarge`, `xxlarge` |
@@ -194,6 +208,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--oidc-session-length` | — | OIDC session length, e.g. `720h` (`spec.wandb.oidc.sessionLength`). Optional; `--cr-file` wins if it already set the value |
 | `--image-registry` | — | **Deprecated.** Retarget container images to this registry (`spec.global.imageRegistry`). Use `--mirror-registry`, or `--cr-set spec.global.imageRegistry=<host>` for a different data-plane registry. |
 | `--custom-ca-cert-file` | — | Path to a PEM CA certificate to trust in W&B workloads; repeatable, each file's contents is appended to `spec.global.customCACerts` |
+| `--image-pull-secret` | — | Name of a `dockerconfigjson` Secret for private-registry image pulls; repeatable, appended to `spec.global.imagePullSecrets` |
 | `--custom-ca-configmap` | — | Name of a ConfigMap holding CA certificates to trust in W&B workloads (`spec.global.caCertsConfigMap`) |
 | `--proxy-http-url` | — | Literal `HTTP_PROXY` URL, no credentials (`spec.global.proxy.httpProxy.value`). Mutually exclusive with `--proxy-http-secret` |
 | `--proxy-https-url` | — | Literal `HTTPS_PROXY` URL, no credentials (`spec.global.proxy.httpsProxy.value`). Mutually exclusive with `--proxy-https-secret` |
@@ -202,6 +217,20 @@ wsm deploy-v2 wandb deploy [flags]
 | `--no-proxy` | — | Extra `NO_PROXY` entry appended to the operator's in-cluster exclusions (`spec.global.proxy.noProxy`); repeatable. Use for external endpoints (e.g. a BYOB object store) that must bypass the proxy |
 | `--objectstore-copies` | — | Managed object store replica copies (`spec.objectStore.managedObjectStore.copies`). Operator default applies when unset. Applies to the default managed instance only (see note below) |
 | `--bucket-proxy` | — | Route object-store access through the W&B app instead of direct client access (`spec.wandb.bucketProxy`). Operator default applies when unset |
+| `--admin-console` | `true` | Enable the admin console (`spec.adminConsoleEnabled`). Disable it with `--admin-console=false` |
+| `--security-allow-user-team-creation` | — | Allow users to create teams (`spec.wandb.security.allowUserTeamCreation`) |
+| `--security-disable-code-saving` | — | Disable code saving (`spec.wandb.security.disableCodeSaving`) |
+| `--security-allow-anonymous-public-projects` | — | Allow anonymous access to public projects (`spec.wandb.security.allowAnonymousPublicProjects`) |
+| `--security-disable-sso-provisioning` | — | Disable SSO user provisioning (`spec.wandb.security.disableSSOProvisioning`) |
+| `--security-insecure-allow-apikey-admin-access` | — | Allow admin access via API key, insecure (`spec.wandb.security.insecureAllowAPIKeyAdminAccess`) |
+| `--security-hide-upgrade-banner` | — | Hide the upgrade banner (`spec.wandb.security.hideUpgradeBanner`) |
+| `--artifact-gc` | — | Enable artifact garbage collection (`spec.wandb.retention.artifactGarbageCollection`) |
+| `--data-retention-period` | — | Data retention period, e.g. `720h`; units: `h` (hours), `m` (minutes), `s` (seconds) (`spec.wandb.retention.dataRetentionPeriod`) |
+| `--email-sink` | — | Email notification sink URL as `<secret-name>:<key>`; mutually exclusive with `--smtp-*` (`spec.wandb.notifications.email.sink`) |
+| `--smtp-host` / `--smtp-port` / `--smtp-username` | — | SMTP server settings. Host, port, username, and password must all be present after merging flags with `--cr-file` (`spec.wandb.notifications.email.smtp.*`) |
+| `--smtp-password` | — | SMTP password as `<secret-name>:<key>` (`spec.wandb.notifications.email.smtp.password`). May complete SMTP settings supplied by `--cr-file` |
+| `--slack-client-id` | — | Slack client ID. Client ID and secret must both be present after merging flags with `--cr-file` (`spec.wandb.notifications.slack.clientId`) |
+| `--slack-client-secret` | — | Slack client secret as `<secret-name>:<key>` (`spec.wandb.notifications.slack.clientSecret`). May complete Slack settings supplied by `--cr-file` |
 | `--cr-set` | — | Set an arbitrary CR field as `<path>=<value>`, e.g. `spec.wandb.version=0.82.2`; repeatable. Values are YAML-typed (`3`→number, `true`→bool, `[a,b]`→list). Overrides the built-in template, `--cr-file`, and the typed flags above (see note below) |
 | `--gateway-class` | `nginx` | Gateway class name (selects Gateway API mode; the default). Mutually exclusive with `--ingress-class` |
 | `--ingress-class` | — | Ingress class name (selects Ingress mode). Takes precedence over the default `--gateway-class`; setting both explicitly is an error |
@@ -225,7 +254,7 @@ wsm deploy-v2 wandb deploy [flags]
 >   --cr-set spec.wandb.additionalHostnames='[wandb.corp.example.com]'
 > ```
 
-> **Observability.** `--observability-mode` is applied to the operator chart during `wsm deploy-v2 operator` (it enables the `victoria-metrics-operator` and, for `full`, the `grafana-operator` dependencies the chart requires) and also toggles per-service telemetry on the CR. `full` deploys Grafana and the Victoria Metrics/Logs/Traces stack as ClusterIP services in the W&B namespace — view Grafana with [`wsm telemetry grafana`](#wsm-telemetry) and VictoriaMetrics with [`wsm telemetry victoria`](#wsm-telemetry). `forward` ships OTLP data to `--observability-forward-endpoint` and does not run Grafana (VMUI is still available via `wsm telemetry victoria`).
+> **Observability.** `--observability-mode` is applied to the operator chart during `wsm deploy-v2 operator` (it enables the `victoria-metrics-operator` and, for `full`, the `grafana-operator` dependencies the chart requires, and opts the matching telemetry CRDs — VictoriaMetrics, plus Grafana for `full` — into the operator's crd-installer) and also toggles per-service telemetry on the CR. Enabling telemetry on an existing install is done in two steps — install the telemetry CRDs and wait for them to be established, then turn the stack on — so the operators don't race missing CRDs. `full` deploys Grafana and the Victoria Metrics/Logs/Traces stack as ClusterIP services in the W&B namespace — view Grafana with [`wsm telemetry grafana`](#wsm-telemetry) and VictoriaMetrics with [`wsm telemetry victoria`](#wsm-telemetry). `forward` ships OTLP data to `--observability-forward-endpoint` and does not run Grafana (VMUI is still available via `wsm telemetry victoria`).
 
 #### Examples
 
@@ -233,8 +262,10 @@ wsm deploy-v2 wandb deploy [flags]
 # Minimal deploy against an already-installed operator
 wsm deploy-v2 wandb deploy --context prod
 
-# Pin a specific server version (must be >= the minimum supported version)
-wsm deploy-v2 wandb deploy --context prod --wandb-version 0.82.2
+# Pin a specific server version; an optional leading v is normalized for both flags
+# and --cr-set overrides
+wsm deploy-v2 wandb deploy --context prod --wandb-version v0.84.0
+wsm deploy-v2 wandb deploy --context prod --cr-set spec.wandb.version=v0.84.0
 
 # TLS with a self-signed CA (https hostname triggers cert-manager wiring)
 wsm deploy-v2 wandb deploy --context prod \
@@ -247,6 +278,40 @@ wsm deploy-v2 wandb deploy --context prod \
   --oidc-client-secret wandb-oidc:clientSecret \
   --oidc-issuer-url wandb-oidc:issuerUrl \
   --oidc-session-length 720h
+
+# Forward proxy: keep credentials in a Secret and append external NO_PROXY hosts
+wsm deploy-v2 wandb deploy --context prod \
+  --proxy-http-secret wandb-proxy:http-url \
+  --proxy-https-secret wandb-proxy:https-url \
+  --no-proxy s3.corp.example.com --no-proxy oidc.corp.example.com
+
+# The admin console is enabled by default; explicitly disable it when not wanted
+wsm deploy-v2 wandb deploy --context prod --admin-console=false
+
+# Attach private-registry credentials to every W&B workload; repeat as needed
+wsm deploy-v2 wandb deploy --context prod \
+  --image-pull-secret harbor-pull --image-pull-secret ecr-pull
+
+# Harden an SSO-managed deployment and suppress the in-app upgrade banner
+wsm deploy-v2 wandb deploy --context prod \
+  --security-disable-sso-provisioning \
+  --security-disable-code-saving \
+  --security-hide-upgrade-banner
+
+# Enable artifact garbage collection and retain application data for 30 days
+wsm deploy-v2 wandb deploy --context prod \
+  --artifact-gc --data-retention-period 720h
+
+# Configure an email sink and Slack; sensitive values stay in Kubernetes Secrets
+wsm deploy-v2 wandb deploy --context prod \
+  --email-sink wandb-notifications:email-sink \
+  --slack-client-id wandb-prod \
+  --slack-client-secret wandb-notifications:slack-client-secret
+
+# Configure authenticated SMTP instead of an email sink
+wsm deploy-v2 wandb deploy --context prod \
+  --smtp-host smtp.example.com --smtp-port 587 \
+  --smtp-username wandb --smtp-password wandb-notifications:smtp-password
 
 # Air-gapped: pull everything (app + DB images, server manifest) from one mirror
 wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --wandb-version 0.82.2
@@ -414,7 +479,7 @@ Pulls every chart and image required by `wsm deploy-v2 operator` from its upstre
 wsm registry mirror --to <host> [flags]
 ```
 
-Scope today: the operator OCI chart + binary image, cert-manager OCI chart + 5 component images, nginx-gateway-fabric OCI chart + 2 images (control plane + data plane). W&B server manifest, application images, and subchart controller images are upcoming iterations.
+Scope: the operator OCI chart + binary image, and the cert-manager, nginx-gateway-fabric, and kube-state-metrics OCI charts plus the component images each deploys. With `--wandb-version` it also mirrors the W&B server manifest and every image it references — the application images and the managed data-plane server images (ClickHouse/MySQL/Redis/Kafka/object-store) — and rewrites the manifest's image refs to point at your mirror. The managed-service **operator** images (moco/redis/seaweedfs/altinity) and their sidecars come with them. Nothing is hand-listed: the image sets are derived by rendering the charts and parsing the manifest, so they always match what an install actually pulls.
 
 #### Flags
 
@@ -423,7 +488,13 @@ Scope today: the operator OCI chart + binary image, cert-manager OCI chart + 5 c
 | `--to` | — | **Required.** Hostname of your mirror, e.g. `harbor.example.com` or `localhost:5000`. |
 | `--insecure` | `false` | Skip TLS verification when pushing to the mirror. Use for plain-HTTP registries like a local `registry:2`. **Never** in production. |
 | `--dry-run` | `false` | Print the source → target mirroring plan without pushing. |
-| `--operator-chart-version` | `2.0.0-beta.3` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
+| `--operator-chart-version` | `2.0.0-beta.5` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
+| `--wandb-version` | — | W&B server version (e.g. `0.84.0`). When set, also mirror the server manifest and every application + managed data-plane image it references, rewriting them to point at the mirror. |
+| `--exclude-operators` | — | Comma-separated managed types (`clickhouse`, `mysql`, `redis`, `object-store`) whose **operator** images to skip — for when you run your own cluster-wide operator. The managed data-plane service is still mirrored. |
+| `--exclude-managed` | — | Comma-separated managed types to skip **entirely** — operator *and* data-plane images — for when you use an external service. |
+| `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store`. |
+
+The two exclusion flags cover independent cases: `--exclude-operators <type>` mirrors the managed data-plane service but not W&B's operator for it (you bring your own); `--exclude-managed <type>` skips the type completely (you bring an external service).
 
 Auth is read from your Docker config (`~/.docker/config.json`). Run `docker login <mirror-host>` before this command for any registry that requires credentials.
 
@@ -431,7 +502,7 @@ Auth is read from your Docker config (`~/.docker/config.json`). Run `docker logi
 
 Verifies that every artifact `wsm registry mirror` pushes is present in your mirror. It computes the **same destination set** as `mirror` (operator chart + image, cert-manager, nginx-gateway, the managed-service operator/data-plane images, and — with `--wandb-version` — the server manifest plus every application image it references), then does a manifest check for each.
 
-Pass the **same** `--operator-chart-version` / `--wandb-version` / `--skip-managed-images` you mirrored with, or `check` and `mirror` won't agree on the expected set. The server manifest and its application images are read back out of the mirror itself, so `check` works from an air-gapped host with access only to the registry.
+Pass the **same** `--operator-chart-version` / `--wandb-version` / `--exclude-operators` / `--exclude-managed` / `--skip-managed-images` you mirrored with, or `check` and `mirror` won't agree on the expected set. The server manifest and its application images are read back out of the mirror itself — and the charts are rendered from their copies in the mirror — so `check` works from an air-gapped host with access only to the registry.
 
 ```bash
 wsm registry check --registry <host> --wandb-version <version> [flags]
@@ -443,8 +514,10 @@ wsm registry check --registry <host> --wandb-version <version> [flags]
 |------|---------|-------------|
 | `--registry` | — | **Required.** Hostname of your mirror to check against. |
 | `--wandb-version` | — | W&B server version that was mirrored; when set, also check the server manifest and every application image it references. |
-| `--operator-chart-version` | `2.0.0-beta.3` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
-| `--skip-managed-images` | `false` | Don't check the managed-service operator + data-plane images (match the flag you mirrored with). |
+| `--operator-chart-version` | `2.0.0-beta.5` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
+| `--exclude-operators` | — | Managed types whose operator images to skip checking (match `--exclude-operators` you mirrored with). |
+| `--exclude-managed` | — | Managed types to skip checking entirely (match `--exclude-managed` you mirrored with). |
+| `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store` (match the flag you mirrored with). |
 | `--insecure` | `false` | Skip TLS verification when contacting the registry. |
 | `--fail-on-missing` | `false` | Exit non-zero if any artifact is missing. |
 
@@ -455,6 +528,50 @@ Emits a `values.yaml` fragment that overrides each image reference to use your m
 ```bash
 wsm registry values --registry <host> [-o overrides.yaml]
 ```
+
+---
+
+## `wsm license`
+
+Inspect and update the W&B license on an instance. The license lives at `spec.wandb.license` on the CR as a plaintext JWT.
+
+### `wsm license info`
+
+Decodes the license and prints its claims (expiry, max teams / users / view-only users, flags, deployment ID, and the `deploy.wandb.ai` link). Only claims present in the token are shown. Prints `no license set` when the field is empty.
+
+```bash
+wsm license info --context <ctx> [--json]
+```
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | — | **Required.** Name of the kubeconfig context to use |
+| `--wandb-name` | `wandb` | Name of the W&B instance |
+| `--wandb-namespace` | `wandb` | Namespace of the W&B instance |
+| `--json` | `false` | Print the decoded claims as JSON |
+
+### `wsm license set`
+
+Sets or clears the license on a live instance via a read-modify-write of `spec.wandb.license`. Refuses instances wsm did not deploy unless `--force`. At deploy time you can equivalently pass `--license` / `--license-file`, or the universal `--cr-set spec.wandb.license=<jwt>`.
+
+```bash
+wsm license set --context <ctx> (--license <jwt> | --license-file <path> | --clear)
+```
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | — | **Required.** Name of the kubeconfig context to use |
+| `--wandb-name` | `wandb` | Name of the W&B instance |
+| `--wandb-namespace` | `wandb` | Namespace of the W&B instance |
+| `--license` | — | W&B license string |
+| `--license-file` | — | Path to a file containing the W&B license |
+| `--clear` | `false` | Clear the license (set to empty) |
+| `--force` | `false` | Modify an install even without a wsm deployment marker |
+| `--dry-run` | `false` | Show what would change without applying |
 
 ---
 

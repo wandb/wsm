@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containers/image/v5/docker"
-	"github.com/containers/image/v5/types"
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/helm"
 	"github.com/wandb/wsm/pkg/utils"
+	"go.podman.io/image/v5/docker"
+	"go.podman.io/image/v5/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -102,6 +102,8 @@ func registryCheckCmd() *cobra.Command {
 		operatorChartVersion string
 		wandbVersion         string
 		skipManaged          bool
+		excludeOperators     []string
+		excludeManaged       []string
 	)
 
 	cmd := &cobra.Command{
@@ -132,18 +134,31 @@ func registryCheckCmd() *cobra.Command {
 			registry = strings.TrimRight(registry, "/")
 			ctx := context.Background()
 
+			exclusions, err := parseManagedExclusions(excludeOperators, excludeManaged, skipManaged)
+			if err != nil {
+				return err
+			}
+
 			// Build the same destination set 'wsm registry mirror' pushes, so
 			// check and mirror always agree. (The old path discovered a different,
 			// v1-derived image set under different names, so it reported every
 			// freshly-mirrored image as "missing".)
+			// Render the charts FROM THE MIRROR so check needs only registry access.
 			var targets []string
-			for _, it := range buildMirrorPlan(registry, operatorChartVersion) {
+			mirrorPlan, err := buildMirrorPlan(ctx, registry, operatorChartVersion, true, insecure)
+			if err != nil {
+				return err
+			}
+			for _, it := range mirrorPlan {
 				targets = append(targets, it.dst)
 			}
-			if !skipManaged {
-				for _, it := range buildManagedImagePlan(registry) {
-					targets = append(targets, it.dst)
-				}
+			// Operator chart also rendered from the mirror's copy (its subcharts travel with it).
+			managed, err := buildManagedImagePlan(ctx, registry, "oci://"+registry+"/wandb/charts", operatorChartVersion, exclusions, insecure)
+			if err != nil {
+				return err
+			}
+			for _, it := range managed {
+				targets = append(targets, it.dst)
 			}
 
 			// The application images are listed inside the mirrored server
@@ -158,7 +173,7 @@ func registryCheckCmd() *cobra.Command {
 				files, err := pullManifestYAMLFrom(ctx, manifestRepo, wandbVersion, insecure)
 				if err != nil {
 					manifestWarn = fmt.Sprintf("could not read server manifest %s:%s — application images not checked (%v)", manifestRepo, wandbVersion, err)
-				} else if refs, err := collectManifestImages(files); err != nil {
+				} else if refs, err := collectManifestImages(files, exclusions); err != nil {
 					manifestWarn = fmt.Sprintf("could not parse server manifest %s:%s — application images not checked (%v)", manifestRepo, wandbVersion, err)
 				} else {
 					for _, r := range refs {
@@ -211,9 +226,11 @@ func registryCheckCmd() *cobra.Command {
 	cmd.Flags().StringVar(&registry, "registry", "", "Target registry to check against, e.g. myreg.example.com (required)")
 	cmd.Flags().BoolVar(&insecure, "insecure", false, "Skip TLS verification when contacting the registry")
 	cmd.Flags().BoolVar(&failOnMissing, "fail-on-missing", false, "Exit non-zero if any artifact is missing")
-	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.3", "Operator chart version that was mirrored (must match 'wsm registry mirror')")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", defaultOperatorChartVersion, "Operator chart version that was mirrored (must match 'wsm registry mirror')")
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version that was mirrored; when set, also check the server manifest and every application image it references")
-	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Don't check the managed-service operator + data-plane images (match the flag you mirrored with)")
+	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Alias for --exclude-managed clickhouse,mysql,redis,object-store (match the flag you mirrored with)")
+	cmd.Flags().StringSliceVar(&excludeOperators, "exclude-operators", nil, "Managed types whose operator images to skip checking (match --exclude-operators you mirrored with)")
+	cmd.Flags().StringSliceVar(&excludeManaged, "exclude-managed", nil, "Managed types to skip checking entirely (match --exclude-managed you mirrored with). Kafka cannot be excluded.")
 	return cmd
 }
 

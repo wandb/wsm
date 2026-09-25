@@ -25,6 +25,7 @@ kind: WeightsAndBiases
 | `spec.kafka` | object | No | Kafka configuration (single instance; not keyed) |
 | `spec.objectStore` | map[string]object | No | Object store instances keyed by instance name (reserved key `default`) |
 | `spec.clickhouse` | map[string]object | No | ClickHouse instances keyed by instance name (reserved key `default`) |
+| `spec.adminConsoleEnabled` | bool | No | Enable the admin console. Defaults to `true`; disable with `--admin-console=false` |
 
 ---
 
@@ -39,6 +40,12 @@ kind: WeightsAndBiases
 | `internalServiceAuth.enabled` | bool | `false` | Enable internal service authentication |
 | `oidc.clientId` / `oidc.clientSecret` / `oidc.issuerUrl` / `oidc.authMethod` | secretKeyRef | — | OIDC settings sourced from a Secret key (`--oidc-*` flags) |
 | `oidc.sessionLength` | string | — | OIDC session length, e.g. `720h` (`--oidc-session-length`) |
+| `security.*` | bool | operator default | Security toggles: `allowUserTeamCreation`, `disableCodeSaving`, `allowAnonymousPublicProjects`, `disableSSOProvisioning`, `insecureAllowAPIKeyAdminAccess`, `hideUpgradeBanner` (`--security-*` flags) |
+| `retention.artifactGarbageCollection` | bool | — | Enable artifact garbage collection (`--artifact-gc`) |
+| `retention.dataRetentionPeriod` | string | — | Data retention period, e.g. `720h`; units `h`/`m`/`s` (`--data-retention-period`) |
+| `notifications.email.sink` | value-or-secret | — | Email sink URL (`--email-sink`, a Secret ref) |
+| `notifications.email.smtp.*` | value-or-secret | — | SMTP `host`/`port`/`username` (literals) and `password` (a Secret ref) (`--smtp-*`) |
+| `notifications.slack.clientId` / `clientSecret` | value-or-secret | — | Slack client ID (literal) and secret (a Secret ref) (`--slack-client-id` / `--slack-client-secret`) |
 
 ---
 
@@ -86,6 +93,7 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 | `imageRegistry` | string | Retarget container images to this registry for air-gapped installs (`--image-registry`) |
 | `customCACerts` | []string | PEM-encoded CA certificates to trust in W&B workloads (`--custom-ca-cert-file`, repeatable) |
 | `caCertsConfigMap` | string | Name of a ConfigMap holding CA certificates to trust (`--custom-ca-configmap`) |
+| `imagePullSecrets` | []object | `dockerconfigjson` Secret references for private-registry image pulls (`--image-pull-secret`, repeatable) |
 | `proxy.httpProxy` | object | Forward proxy for HTTP egress: `value` (literal URL, `--proxy-http-url`) or `valueFrom.secretKeyRef` (`--proxy-http-secret`, for a credentialed URL) |
 | `proxy.httpsProxy` | object | Forward proxy for HTTPS egress (`--proxy-https-url` / `--proxy-https-secret`) |
 | `proxy.noProxy` | []string | Extra `NO_PROXY` entries appended to the operator's in-cluster exclusions (`--no-proxy`, repeatable) |

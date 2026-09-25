@@ -6,6 +6,7 @@ import (
 
 	"github.com/wandb/operator/api/v2"
 	"github.com/wandb/wsm/pkg/operator"
+	"github.com/wandb/wsm/pkg/telemetry"
 )
 
 // The valid sets come from the operator API so a new value upstream lands here on
@@ -44,9 +45,9 @@ func validateRetentionPolicy(policy string) error {
 // Rejects any --observability-mode that isn't a telemetry mode the operator chart understands. The valid set is owned by
 // pkg/operator (its DeployOperator switch acts on it); this wrapper only adds the CLI-flag-specific error message.
 func validateObservabilityMode(mode string) error {
-	if !operator.ValidTelemetryMode(mode) {
+	if !telemetry.ValidMode(mode) {
 		return fmt.Errorf("invalid --observability-mode %q (must be %q, %q, or %q)",
-			mode, operator.TelemetryModeOff, operator.TelemetryModeFull, operator.TelemetryModeForward)
+			mode, telemetry.ModeOff, telemetry.ModeFull, telemetry.ModeForward)
 	}
 	return nil
 }

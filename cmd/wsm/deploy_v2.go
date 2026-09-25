@@ -15,6 +15,7 @@ import (
 	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/operator"
 	"github.com/wandb/wsm/pkg/serverversion"
+	"github.com/wandb/wsm/pkg/telemetry"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -50,8 +51,9 @@ func init() {
 // TODO once an official release publishes a manifest, we should switch to looking
 // up the most recent non-dev release and not have a default.
 const (
-	defaultWandbVersion = "0.83.0"
-	minWandbVersion     = "0.80.0"
+	defaultWandbVersion         = "0.84.0"
+	minWandbVersion             = "0.80.0"
+	defaultOperatorChartVersion = "2.0.0-beta.5"
 )
 
 // defaultWandbSize is stamped into spec.size when --size is unset.
@@ -67,68 +69,7 @@ const (
 	nginxGatewayInstallModeFalse = "false"
 )
 
-var (
-	wandbCR = &v2.WeightsAndBiases{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "apps.wandb.com/v2",
-			Kind:       "WeightsAndBiases",
-		},
-		Spec: v2.WeightsAndBiasesSpec{
-			Wandb: v2.WandbAppSpec{
-				Hostname: "http://localhost:8080",
-				Features: map[string]bool{},
-				InternalServiceAuth: v2.InternalServiceAuth{
-					Enabled: ptr.Bool(false),
-				},
-			},
-			// Managed infra is keyed by instance name; wsm builds the single
-			// reserved DefaultInstanceName instance. Kafka stays a struct.
-			MySQL: map[string]v2.MySQLSpec{
-				v2.DefaultInstanceName: {
-					ManagedMysql: &v2.ManagedMysqlSpec{
-						Telemetry: v2.Telemetry{
-							Enabled: false,
-						},
-					},
-				},
-			},
-			Redis: map[string]v2.RedisSpec{
-				v2.DefaultInstanceName: {
-					ManagedRedis: &v2.ManagedRedisSpec{
-						Telemetry: v2.Telemetry{
-							Enabled: false,
-						},
-					},
-				},
-			},
-			Kafka: v2.KafkaSpec{
-				ManagedKafka: &v2.ManagedKafkaSpec{
-					Telemetry: v2.Telemetry{
-						Enabled: false,
-					},
-				},
-			},
-			ObjectStore: map[string]v2.ObjectStoreSpec{
-				v2.DefaultInstanceName: {
-					ManagedObjectStore: &v2.ManagedObjectStoreSpec{
-						Telemetry: v2.Telemetry{
-							Enabled: false,
-						},
-					},
-				},
-			},
-			ClickHouse: map[string]v2.ClickHouseSpec{
-				v2.DefaultInstanceName: {
-					ManagedClickHouse: &v2.ManagedClickHouseSpec{
-						Telemetry: v2.Telemetry{
-							Enabled: false,
-						},
-					},
-				},
-			},
-		},
-	}
-)
+var wandbCR = operator.DefaultWandbCR()
 
 // DeployV2Cmd returns the deploy-v2 command with subcommands
 func DeployV2Cmd() *cobra.Command {
@@ -168,7 +109,7 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("object-store-storage-size", "", "Override the managed object store (SeaweedFS) storage size, e.g. 20Gi. Must be < 30Gi: the operator derives SeaweedFS volumeSizeLimitMB from this and the master rejects a limit >= 30000. Leave empty to use the size preset's default.")
 	cmd.PersistentFlags().String("wandb-hostname", "http://localhost:8080", "Hostname to use for the W&B instance")
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
-	cmd.PersistentFlags().String("wandb-version", "", fmt.Sprintf("Server manifest version (defaults to %s when unset; must be >= %s)", defaultWandbVersion, minWandbVersion))
+	cmd.PersistentFlags().String("wandb-version", "", fmt.Sprintf("Server manifest version (defaults to %s when unset; must be >= %s; a leading v is accepted)", defaultWandbVersion, minWandbVersion))
 	cmd.PersistentFlags().String("manifest-repository", "", "OCI repository for the server manifest (e.g. oci://harbor.corp/wandb/server-manifest). Defaults to oci://<mirror>/wandb/server-manifest when --mirror-registry is set, else the operator default.")
 	cmd.PersistentFlags().String("mirror-registry", "", "Install everything (charts, operator/infra images, and the W&B app/DB images) from this air-gapped mirror registry, e.g. harbor.corp:5443. Populate it first with 'wsm registry mirror --to <same-host>'.")
 	cmd.PersistentFlags().Bool("insecure-registry", false, "Use plain HTTP / skip TLS verification when talking to --mirror-registry")
@@ -182,9 +123,26 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("image-registry", "", "Retarget container images to this registry for air-gapped installs (spec.global.imageRegistry; optional). Usually you only need --mirror-registry, which does not set spec.global.imageRegistry.")
 	_ = cmd.PersistentFlags().MarkDeprecated("image-registry", "use --mirror-registry, or --cr-set spec.global.imageRegistry=<host> for a different data-plane registry")
 	cmd.PersistentFlags().StringArray("custom-ca-cert-file", nil, "Path to a PEM CA certificate to trust in W&B workloads; repeatable (spec.global.customCACerts; optional)")
+	cmd.PersistentFlags().StringArray("image-pull-secret", nil, "Name of a dockerconfigjson Secret for private-registry image pulls; repeatable (spec.global.imagePullSecrets; optional)")
 	cmd.PersistentFlags().String("custom-ca-configmap", "", "Name of a ConfigMap holding CA certificates to trust in W&B workloads (spec.global.caCertsConfigMap; optional)")
 	cmd.PersistentFlags().Int32("objectstore-copies", 0, "Managed object store replica copies (spec.objectStore.managedObjectStore.copies; optional, operator default when unset)")
 	cmd.PersistentFlags().Bool("bucket-proxy", false, "Route object-store access through the W&B app instead of direct client access (spec.wandb.bucketProxy; optional, operator default when unset)")
+	cmd.PersistentFlags().Bool("admin-console", true, "Enable the admin console (spec.adminConsoleEnabled; disable with --admin-console=false)")
+	cmd.PersistentFlags().Bool("security-allow-user-team-creation", false, "Allow users to create teams (spec.wandb.security.allowUserTeamCreation; optional)")
+	cmd.PersistentFlags().Bool("security-disable-code-saving", false, "Disable code saving (spec.wandb.security.disableCodeSaving; optional)")
+	cmd.PersistentFlags().Bool("security-allow-anonymous-public-projects", false, "Allow anonymous access to public projects (spec.wandb.security.allowAnonymousPublicProjects; optional)")
+	cmd.PersistentFlags().Bool("security-disable-sso-provisioning", false, "Disable SSO user provisioning (spec.wandb.security.disableSSOProvisioning; optional)")
+	cmd.PersistentFlags().Bool("security-insecure-allow-apikey-admin-access", false, "Allow admin access via API key (insecure) (spec.wandb.security.insecureAllowAPIKeyAdminAccess; optional)")
+	cmd.PersistentFlags().Bool("security-hide-upgrade-banner", false, "Hide the upgrade banner (spec.wandb.security.hideUpgradeBanner; optional)")
+	cmd.PersistentFlags().Bool("artifact-gc", false, "Enable artifact garbage collection (spec.wandb.retention.artifactGarbageCollection; optional)")
+	cmd.PersistentFlags().String("data-retention-period", "", "Data retention period, e.g. 720h; units: h (hours), m (minutes), s (seconds) (spec.wandb.retention.dataRetentionPeriod; optional)")
+	cmd.PersistentFlags().String("email-sink", "", "Email notification sink URL as <secret-name>:<key>; mutually exclusive with --smtp-* (spec.wandb.notifications.email.sink; optional)")
+	cmd.PersistentFlags().String("smtp-host", "", "SMTP host (spec.wandb.notifications.email.smtp.host; optional)")
+	cmd.PersistentFlags().String("smtp-port", "", "SMTP port (spec.wandb.notifications.email.smtp.port; optional)")
+	cmd.PersistentFlags().String("smtp-username", "", "SMTP username (spec.wandb.notifications.email.smtp.username; optional)")
+	cmd.PersistentFlags().String("smtp-password", "", "SMTP password as <secret-name>:<key> (spec.wandb.notifications.email.smtp.password; optional)")
+	cmd.PersistentFlags().String("slack-client-id", "", "Slack client ID (spec.wandb.notifications.slack.clientId; optional)")
+	cmd.PersistentFlags().String("slack-client-secret", "", "Slack client secret as <secret-name>:<key> (spec.wandb.notifications.slack.clientSecret; optional)")
 	// Forward-proxy egress (spec.global.proxy).
 	cmd.PersistentFlags().String("proxy-http-url", "", "Literal HTTP_PROXY URL, no credentials (spec.global.proxy.httpProxy.value; optional)")
 	cmd.PersistentFlags().String("proxy-https-url", "", "Literal HTTPS_PROXY URL, no credentials (spec.global.proxy.httpsProxy.value; optional)")
@@ -403,11 +361,15 @@ func operatorDeployCmd() *cobra.Command {
 	var kindNodeImage string
 	var operatorChartVersion string
 	var operatorNamespace string
+	var operatorInstallTimeout time.Duration
+	var operatorImagePullPolicy string
 	var includeCR bool
 	var gatewayCRDURL string
 	var skipGatewayCRDs bool
 	var allowUnsupportedArch bool
 	var openshift bool
+	var watchtowerEnableSecretWrites bool
+	var watchtowerEnableDBAdmin bool
 
 	cmd := &cobra.Command{
 		Use:   "operator",
@@ -422,7 +384,7 @@ func operatorDeployCmd() *cobra.Command {
 			f := wandbCRFlagsFrom(cmd)
 			createAwsIngressClass, _ := cmd.Flags().GetBool("create-aws-ingress-class")
 			createAwsStorageClass, _ := cmd.Flags().GetBool("create-aws-storage-class")
-			telemetry := telemetryConfigFrom(cmd)
+			telemetryConfig := telemetryConfigFrom(cmd)
 			wait, _ := cmd.Flags().GetBool("wait")
 
 			// The CR only reconciles this run when --include-cr is set; otherwise the
@@ -431,17 +393,24 @@ func operatorDeployCmd() *cobra.Command {
 				return err
 			}
 
-			if err := validateObservabilityMode(telemetry.Mode); err != nil {
+			if err := validateObservabilityMode(telemetryConfig.Mode); err != nil {
 				return err
 			}
 			if err := validateKubeStateMetricsInstallMode(installKubeStateMetricsMode); err != nil {
 				return err
 			}
-			if telemetry.Mode == operator.TelemetryModeForward && telemetry.ForwardEndpoint == "" {
+			if telemetryConfig.Mode == telemetry.ModeForward && telemetryConfig.ForwardEndpoint == "" {
 				return fmt.Errorf("--observability-mode=forward requires --observability-forward-endpoint")
 			}
 			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), f.gatewayClass, f.ingressClass); err != nil {
 				return err
+			}
+			operatorPullPolicy, err := operator.ParseImagePullPolicy(operatorImagePullPolicy)
+			if err != nil {
+				return fmt.Errorf("invalid --operator-image-pull-policy %q (%w)", operatorImagePullPolicy, err)
+			}
+			if operatorInstallTimeout < 0 {
+				return fmt.Errorf("--operator-install-timeout must not be negative: %s", operatorInstallTimeout)
 			}
 			crOverrides, err := operator.ParseCROverrides(f.crSet)
 			if err != nil {
@@ -480,11 +449,13 @@ func operatorDeployCmd() *cobra.Command {
 				includeCR,
 				wait,
 				clusterName,
-				telemetry,
+				telemetryConfig,
 				f.wandbNamespace,
 				workers,
 				operatorChartVersion,
 				operatorNamespace,
+				operatorInstallTimeout,
+				operatorPullPolicy,
 				f.createCA,
 				createAwsStorageClass,
 				createAwsIngressClass,
@@ -497,6 +468,8 @@ func operatorDeployCmd() *cobra.Command {
 				skipGatewayCRDs,
 				allowUnsupportedArch,
 				openshift,
+				watchtowerEnableSecretWrites,
+				watchtowerEnableDBAdmin,
 				crOverrides,
 			); err != nil {
 				fmt.Printf("\n✗ Operator install failed: %v\n", err)
@@ -527,8 +500,10 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
 	cmd.Flags().StringVar(&kindNodeImage, "kind-node-image", "", "Kind node image to use, e.g. myreg.example.com/kindest/node:v1.35.1@sha256:... (defaults to the upstream pinned image; only used with --setup-k8s-cluster)")
 
-	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.3", "Operator Chart version (e.g., v2.0.0)")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", defaultOperatorChartVersion, "Operator Chart version, e.g. 2.0.0-beta.5 (a leading v is accepted)")
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
+	cmd.Flags().DurationVar(&operatorInstallTimeout, "operator-install-timeout", 0, "Helm timeout in seconds, minutes, or hours (for example 30s, 5m, or 1h; 0 uses Helm's default)")
+	cmd.Flags().StringVar(&operatorImagePullPolicy, "operator-image-pull-policy", string(corev1.PullIfNotPresent), "Operator image pull policy (Always, IfNotPresent, or Never; case-insensitive)")
 	cmd.Flags().StringVar(&installCertManagerMode, "install-cert-manager", certManagerInstallModeAuto, "Cert-manager install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
 	cmd.Flags().StringVar(&installNginxGatewayMode, "install-nginx-gateway", nginxGatewayInstallModeAuto, "Nginx-gateway-fabric install mode: auto (detect and reuse existing), true (force install flow), false (skip installation)")
 	cmd.Flags().StringVar(&installKubeStateMetricsMode, "install-kube-state-metrics", operator.KubeStateMetricsInstallModeFalse, "kube-state-metrics install mode, applied only when --observability-mode=full: false (default; wsm won't install or remove KSM), auto (detect and reuse existing, else install), true (force install)")
@@ -539,6 +514,8 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&skipGatewayCRDs, "skip-gateway-api-crds", false, "Assume the Gateway API CRDs are already installed; fail instead of fetching them from the internet")
 	cmd.Flags().BoolVar(&allowUnsupportedArch, "allow-unsupported-arch", false, "Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is published amd64-only and will crash under emulation on arm64 (e.g. Kind on Apple Silicon); set this only if you know your operator image is multi-arch.")
 	cmd.Flags().BoolVar(&openshift, "openshift", false, "Enable OpenShift compatibility for the operator and bundled managed-service pods")
+	cmd.Flags().BoolVar(&watchtowerEnableSecretWrites, "watchtower-enable-secret-writes", false, "Let Watchtower write Secrets in the install namespace (broad grant; see docs)")
+	cmd.Flags().BoolVar(&watchtowerEnableDBAdmin, "watchtower-enable-db-admin", false, "Enable Watchtower's email-domain DB migration (irreversible bulk rewrite; see docs)")
 
 	// Chart-only telemetry knobs. These configure the operator's telemetry Helm release, so they
 	// belong to `operator` alone — `wandb deploy` only applies the CR and can't honor them.
@@ -795,11 +772,13 @@ func performDeploy(
 	includeCR bool,
 	wait bool,
 	clusterName string,
-	telemetry operator.TelemetryConfig,
+	telemetryConfig telemetry.Config,
 	wandbNamespace string,
 	workers int,
 	operatorChartVersion string,
 	operatorNamespace string,
+	operatorInstallTimeout time.Duration,
+	operatorPullPolicy corev1.PullPolicy,
 	createCA bool,
 	createAwsStorageClass bool,
 	createAwsIngressClass bool,
@@ -812,9 +791,12 @@ func performDeploy(
 	skipGatewayCRDs bool,
 	allowUnsupportedArch bool,
 	openshift bool,
+	watchtowerEnableSecretWrites bool,
+	watchtowerEnableDBAdmin bool,
 	crOverrides []operator.CROverride,
 ) error {
 	ctx := context.Background()
+
 	installNginxGatewayMode = strings.ToLower(strings.TrimSpace(installNginxGatewayMode))
 	installCertManagerMode = strings.ToLower(strings.TrimSpace(installCertManagerMode))
 	installKubeStateMetricsMode = strings.ToLower(strings.TrimSpace(installKubeStateMetricsMode))
@@ -831,11 +813,11 @@ func performDeploy(
 	// KSM only makes sense with the in-cluster telemetry stack (full). A bare =false
 	// is hands-off: wsm neither installs nor removes it.
 	manageKubeStateMetrics := installKubeStateMetricsMode != operator.KubeStateMetricsInstallModeFalse
-	installKubeStateMetrics := manageKubeStateMetrics && telemetry.Mode == operator.TelemetryModeFull
+	installKubeStateMetrics := manageKubeStateMetrics && telemetryConfig.Mode == telemetry.ModeFull
 
 	// Turn on the operator chart's KSM scrape (off by default) whenever we're
 	// managing KSM under full, so its kube_* metrics actually get collected.
-	telemetry.ScrapeKubeStateMetrics = installKubeStateMetrics
+	telemetryConfig.ScrapeKubeStateMetrics = installKubeStateMetrics
 
 	// Calculate total steps based on flags
 	totalSteps := 2 // Always: ensure cert-manager, deploy operator
@@ -986,7 +968,7 @@ func performDeploy(
 		}
 		ksmOwned = false
 		fmt.Println(" ✓")
-	} else if telemetry.Mode == operator.TelemetryModeFull {
+	} else if telemetryConfig.Mode == telemetry.ModeFull {
 		// full telemetry but KSM disabled: warn that kube_* metrics won't be collected.
 		fmt.Println("→ Skipping kube-state-metrics (--install-kube-state-metrics=false); kube_* metrics won't be collected")
 	}
@@ -1014,7 +996,7 @@ func performDeploy(
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
 	start := time.Now()
 
-	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetry, wandbNamespace, openshift); err != nil {
+	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetryConfig, wandbNamespace, openshift, watchtowerEnableSecretWrites, watchtowerEnableDBAdmin, operatorInstallTimeout, operatorPullPolicy); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -1029,7 +1011,11 @@ func performDeploy(
 		}
 	}
 
-	if err := operator.WaitForOperator(ctx, operatorNamespace, 5*time.Minute); err != nil {
+	operatorReadinessTimeout := 5 * time.Minute
+	if operatorInstallTimeout > 0 {
+		operatorReadinessTimeout = operatorInstallTimeout
+	}
+	if err := operator.WaitForOperator(ctx, operatorNamespace, operatorReadinessTimeout); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -1416,15 +1402,22 @@ type wandbCRFlags struct {
 	oidcSessionLength     string
 	imageRegistry         string
 	customCACertFiles     []string
+	imagePullSecrets      []string
 	customCAConfigMap     string
 	// spec.global.proxy: literal URL or <secret>:<key> per http/https.
-	proxyHTTPURL      string
-	proxyHTTPSURL     string
-	proxyHTTPSecret   string
-	proxyHTTPSSecret  string
-	noProxy           []string
-	objectStoreCopies *int32
-	bucketProxy       *bool
+	proxyHTTPURL        string
+	proxyHTTPSURL       string
+	proxyHTTPSecret     string
+	proxyHTTPSSecret    string
+	noProxy             []string
+	objectStoreCopies   *int32
+	bucketProxy         *bool
+	adminConsole        *bool
+	security            operator.SecurityFlags
+	artifactGC          *bool
+	dataRetentionPeriod string
+	notifyEmail         operator.EmailInputs
+	notifySlack         operator.SlackInputs
 	// Air-gap install fields. mirrorRegistry is the one-stop mirror flag: it
 	// points the operator/subchart charts + images and the server manifest at the
 	// mirror (defaults manifestRepo). It does NOT set spec.global.imageRegistry.
@@ -1445,40 +1438,64 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 	boolean := func(name string) bool { v, _ := cmd.Flags().GetBool(name); return v }
 
 	certFiles, _ := cmd.Flags().GetStringArray("custom-ca-cert-file")
+	imagePullSecrets, _ := cmd.Flags().GetStringArray("image-pull-secret")
 	crSet, _ := cmd.Flags().GetStringArray("cr-set")
 	noProxy, _ := cmd.Flags().GetStringArray("no-proxy")
 	return wandbCRFlags{
-		crFile:                 str("cr-file"),
-		wandbVersion:           str("wandb-version"),
-		wandbName:              str("wandb-name"),
-		wandbHostname:          str("wandb-hostname"),
-		gatewayClass:           str("gateway-class"),
-		ingressClass:           str("ingress-class"),
-		ingressName:            str("ingress-name"),
-		issuerName:             str("issuer-name"),
-		addIngressAnnotations:  boolean("add-ingress-annotations"),
-		license:                str("license"),
-		licenseFile:            str("license-file"),
-		telemetryMode:          str("observability-mode"),
-		wandbNamespace:         str("wandb-namespace"),
-		createCA:               boolean("create-ca"),
-		size:                   str("size"),
-		retentionPolicy:        str("retention-policy"),
-		oidcClientID:           str("oidc-client-id"),
-		oidcClientSecret:       str("oidc-client-secret"),
-		oidcIssuerURL:          str("oidc-issuer-url"),
-		oidcAuthMethod:         str("oidc-auth-method"),
-		oidcSessionLength:      str("oidc-session-length"),
-		imageRegistry:          str("image-registry"),
-		customCACertFiles:      certFiles,
-		customCAConfigMap:      str("custom-ca-configmap"),
-		proxyHTTPURL:           str("proxy-http-url"),
-		proxyHTTPSURL:          str("proxy-https-url"),
-		proxyHTTPSecret:        str("proxy-http-secret"),
-		proxyHTTPSSecret:       str("proxy-https-secret"),
-		noProxy:                noProxy,
-		objectStoreCopies:      changedInt32(cmd, "objectstore-copies"),
-		bucketProxy:            changedBool(cmd, "bucket-proxy"),
+		crFile:                str("cr-file"),
+		wandbVersion:          str("wandb-version"),
+		wandbName:             str("wandb-name"),
+		wandbHostname:         str("wandb-hostname"),
+		gatewayClass:          str("gateway-class"),
+		ingressClass:          str("ingress-class"),
+		ingressName:           str("ingress-name"),
+		issuerName:            str("issuer-name"),
+		addIngressAnnotations: boolean("add-ingress-annotations"),
+		license:               str("license"),
+		licenseFile:           str("license-file"),
+		telemetryMode:         str("observability-mode"),
+		wandbNamespace:        str("wandb-namespace"),
+		createCA:              boolean("create-ca"),
+		size:                  str("size"),
+		retentionPolicy:       str("retention-policy"),
+		oidcClientID:          str("oidc-client-id"),
+		oidcClientSecret:      str("oidc-client-secret"),
+		oidcIssuerURL:         str("oidc-issuer-url"),
+		oidcAuthMethod:        str("oidc-auth-method"),
+		oidcSessionLength:     str("oidc-session-length"),
+		imageRegistry:         str("image-registry"),
+		customCACertFiles:     certFiles,
+		imagePullSecrets:      imagePullSecrets,
+		customCAConfigMap:     str("custom-ca-configmap"),
+		proxyHTTPURL:          str("proxy-http-url"),
+		proxyHTTPSURL:         str("proxy-https-url"),
+		proxyHTTPSecret:       str("proxy-http-secret"),
+		proxyHTTPSSecret:      str("proxy-https-secret"),
+		noProxy:               noProxy,
+		objectStoreCopies:     changedInt32(cmd, "objectstore-copies"),
+		bucketProxy:           changedBool(cmd, "bucket-proxy"),
+		adminConsole:          changedBool(cmd, "admin-console"),
+		security: operator.SecurityFlags{
+			AllowUserTeamCreation:          changedBool(cmd, "security-allow-user-team-creation"),
+			DisableCodeSaving:              changedBool(cmd, "security-disable-code-saving"),
+			AllowAnonymousPublicProjects:   changedBool(cmd, "security-allow-anonymous-public-projects"),
+			DisableSSOProvisioning:         changedBool(cmd, "security-disable-sso-provisioning"),
+			InsecureAllowAPIKeyAdminAccess: changedBool(cmd, "security-insecure-allow-apikey-admin-access"),
+			HideUpgradeBanner:              changedBool(cmd, "security-hide-upgrade-banner"),
+		},
+		artifactGC:          changedBool(cmd, "artifact-gc"),
+		dataRetentionPeriod: str("data-retention-period"),
+		notifyEmail: operator.EmailInputs{
+			Sink:         str("email-sink"),
+			SMTPHost:     str("smtp-host"),
+			SMTPPort:     str("smtp-port"),
+			SMTPUsername: str("smtp-username"),
+			SMTPPassword: str("smtp-password"),
+		},
+		notifySlack: operator.SlackInputs{
+			ClientID:     str("slack-client-id"),
+			ClientSecret: str("slack-client-secret"),
+		},
 		mirrorRegistry:         str("mirror-registry"),
 		insecureRegistry:       boolean("insecure-registry"),
 		registryCAFile:         str("registry-ca-file"),
@@ -1488,12 +1505,12 @@ func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 	}
 }
 
-// telemetryConfigFrom reads the operator-chart telemetry flags into the operator domain type.
+// telemetryConfigFrom reads the operator-chart telemetry flags into a telemetry.Config.
 // These flags live on `deploy-v2 operator` only (see operatorDeployCmd).
-func telemetryConfigFrom(cmd *cobra.Command) operator.TelemetryConfig {
+func telemetryConfigFrom(cmd *cobra.Command) telemetry.Config {
 	str := func(name string) string { v, _ := cmd.Flags().GetString(name); return v }
 	headers, _ := cmd.Flags().GetStringToString("observability-forward-headers")
-	return operator.TelemetryConfig{
+	return telemetry.Config{
 		Mode:              str("observability-mode"),
 		ForwardEndpoint:   str("observability-forward-endpoint"),
 		OtelSecretName:    str("observability-otel-secret"),
@@ -1603,6 +1620,13 @@ func normalizeMirrorManifestSource(f *wandbCRFlags, willReconcile bool) error {
 }
 
 func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
+	if cmd.Flags().Changed("image-pull-secret") && len(f.imagePullSecrets) == 0 {
+		return errors.New("--image-pull-secret must not be empty")
+	}
+	if err := operator.ValidateImagePullSecretNames(f.imagePullSecrets); err != nil {
+		return err
+	}
+
 	if f.crFile != "" {
 		var err error
 		wandbCR, err = readCRFile(f.crFile)
@@ -1644,8 +1668,10 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 		wandbCR.Spec.Wandb.Version = f.wandbVersion
 	}
 
-	// Enforce the minimum supported server on the resolved version (default,
-	// --wandb-version, or --cr-file). --cr-set is checked separately before apply.
+	// Accept a leading v (published server tags are unprefixed), then enforce the
+	// minimum supported server on the resolved version (default, --wandb-version,
+	// or --cr-file). --cr-set is checked separately before apply.
+	wandbCR.Spec.Wandb.Version = operator.NormalizeVersion(wandbCR.Spec.Wandb.Version)
 	if err := validateWandbVersion(wandbCR.Spec.Wandb.Version); err != nil {
 		return err
 	}
@@ -1694,7 +1720,7 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 	// stripped by operator.ApplyCR when none is configured (stripFieldsNotInCRDSchema).
 	oidcRefs := []struct {
 		value string
-		field *corev1.SecretKeySelector
+		field *v2.ValueOrSecret
 		flag  string
 	}{
 		{f.oidcClientID, &wandbCR.Spec.Wandb.OIDC.ClientId, "--oidc-client-id"},
@@ -1706,7 +1732,7 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 		if ref.value == "" {
 			continue
 		}
-		if ref.field.Name != "" || ref.field.Key != "" {
+		if !ref.field.IsZero() {
 			fmt.Printf("ignoring %s: spec.wandb.oidc value already set by --cr-file\n", ref.flag)
 			continue
 		}
@@ -1714,10 +1740,10 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 		if !ok || secretName == "" || key == "" {
 			return fmt.Errorf("%s must be in <secret-name>:<key> form, got %q", ref.flag, ref.value)
 		}
-		*ref.field = corev1.SecretKeySelector{
+		*ref.field = v2.ValueFromSelector(corev1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
 			Key:                  key,
-		}
+		})
 	}
 
 	// sessionLength is a plain string leaf, not a selector. The W&B app consumes
@@ -1756,6 +1782,9 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 			return fmt.Errorf("failed to read custom CA cert file %q: %w", certFile, err)
 		}
 		wandbCR.Spec.Global.CustomCACerts = append(wandbCR.Spec.Global.CustomCACerts, string(pem))
+	}
+	if err := operator.SetImagePullSecrets(wandbCR, f.imagePullSecrets); err != nil {
+		return err
 	}
 
 	// spec.global.proxy: a proxy flag overrides the --cr-file value for that leaf
@@ -1840,7 +1869,7 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 	// the one wsm's template builds. A --cr-file that keys managed infra under a
 	// different instance name won't be touched by these flags; author such CRs
 	// with telemetry/copies set directly.
-	if f.telemetryMode != "" && f.telemetryMode != operator.TelemetryModeOff {
+	if f.telemetryMode != "" && f.telemetryMode != telemetry.ModeOff {
 		// The map value is a struct copy, but ManagedX are pointers, so mutating
 		// through them reaches the pointee — no write-back to the map needed.
 		if m, ok := wandbCR.Spec.MySQL[v2.DefaultInstanceName]; ok && m.ManagedMysql != nil {
@@ -1870,13 +1899,35 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 		wandbCR.Spec.Wandb.BucketProxy = *f.bucketProxy
 	}
 
+	if f.adminConsole != nil {
+		wandbCR.Spec.AdminConsoleEnabled = f.adminConsole
+	} else if wandbCR.Spec.AdminConsoleEnabled == nil {
+		// Apply the CLI default when a --cr-file leaves the field unset, while
+		// preserving an explicit true or false value from the file.
+		wandbCR.Spec.AdminConsoleEnabled = ptr.Bool(true)
+	}
+
+	operator.SetSecurity(wandbCR, f.security)
+
+	if err := operator.SetRetention(wandbCR, f.artifactGC, f.dataRetentionPeriod); err != nil {
+		return err
+	}
+
+	notifications, err := operator.MergeNotifications(wandbCR.Spec.Wandb.Notifications, f.notifyEmail, f.notifySlack)
+	if err != nil {
+		return err
+	}
+	if notifications != nil {
+		wandbCR.Spec.Wandb.Notifications = notifications
+	}
+
 	wandbCR.Namespace = f.wandbNamespace
 	return nil
 }
 
-// proxyValueFromFlags builds a *v2.ProxyValue from a literal-URL flag and a
+// proxyValueFromFlags builds a *v2.ValueOrSecret from a literal-URL flag and a
 // <secret>:<key> flag. The two are mutually exclusive; nil when neither is set.
-func proxyValueFromFlags(urlVal, secretVal, urlFlag, secretFlag string) (*v2.ProxyValue, error) {
+func proxyValueFromFlags(urlVal, secretVal, urlFlag, secretFlag string) (*v2.ValueOrSecret, error) {
 	if urlVal != "" && secretVal != "" {
 		return nil, fmt.Errorf("%s and %s are mutually exclusive", urlFlag, secretFlag)
 	}
@@ -1892,13 +1943,13 @@ func proxyValueFromFlags(urlVal, secretVal, urlFlag, secretFlag string) (*v2.Pro
 		if u.User != nil {
 			return nil, fmt.Errorf("%s must not embed credentials; use %s (a Secret ref) for a credentialed proxy URL", urlFlag, secretFlag)
 		}
-		return &v2.ProxyValue{Value: urlVal}, nil
+		return &v2.ValueOrSecret{Value: urlVal}, nil
 	case secretVal != "":
 		ref, err := parseSecretKeyRef(secretVal, secretFlag)
 		if err != nil {
 			return nil, err
 		}
-		return &v2.ProxyValue{ValueFrom: &v2.ProxyValueSource{SecretKeyRef: &ref}}, nil
+		return &v2.ValueOrSecret{ValueFrom: &v2.SecretValueSource{SecretKeyRef: &ref}}, nil
 	}
 	return nil, nil
 }

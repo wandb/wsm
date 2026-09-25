@@ -33,10 +33,20 @@ var (
 	clientset   *kubernetes.Clientset
 	dynamicHost *dynamic.DynamicClient
 	mapper      meta.RESTMapper
-	once        sync.Once
-	mapperOnce  sync.Once
 	kubeContext string
 	initErr     error
+
+	// lifecycleMu serialises every read and mutation of the package-global client
+	// state above. It replaces the sync.Once pair this used to rely on: ResetClients
+	// reassigned those Onces (`once = sync.Once{}`) to force re-initialisation, which
+	// swaps a Once's internal mutex out from under any goroutine currently inside
+	// once.Do — a data race that aborts the process with "sync: unlock of unlocked
+	// mutex". Callers legitimately reset clients (a kubeconfig switch) while other
+	// requests are using them, so the lifecycle has to be guarded, not merely
+	// once-guarded.
+	lifecycleMu sync.Mutex
+	configInit  bool
+	mapperInit  bool
 )
 
 // clientInitErr reports why the k8s clients are unavailable, preferring the captured kubeconfig error
@@ -49,80 +59,104 @@ func clientInitErr() error {
 }
 
 func SetContext(ctx string) {
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
 	kubeContext = ctx
+	// A context switch invalidates the cached clients; resetting here keeps
+	// SetContext+ResetClients atomic for callers that do both.
+	resetClientsLocked()
 }
 
 func GetContext() string {
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
 	return kubeContext
 }
 
 // ResetClients resets the cached k8s clients so the next call re-initializes
-// with the current kubeContext. Must be called after SetContext.
+// with the current kubeContext. SetContext performs this reset atomically too.
 func ResetClients() {
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
+	resetClientsLocked()
+}
+
+// resetClientsLocked is the body of ResetClients. Callers must hold lifecycleMu.
+func resetClientsLocked() {
 	config = nil
 	clientset = nil
 	dynamicHost = nil
 	mapper = nil
 	initErr = nil
-	once = sync.Once{}
-	mapperOnce = sync.Once{}
+	configInit = false
+	mapperInit = false
 }
 
-func initMapper() {
-	mapperOnce.Do(func() {
-		if clientset != nil {
-			gr, err := restmapper.GetAPIGroupResources(clientset.Discovery())
-			if err != nil {
-				return
-			}
-			mapper = restmapper.NewDiscoveryRESTMapper(gr)
-		}
-	})
-}
-
-func initConfig() {
-	once.Do(func() {
-		kubeconfig := os.Getenv("KUBECONFIG")
-		if kubeconfig == "" {
-			home := homedir.HomeDir()
-			if home != "" {
-				kubeconfig = filepath.Join(home, ".kube", "config")
-			}
-		}
-
-		loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-		loadingRules.ExplicitPath = kubeconfig
-		configOverrides := &clientcmd.ConfigOverrides{}
-		if kubeContext != "" {
-			configOverrides.CurrentContext = kubeContext
-		}
-
-		var err error
-		config, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides).ClientConfig()
+// initMapperLocked builds the discovery REST mapper once per client generation.
+// Callers must hold lifecycleMu.
+func initMapperLocked() {
+	if mapperInit {
+		return
+	}
+	mapperInit = true
+	if clientset != nil {
+		gr, err := restmapper.GetAPIGroupResources(clientset.Discovery())
 		if err != nil {
-			// fallback to in-cluster config; if that also fails, keep the kubeconfig error (more actionable).
-			var inClusterErr error
-			config, inClusterErr = rest.InClusterConfig()
-			if inClusterErr != nil {
-				if kubeContext != "" {
-					initErr = fmt.Errorf("failed to load kubeconfig for context %q: %w", kubeContext, err)
-				} else {
-					initErr = fmt.Errorf("failed to load kubeconfig: %w", err)
-				}
-				config = nil
-				return
-			}
+			return
 		}
+		mapper = restmapper.NewDiscoveryRESTMapper(gr)
+	}
+}
 
-		clientset, _ = kubernetes.NewForConfig(config)
-		dynamicHost, _ = dynamic.NewForConfig(config)
+// initConfigLocked builds the clients once per generation. Callers must hold
+// lifecycleMu.
+func initConfigLocked() {
+	if configInit {
+		return
+	}
+	configInit = true
+	kubeconfig := os.Getenv("KUBECONFIG")
+	if kubeconfig == "" {
+		home := homedir.HomeDir()
+		if home != "" {
+			kubeconfig = filepath.Join(home, ".kube", "config")
+		}
+	}
 
-		initMapper()
-	})
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	loadingRules.ExplicitPath = kubeconfig
+	configOverrides := &clientcmd.ConfigOverrides{}
+	if kubeContext != "" {
+		configOverrides.CurrentContext = kubeContext
+	}
+
+	var err error
+	config, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides).ClientConfig()
+	if err != nil {
+		// fallback to in-cluster config; if that also fails, keep the kubeconfig error (more actionable).
+		var inClusterErr error
+		config, inClusterErr = rest.InClusterConfig()
+		if inClusterErr != nil {
+			if kubeContext != "" {
+				initErr = fmt.Errorf("failed to load kubeconfig for context %q: %w", kubeContext, err)
+			} else {
+				initErr = fmt.Errorf("failed to load kubeconfig: %w", err)
+			}
+			config = nil
+			return
+		}
+	}
+
+	clientset, _ = kubernetes.NewForConfig(config)
+	dynamicHost, _ = dynamic.NewForConfig(config)
+
+	initMapperLocked()
 }
 
 func GetConfig() (*rest.Config, error) {
-	initConfig()
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
+	initConfigLocked()
 	if config == nil {
 		return nil, clientInitErr()
 	}
@@ -130,7 +164,9 @@ func GetConfig() (*rest.Config, error) {
 }
 
 func GetDynamicClientset() (*rest.Config, *dynamic.DynamicClient, error) {
-	initConfig()
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
+	initConfigLocked()
 	if config == nil || dynamicHost == nil {
 		return nil, nil, clientInitErr()
 	}
@@ -138,7 +174,9 @@ func GetDynamicClientset() (*rest.Config, *dynamic.DynamicClient, error) {
 }
 
 func GetClientset() (*rest.Config, *kubernetes.Clientset, error) {
-	initConfig()
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
+	initConfigLocked()
 	if config == nil || clientset == nil {
 		return nil, nil, clientInitErr()
 	}
@@ -146,8 +184,10 @@ func GetClientset() (*rest.Config, *kubernetes.Clientset, error) {
 }
 
 func GetRESTMapper() (meta.RESTMapper, error) {
-	initConfig()
-	initMapper()
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
+	initConfigLocked()
+	initMapperLocked()
 	if mapper == nil {
 		return nil, os.ErrNotExist
 	}
@@ -155,7 +195,9 @@ func GetRESTMapper() (meta.RESTMapper, error) {
 }
 
 func RefreshRESTMapper() (meta.RESTMapper, error) {
-	initConfig()
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
+	initConfigLocked()
 	if clientset != nil {
 		gr, err := restmapper.GetAPIGroupResources(clientset.Discovery())
 		if err != nil {

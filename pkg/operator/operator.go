@@ -14,6 +14,8 @@ import (
 	appsv1 "github.com/wandb/operator/api/v1"
 	v2 "github.com/wandb/operator/api/v2"
 	"github.com/wandb/wsm/pkg/kubectl"
+	"github.com/wandb/wsm/pkg/license"
+	"github.com/wandb/wsm/pkg/telemetry"
 	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/loader"
@@ -75,6 +77,20 @@ const (
 
 	gatewayApiCRDURL = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml"
 )
+
+// ParseImagePullPolicy validates the operator image pull policy and returns it as a corev1.PullPolicy
+func ParseImagePullPolicy(policy string) (corev1.PullPolicy, error) {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case strings.ToLower(string(corev1.PullAlways)):
+		return corev1.PullAlways, nil
+	case strings.ToLower(string(corev1.PullIfNotPresent)):
+		return corev1.PullIfNotPresent, nil
+	case strings.ToLower(string(corev1.PullNever)):
+		return corev1.PullNever, nil
+	default:
+		return "", fmt.Errorf("invalid image pull policy %q: must be Always, IfNotPresent, or Never", policy)
+	}
+}
 
 // setNested walks (and creates) a chain of map[string]any keys, then sets the
 // leaf value at `path[len(path)-1]` to `value`. Mirrors apimachinery's nested
@@ -589,14 +605,8 @@ func applyOpenShiftValues(releaseValues map[string]interface{}) {
 	releaseValues["openshift"] = map[string]interface{}{"enabled": true}
 	mergeValues(releaseValues, "wandb-operator", map[string]interface{}{
 		"podSecurityContext": nullSC,
-		"containers": map[string]interface{}{
-			"operator": map[string]interface{}{
-				"env": map[string]interface{}{
-					"OPENSHIFT": map[string]interface{}{"value": "true"},
-				},
-			},
-		},
 	})
+	setNested(releaseValues, map[string]any{"value": "true"}, "wandb-operator", "containers", "operator", "env", "OPENSHIFT")
 	mergeValues(releaseValues, "redis-operator", map[string]interface{}{"podSecurityContext": nullSC})
 	mergeValues(releaseValues, "altinity-clickhouse-operator", map[string]interface{}{"podSecurityContext": nullSC})
 	mergeValues(releaseValues, "seaweedfs-operator", map[string]interface{}{"podSecurityContext": map[string]interface{}{
@@ -714,17 +724,32 @@ func nestedValue(values map[string]interface{}, keys ...string) (interface{}, bo
 }
 
 // DeployOperator deploys the W&B operator chart version specified.  The chart is called operator and is available in oci://us-docker.pkg.dev/wandb-production/public/wandb/charts
+// NormalizeVersion strips a leading "v" (e.g. v2.0.0-beta.4 -> 2.0.0-beta.4) so
+// a semver-tagged input matches the unprefixed OCI chart and server-manifest tags.
+func NormalizeVersion(version string) string {
+	if len(version) > 1 && version[0] == 'v' && version[1] >= '0' && version[1] <= '9' {
+		return version[1:]
+	}
+	return version
+}
+
 func DeployOperator(
 	ctx context.Context,
 	namespace string,
 	chartVersion string,
 	mirror *MirrorConfig,
-	telemetry TelemetryConfig,
+	telemetryConfig telemetry.Config,
 	wandbNamespace string,
 	openshift bool,
+	watchtowerEnableSecretWrites bool,
+	watchtowerEnableDBAdmin bool,
+	installTimeout time.Duration,
+	imagePullPolicy corev1.PullPolicy,
 ) error {
 	const chartName = "operator"
 	const releaseName = "wandb-operator"
+
+	chartVersion = NormalizeVersion(chartVersion)
 
 	repositoryURL := "oci://us-docker.pkg.dev/wandb-production/public/wandb/charts"
 	if mirror != nil {
@@ -757,19 +782,35 @@ func DeployOperator(
 	if err != nil {
 		return fmt.Errorf("failed to check if release exists: %w", err)
 	}
+	existingTelemetryMode := telemetry.ModeOff
+	existingTelemetryNamespace := wandbNamespace
+	if releaseExists {
+		rel, err := action.NewGet(actionConfig).Run(releaseName)
+		if err != nil {
+			return fmt.Errorf("failed to read operator release %q: %w", releaseName, err)
+		}
+		release, ok := rel.(*v1.Release)
+		if !ok {
+			return fmt.Errorf("unexpected release type for %q", releaseName)
+		}
+		values, _ := release.Config["telemetry"].(map[string]interface{})
+		existingTelemetryMode = telemetry.ParseValues(values).Mode
+		if installedNamespace, _ := values["namespace"].(string); installedNamespace != "" {
+			existingTelemetryNamespace = installedNamespace
+		}
+	}
 
-	operatorImage := map[string]interface{}{
-		"pullPolicy": "Always",
+	operatorImage := map[string]interface{}{}
+	// IfNotPresent is the chart default; leave it out of the release values.
+	if imagePullPolicy != corev1.PullIfNotPresent {
+		operatorImage["pullPolicy"] = string(imagePullPolicy)
 	}
 	if mirror != nil {
 		operatorImage["repository"] = mirror.Host + "/wandb/operator"
 	}
 
-	telemetryValues := buildTelemetryValues(telemetry)
+	telemetryValues := telemetry.BuildValues(telemetryConfig)
 	releaseValues := map[string]interface{}{
-		"wandb": map[string]interface{}{
-			"install": false,
-		},
 		"wandb-operator": map[string]interface{}{
 			"image": operatorImage,
 		},
@@ -825,7 +866,7 @@ func DeployOperator(
 	// conditions are boolean-only). "full" runs the in-cluster Victoria stack
 	// plus local Grafana; "forward" runs the Victoria stack and forwards OTLP
 	// data to telemetry.forwarding.otlp.endpoint.
-	if telemetry.Mode == TelemetryModeFull || telemetry.Mode == TelemetryModeForward {
+	if telemetryConfig.Mode == telemetry.ModeFull || telemetryConfig.Mode == telemetry.ModeForward {
 		// The telemetry subchart deploys into the telemetry namespace (the W&B
 		// namespace), not the operator's release namespace. It must already
 		// exist — the chart does not create it — so ensure it here and pin
@@ -837,11 +878,11 @@ func DeployOperator(
 	}
 	// Enable the telemetry subchart dependencies (chart defaults are false). The
 	// forwarding.otlp.* values for "forward" are already set by buildTelemetryValues.
-	switch telemetry.Mode {
-	case TelemetryModeFull:
+	switch telemetryConfig.Mode {
+	case telemetry.ModeFull:
 		releaseValues["victoria-metrics-operator"] = map[string]interface{}{"enabled": true}
 		releaseValues["grafana-operator"] = map[string]interface{}{"enabled": true}
-	case TelemetryModeForward:
+	case telemetry.ModeForward:
 		releaseValues["victoria-metrics-operator"] = map[string]interface{}{"enabled": true}
 	}
 
@@ -849,30 +890,112 @@ func DeployOperator(
 		applyOpenShiftValues(releaseValues)
 	}
 
+	// Opt-in Watchtower grants, forwarded to the operator container which passes
+	// them to Watchtower. Off by default; see docs/reference/commands.md for the risks.
+	if watchtowerEnableSecretWrites {
+		setNested(releaseValues, map[string]any{"value": "true"}, "wandb-operator", "containers", "operator", "env", "WATCHTOWER_ENABLE_SECRET_WRITES")
+	}
+	if watchtowerEnableDBAdmin {
+		setNested(releaseValues, map[string]any{"value": "true"}, "wandb-operator", "containers", "operator", "env", "WATCHTOWER_ENABLE_DB_ADMIN")
+	}
+
 	if releaseExists {
-		// Create upgrade action
-		upgradeClient := action.NewUpgrade(actionConfig)
-		upgradeClient.Namespace = namespace
-		upgradeClient.Version = chartVersion
-		upgradeClient.WaitStrategy = "hookOnly"
-		upgradeClient.ForceConflicts = true
-
-		// Get the chart
-		cp, err := upgradeClient.LocateChart(chartRef, settings)
-		if err != nil {
-			return fmt.Errorf("failed to locate chart: %w", err)
+		runUpgrade := func(values map[string]interface{}) error {
+			upgradeClient := action.NewUpgrade(actionConfig)
+			upgradeClient.Namespace = namespace
+			upgradeClient.Version = chartVersion
+			upgradeClient.WaitStrategy = "hookOnly"
+			upgradeClient.ForceConflicts = true
+			if installTimeout > 0 {
+				upgradeClient.Timeout = installTimeout
+			}
+			cp, err := upgradeClient.LocateChart(chartRef, settings)
+			if err != nil {
+				return fmt.Errorf("failed to locate chart: %w", err)
+			}
+			chartRequested, err := loader.Load(cp)
+			if err != nil {
+				return fmt.Errorf("failed to load chart: %w", err)
+			}
+			if _, err := upgradeClient.RunWithContext(ctx, releaseName, chartRequested, values); err != nil {
+				return fmt.Errorf("failed to upgrade operator chart: %w", err)
+			}
+			return nil
 		}
 
-		// Load the chart
-		chartRequested, err := loader.Load(cp)
-		if err != nil {
-			return fmt.Errorf("failed to load chart: %w", err)
+		if telemetry.CleanupRequired(existingTelemetryMode, telemetryConfig.Mode) {
+			fmt.Printf("\n  → Removing observability resources for mode change %q → %q...", existingTelemetryMode, telemetryConfig.Mode)
+			if err := telemetry.CleanupResources(ctx, existingTelemetryNamespace, existingTelemetryMode, telemetryConfig.Mode, 5*time.Minute); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+			fmt.Println(" ✓")
 		}
 
-		// Run the upgrade
-		_, err = upgradeClient.RunWithContext(ctx, releaseName, chartRequested, releaseValues)
-		if err != nil {
-			return fmt.Errorf("failed to upgrade operator chart: %w", err)
+		// Enabling telemetry on an existing release needs its CRDs installed and
+		// Established first, or the operators race missing CRDs. Skip once present.
+		if telemetryConfig.Mode == telemetry.ModeFull || telemetryConfig.Mode == telemetry.ModeForward {
+			established, err := telemetry.CRDsEstablished(ctx, telemetryConfig.Mode)
+			if err != nil {
+				return err
+			}
+			if !established {
+				fmt.Print("\n  → Installing telemetry CRDs...")
+				if err := runUpgrade(telemetry.PrepValues(releaseValues, telemetryConfig.Mode)); err != nil {
+					fmt.Println(" ✗")
+					return fmt.Errorf("telemetry CRD preparation: %w", err)
+				}
+				fmt.Println(" ✓")
+
+				fmt.Print("  → Waiting for all telemetry CRDs to become Established...")
+				if err := telemetry.WaitForCRDs(ctx, telemetryConfig.Mode, 5*time.Minute); err != nil {
+					fmt.Println(" ✗")
+					return err
+				}
+				fmt.Println(" ✓")
+			} else {
+				fmt.Println("\n  ✓ All required telemetry CRDs are already Established")
+			}
+
+			fmt.Printf("  → Enabling telemetry mode %q...", telemetryConfig.Mode)
+		} else {
+			fmt.Print("\n  → Turning off telemetry...")
+		}
+
+		controllersReady := true
+		if telemetryConfig.Mode == telemetry.ModeFull || telemetryConfig.Mode == telemetry.ModeForward {
+			controllersReady, err = telemetry.ControllersReady(ctx, namespace, telemetryConfig.Mode)
+			if err != nil {
+				return err
+			}
+		}
+
+		upgradeErr := runUpgrade(releaseValues)
+		waitedForControllers := false
+		if upgradeErr != nil && !controllersReady && telemetry.IsWebhookStartupError(upgradeErr) {
+			fmt.Println(" waiting for observability controllers")
+			fmt.Print("  → Waiting for observability controllers to become ready...")
+			if err := telemetry.WaitForControllers(ctx, namespace, telemetryConfig.Mode, 5*time.Minute); err != nil {
+				fmt.Println(" ✗")
+				return fmt.Errorf("%v; %w", upgradeErr, err)
+			}
+			fmt.Println(" ✓")
+			waitedForControllers = true
+			fmt.Printf("  → Retrying telemetry mode %q...", telemetryConfig.Mode)
+			upgradeErr = runUpgrade(releaseValues)
+		}
+		if upgradeErr != nil {
+			fmt.Println(" ✗")
+			return upgradeErr
+		}
+		fmt.Println(" ✓")
+		if !controllersReady && !waitedForControllers {
+			fmt.Print("  → Waiting for observability controllers to become ready...")
+			if err := telemetry.WaitForControllers(ctx, namespace, telemetryConfig.Mode, 5*time.Minute); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+			fmt.Println(" ✓")
 		}
 	} else {
 		// Create install action
@@ -881,6 +1004,9 @@ func DeployOperator(
 		installClient.ReleaseName = releaseName
 		installClient.Version = chartVersion
 		installClient.WaitStrategy = "hookOnly"
+		if installTimeout > 0 {
+			installClient.Timeout = installTimeout
+		}
 
 		// Get the chart
 		cp, err := installClient.LocateChart(chartRef, settings)
@@ -894,11 +1020,19 @@ func DeployOperator(
 			return fmt.Errorf("failed to load chart: %w", err)
 		}
 
+		if telemetryConfig.Mode == telemetry.ModeFull || telemetryConfig.Mode == telemetry.ModeForward {
+			fmt.Printf("\n  → Installing operator with telemetry mode %q...", telemetryConfig.Mode)
+		} else {
+			fmt.Print("\n  → Installing operator with telemetry off...")
+		}
+
 		// Run the install
 		_, err = installClient.RunWithContext(ctx, chartRequested, releaseValues)
 		if err != nil {
+			fmt.Println(" ✗")
 			return fmt.Errorf("failed to install operator chart: %w", err)
 		}
+		fmt.Println(" ✓")
 	}
 
 	return nil
@@ -1178,6 +1312,18 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases, overrides []CROv
 	// --cr-set overrides are applied last — after the template, --cr-file, typed
 	// flags, and the strip — so a set field always wins and is never removed. The
 	// CRD validates the result server-side on apply.
+	if err := applyCROverrides(obj, overrides); err != nil {
+		return err
+	}
+
+	if err := kubectl.ApplyUnstructured(ctx, obj); err != nil {
+		return fmt.Errorf("failed to apply CR: %w", err)
+	}
+
+	return nil
+}
+
+func applyCROverrides(obj *unstructured.Unstructured, overrides []CROverride) error {
 	for _, o := range overrides {
 		val := o.Value
 		// A number parsed for a string field (e.g. version=1.0) is set from the
@@ -1193,12 +1339,23 @@ func ApplyCR(ctx context.Context, wandbCR *v2.WeightsAndBiases, overrides []CROv
 			return fmt.Errorf("failed to apply --cr-set %s: %w", strings.Join(o.Path, "."), err)
 		}
 	}
-
-	if err := kubectl.ApplyUnstructured(ctx, obj); err != nil {
-		return fmt.Errorf("failed to apply CR: %w", err)
-	}
-
 	return nil
+}
+
+// UpdateLicense sets spec.wandb.license on the CR
+func UpdateLicense(ctx context.Context, name, namespace, licenseIn string) error {
+	licenseIn = strings.TrimSpace(licenseIn)
+	if licenseIn != "" {
+		if err := license.Validate(licenseIn); err != nil {
+			return err
+		}
+	}
+	cr, err := GetCR(ctx, name, namespace)
+	if err != nil {
+		return err
+	}
+	cr.Spec.Wandb.License = licenseIn
+	return ApplyCR(ctx, cr, nil)
 }
 
 // CROverride is a parsed `--cr-set path=value` entry applied to the CR just
@@ -1232,7 +1389,15 @@ func ParseCROverrides(sets []string) ([]CROverride, error) {
 		if err != nil {
 			return nil, fmt.Errorf("--cr-set %q: %w", s, err)
 		}
-		overrides = append(overrides, CROverride{Path: strings.Split(path, "."), Value: value, Raw: rawValue})
+		override := CROverride{Path: strings.Split(path, "."), Value: value, Raw: rawValue}
+		if path == "spec.wandb.version" {
+			normalized := NormalizeVersion(OverrideStringValue(override))
+			override.Raw = normalized
+			if _, isString := override.Value.(string); isString {
+				override.Value = normalized
+			}
+		}
+		overrides = append(overrides, override)
 	}
 	return overrides, nil
 }
@@ -1301,10 +1466,7 @@ func stripFieldsNotInCRDSchema(obj *unstructured.Unstructured) {
 	unstructured.RemoveNestedField(obj.Object, "status")
 
 	// OidcSpec is a by-value struct, so `omitempty` can't drop its zero value
-	// (serializes as oidc.*: {"key": ""}). Strip it unless a leaf is set, so
-	// configured OIDC (flags or --cr-file) still reaches the CRD.
-	// TODO(operator-bump): drop this once OidcSpec is a pointer upstream — the
-	// alpha.2 CRD already tolerates the empty block (verified on Kind).
+	// (its leaves serialize as empty {} blocks). Strip unless a leaf is set.
 	if !oidcConfigured(obj) {
 		unstructured.RemoveNestedField(obj.Object, "spec", "wandb", "oidc")
 	}
@@ -1342,8 +1504,8 @@ func isEmptyNestedMap(obj *unstructured.Unstructured, fields ...string) bool {
 	return err != nil || !found || len(m) == 0
 }
 
-// oidcConfigured reports whether spec.wandb.oidc has any leaf selector with a
-// non-empty name or key (a real reference, not the zero-value struct).
+// oidcConfigured reports whether spec.wandb.oidc has any leaf set, in either the
+// legacy {name,key} or the ValueOrSecret {value,valueFrom} shape.
 func oidcConfigured(obj *unstructured.Unstructured) bool {
 	oidc, found, err := unstructured.NestedMap(obj.Object, "spec", "wandb", "oidc")
 	if err != nil || !found {
@@ -1359,10 +1521,12 @@ func oidcConfigured(obj *unstructured.Unstructured) bool {
 		if !ok {
 			continue
 		}
-		if name, _, _ := unstructured.NestedString(selector, "name"); name != "" {
-			return true
+		for _, k := range []string{"name", "key", "value"} {
+			if s, _, _ := unstructured.NestedString(selector, k); s != "" {
+				return true
+			}
 		}
-		if key, _, _ := unstructured.NestedString(selector, "key"); key != "" {
+		if vf, found, _ := unstructured.NestedMap(selector, "valueFrom"); found && len(vf) > 0 {
 			return true
 		}
 	}

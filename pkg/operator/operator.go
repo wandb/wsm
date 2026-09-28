@@ -946,30 +946,69 @@ func DeployOperator(
 	if watchtowerEnableDBAdmin {
 		setNested(releaseValues, map[string]any{"value": "true"}, "wandb-operator", "containers", "operator", "env", "WATCHTOWER_ENABLE_DB_ADMIN")
 	}
-
-	if releaseExists {
-		runUpgrade := func(values map[string]interface{}) error {
-			upgradeClient := action.NewUpgrade(actionConfig)
-			upgradeClient.Namespace = namespace
-			upgradeClient.Version = chartVersion
-			upgradeClient.WaitStrategy = "hookOnly"
-			upgradeClient.ForceConflicts = true
-			if installTimeout > 0 {
-				upgradeClient.Timeout = installTimeout
-			}
-			cp, err := upgradeClient.LocateChart(chartRef, settings)
-			if err != nil {
-				return fmt.Errorf("failed to locate chart: %w", err)
-			}
-			chartRequested, err := loader.Load(cp)
-			if err != nil {
-				return fmt.Errorf("failed to load chart: %w", err)
-			}
-			if _, err := upgradeClient.RunWithContext(ctx, releaseName, chartRequested, values); err != nil {
-				return fmt.Errorf("failed to upgrade operator chart: %w", err)
-			}
-			return nil
+	runUpgrade := func(values map[string]interface{}) error {
+		upgradeClient := action.NewUpgrade(actionConfig)
+		upgradeClient.Namespace = namespace
+		upgradeClient.Version = chartVersion
+		upgradeClient.WaitStrategy = "hookOnly"
+		upgradeClient.ForceConflicts = true
+		if installTimeout > 0 {
+			upgradeClient.Timeout = installTimeout
 		}
+		cp, err := upgradeClient.LocateChart(chartRef, settings)
+		if err != nil {
+			return fmt.Errorf("failed to locate chart: %w", err)
+		}
+		chartRequested, err := loader.Load(cp)
+		if err != nil {
+			return fmt.Errorf("failed to load chart: %w", err)
+		}
+		if _, err := upgradeClient.RunWithContext(ctx, releaseName, chartRequested, values); err != nil {
+			return fmt.Errorf("failed to upgrade operator chart: %w", err)
+		}
+		return nil
+	}
+	telemetryOn := telemetryConfig.Mode == telemetry.ModeFull || telemetryConfig.Mode == telemetry.ModeForward
+	enableTelemetryWithRetry := func() error {
+		controllersReady := true
+		if telemetryOn {
+			var err error
+			controllersReady, err = telemetry.ControllersReady(ctx, namespace, telemetryConfig.Mode)
+			if err != nil {
+				return err
+			}
+		}
+
+		upgradeErr := runUpgrade(releaseValues)
+		waitedForControllers := false
+		if upgradeErr != nil && !controllersReady && telemetry.IsWebhookStartupError(upgradeErr) {
+			fmt.Println(" waiting for observability controllers")
+			fmt.Print("  → Waiting for observability controllers to become ready...")
+			if err := telemetry.WaitForControllers(ctx, namespace, telemetryConfig.Mode, 5*time.Minute); err != nil {
+				fmt.Println(" ✗")
+				return fmt.Errorf("%v; %w", upgradeErr, err)
+			}
+			fmt.Println(" ✓")
+			waitedForControllers = true
+			fmt.Printf("  → Retrying telemetry mode %q...", telemetryConfig.Mode)
+			upgradeErr = runUpgrade(releaseValues)
+		}
+		if upgradeErr != nil {
+			fmt.Println(" ✗")
+			return upgradeErr
+		}
+		fmt.Println(" ✓")
+		if !controllersReady && !waitedForControllers {
+			fmt.Print("  → Waiting for observability controllers to become ready...")
+			if err := telemetry.WaitForControllers(ctx, namespace, telemetryConfig.Mode, 5*time.Minute); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+			fmt.Println(" ✓")
+		}
+		return nil
+	}
+	if releaseExists {
 
 		if telemetry.CleanupRequired(existingTelemetryMode, telemetryConfig.Mode) {
 			fmt.Printf("\n  → Removing observability resources for mode change %q → %q...", existingTelemetryMode, telemetryConfig.Mode)
@@ -1009,42 +1048,7 @@ func DeployOperator(
 		} else {
 			fmt.Print("\n  → Turning off telemetry...")
 		}
-
-		controllersReady := true
-		if telemetryConfig.Mode == telemetry.ModeFull || telemetryConfig.Mode == telemetry.ModeForward {
-			controllersReady, err = telemetry.ControllersReady(ctx, namespace, telemetryConfig.Mode)
-			if err != nil {
-				return err
-			}
-		}
-
-		upgradeErr := runUpgrade(releaseValues)
-		waitedForControllers := false
-		if upgradeErr != nil && !controllersReady && telemetry.IsWebhookStartupError(upgradeErr) {
-			fmt.Println(" waiting for observability controllers")
-			fmt.Print("  → Waiting for observability controllers to become ready...")
-			if err := telemetry.WaitForControllers(ctx, namespace, telemetryConfig.Mode, 5*time.Minute); err != nil {
-				fmt.Println(" ✗")
-				return fmt.Errorf("%v; %w", upgradeErr, err)
-			}
-			fmt.Println(" ✓")
-			waitedForControllers = true
-			fmt.Printf("  → Retrying telemetry mode %q...", telemetryConfig.Mode)
-			upgradeErr = runUpgrade(releaseValues)
-		}
-		if upgradeErr != nil {
-			fmt.Println(" ✗")
-			return upgradeErr
-		}
-		fmt.Println(" ✓")
-		if !controllersReady && !waitedForControllers {
-			fmt.Print("  → Waiting for observability controllers to become ready...")
-			if err := telemetry.WaitForControllers(ctx, namespace, telemetryConfig.Mode, 5*time.Minute); err != nil {
-				fmt.Println(" ✗")
-				return err
-			}
-			fmt.Println(" ✓")
-		}
+		return enableTelemetryWithRetry()
 	} else {
 		// Create install action
 		installClient := action.NewInstall(actionConfig)
@@ -1068,19 +1072,37 @@ func DeployOperator(
 			return fmt.Errorf("failed to load chart: %w", err)
 		}
 
-		if telemetryConfig.Mode == telemetry.ModeFull || telemetryConfig.Mode == telemetry.ModeForward {
-			fmt.Printf("\n  → Installing operator with telemetry mode %q...", telemetryConfig.Mode)
+		// With telemetry on, a single install races the VictoriaMetrics webhook
+		// (CRs are created before its pod has endpoints). Install with only the
+		// telemetry CRDs first, then enable the stack via the same wait+retry
+		// upgrade used for existing releases.
+		installValues := releaseValues
+		if telemetryOn {
+			installValues = telemetry.PrepValues(releaseValues, telemetryConfig.Mode)
+			fmt.Print("\n  → Installing operator with telemetry CRDs...")
 		} else {
 			fmt.Print("\n  → Installing operator with telemetry off...")
 		}
 
-		// Run the install
-		_, err = installClient.RunWithContext(ctx, chartRequested, releaseValues)
-		if err != nil {
+		if _, err := installClient.RunWithContext(ctx, chartRequested, installValues); err != nil {
 			fmt.Println(" ✗")
 			return fmt.Errorf("failed to install operator chart: %w", err)
 		}
 		fmt.Println(" ✓")
+
+		if telemetryOn {
+			fmt.Print("  → Waiting for all telemetry CRDs to become Established...")
+			if err := telemetry.WaitForCRDs(ctx, telemetryConfig.Mode, 5*time.Minute); err != nil {
+				fmt.Println(" ✗")
+				return err
+			}
+			fmt.Println(" ✓")
+
+			fmt.Printf("  → Enabling telemetry mode %q...", telemetryConfig.Mode)
+			if err := enableTelemetryWithRetry(); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil

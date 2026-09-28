@@ -69,7 +69,8 @@
     <div class="eyebrow">Weights &amp; Biases · Server Manager (wsm)</div>
     <h1>Run W&amp;B on your own infrastructure. From your own registry.</h1>
     <p class="sub">wsm mirrors every chart and image W&amp;B needs into <b>your</b> private registry once, then installs the
-      full platform into your cluster <b>air-gapped</b>. No image is ever pulled from the public internet at deploy time.</p>
+      full platform into your cluster <b>air-gapped</b>. No image is ever pulled from the public internet at deploy time
+      (observability stack excluded).</p>
 
     <div class="flow">
       <!-- Public sources (outside the network) -->
@@ -92,7 +93,7 @@
       <div class="arrow">
         <div class="badge">1</div>
         <svg width="70" height="26" viewBox="0 0 70 26" fill="none"><path d="M2 13h56" stroke="#FCBC32" stroke-width="2.6" stroke-linecap="round"/><path d="M56 6l10 7-10 7" stroke="#FCBC32" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <div class="lab">wsm registry mirror<small>copy to your registry</small></div>
+        <div class="lab">wsm registry mirror<small>--wandb-version &lt;ver&gt;</small></div>
       </div>
 
       <!-- Secure enclosure: registry + cluster -->
@@ -134,9 +135,9 @@
                 <li><span class="tick">✓</span><span><b>W&amp;B Operator</b> reconciles your instance</span></li>
                 <li><span class="tick">✓</span><span><b>W&amp;B Server</b> + <b>Weave</b> — experiments, models, traces</span></li>
                 <li><span class="tick">✓</span><span><b>Managed data</b>: ClickHouse · Kafka · MySQL · Redis · object store</span></li>
-                <li><span class="tick">✓</span><span>Every pod pulls <b>only</b> from your registry</span></li>
+                <li><span class="tick">✓</span><span>Every pod pulls <b>only</b> from your registry*</span></li>
               </ul>
-              <div class="note">On-prem, cloud, or fully air-gapped — you choose.</div>
+              <div class="note">On-prem, cloud, or fully air-gapped — you choose.<br>* With observability off. <code>--observability-mode=full|forward</code> images aren't mirrored yet.</div>
             </div>
           </div>
         </div>
@@ -144,7 +145,7 @@
     </div>
 
     <div class="foot">
-      <div class="tagline">Two commands. <span>Zero</span> public pulls at deploy. Your data never leaves your network.</div>
+      <div class="tagline">Two commands. <span>Zero</span> public pulls at deploy*. Your data never leaves your network.</div>
       <div class="pill">
         <svg width="13" height="15" viewBox="0 0 13 15" fill="none"><path d="M6.5 1l4.5 2v4c0 3.2-2 5.6-4.5 6.8C4 12.6 2 10.2 2 7V3l4.5-2z" fill="#0C8E99"/></svg>
         Air-gap ready

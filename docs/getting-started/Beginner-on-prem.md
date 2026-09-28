@@ -34,6 +34,10 @@ export VER=0.82.2                       # the W&B server version to install
 `registry:2` is a throwaway stand-in for the private registry you'd use in production
 (Harbor, Amazon ECR, Artifactory, …).
 
+> `host.docker.internal` resolves from Kind nodes on Docker Desktop and OrbStack only. On Linux
+> Docker Engine, set `REG` to an address the Kind nodes can reach instead, e.g. your host's
+> LAN IP (`export REG=$(hostname -I | awk '{print $1}'):5000`).
+
 ### 2. Mirror every W&B chart + image into it
 
 ```bash
@@ -49,13 +53,16 @@ application image into your registry.
 
 ### 3. Create a local cluster and install the operator — from your registry
 
+> This walkthrough runs on one internet-connected laptop so you can see the whole flow. In a
+> real air gap, the two public downloads below (the Gateway API CRDs in step 3 and the server
+> manifest in step 4) happen on the connected host, and you carry the files across.
+
 ```bash
 wsm cluster create --cluster-name wandb --insecure-registry-host $REG
 
 kubectl --context kind-wandb apply -f  https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml
 
-wsm deploy-v2 operator --context kind-wandb --mirror-registry $REG --insecure-registry --skip-gateway-api-crds 
-# include --allow-unsupported-arch if running on a mac
+wsm deploy-v2 operator --context kind-wandb --mirror-registry $REG --insecure-registry --skip-gateway-api-crds
 ```
 
 `--insecure-registry-host` wires the cluster's nodes to pull from your plain-HTTP registry.

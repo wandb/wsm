@@ -242,33 +242,33 @@ func DefaultWandbCR() *v2.WeightsAndBiases {
 			MySQL: map[string]v2.MySQLSpec{
 				v2.DefaultInstanceName: {
 					ManagedMysql: &v2.ManagedMysqlSpec{
-						Telemetry: v2.Telemetry{Enabled: false},
+						Telemetry: v2.Telemetry{Enabled: true},
 					},
 				},
 			},
 			Redis: map[string]v2.RedisSpec{
 				v2.DefaultInstanceName: {
 					ManagedRedis: &v2.ManagedRedisSpec{
-						Telemetry: v2.Telemetry{Enabled: false},
+						Telemetry: v2.Telemetry{Enabled: true},
 					},
 				},
 			},
 			Kafka: v2.KafkaSpec{
 				ManagedKafka: &v2.ManagedKafkaSpec{
-					Telemetry: v2.Telemetry{Enabled: false},
+					Telemetry: v2.Telemetry{Enabled: true},
 				},
 			},
 			ObjectStore: map[string]v2.ObjectStoreSpec{
 				v2.DefaultInstanceName: {
 					ManagedObjectStore: &v2.ManagedObjectStoreSpec{
-						Telemetry: v2.Telemetry{Enabled: false},
+						Telemetry: v2.Telemetry{Enabled: true},
 					},
 				},
 			},
 			ClickHouse: map[string]v2.ClickHouseSpec{
 				v2.DefaultInstanceName: {
 					ManagedClickHouse: &v2.ManagedClickHouseSpec{
-						Telemetry: v2.Telemetry{Enabled: false},
+						Telemetry: v2.Telemetry{Enabled: true},
 					},
 				},
 			},

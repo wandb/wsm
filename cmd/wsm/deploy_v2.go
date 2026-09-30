@@ -103,7 +103,7 @@ func DeployV2Cmd() *cobra.Command {
 	// --observability-mode is persistent: on `wandb deploy` it toggles CR telemetry.enabled,
 	// on `operator` it also drives the chart. The chart-only otel/forwarding knobs below live on
 	// `operator` alone (see operatorDeployCmd) since that is the only command that applies them.
-	cmd.PersistentFlags().String("observability-mode", "off", "Enable observability for applications (off, full, forward)")
+	cmd.PersistentFlags().String("observability-mode", "off", "Enable observability for applications (off, full, forward); unset keeps per-database exporters on, off disables them")
 	cmd.PersistentFlags().String("retention-policy", "detach", "Retention policy for W&B instance (detach, purge) - defaults to detach")
 	cmd.PersistentFlags().String("size", string(defaultWandbSize), "W&B instance size (dev, micro, small, medium, large, xlarge, xxlarge)")
 	cmd.PersistentFlags().String("object-store-storage-size", "", "Override the managed object store (SeaweedFS) storage size, e.g. 20Gi. Must be < 30Gi: the operator derives SeaweedFS volumeSizeLimitMB from this and the master rejects a limit >= 30000. Leave empty to use the size preset's default.")
@@ -1869,23 +1869,25 @@ func processWandbCR(cmd *cobra.Command, f wandbCRFlags) error {
 	// the one wsm's template builds. A --cr-file that keys managed infra under a
 	// different instance name won't be touched by these flags; author such CRs
 	// with telemetry/copies set directly.
-	if f.telemetryMode != "" && f.telemetryMode != telemetry.ModeOff {
+	// Unset leaves the operator default (enabled); only an explicit mode overrides it.
+	if cmd.Flags().Changed("observability-mode") {
+		enabled := f.telemetryMode != telemetry.ModeOff
 		// The map value is a struct copy, but ManagedX are pointers, so mutating
 		// through them reaches the pointee — no write-back to the map needed.
 		if m, ok := wandbCR.Spec.MySQL[v2.DefaultInstanceName]; ok && m.ManagedMysql != nil {
-			m.ManagedMysql.Telemetry.Enabled = true
+			m.ManagedMysql.Telemetry.Enabled = enabled
 		}
 		if wandbCR.Spec.Kafka.ManagedKafka != nil {
-			wandbCR.Spec.Kafka.ManagedKafka.Telemetry.Enabled = true
+			wandbCR.Spec.Kafka.ManagedKafka.Telemetry.Enabled = enabled
 		}
 		if c, ok := wandbCR.Spec.ClickHouse[v2.DefaultInstanceName]; ok && c.ManagedClickHouse != nil {
-			c.ManagedClickHouse.Telemetry.Enabled = true
+			c.ManagedClickHouse.Telemetry.Enabled = enabled
 		}
 		if r, ok := wandbCR.Spec.Redis[v2.DefaultInstanceName]; ok && r.ManagedRedis != nil {
-			r.ManagedRedis.Telemetry.Enabled = true
+			r.ManagedRedis.Telemetry.Enabled = enabled
 		}
 		if o, ok := wandbCR.Spec.ObjectStore[v2.DefaultInstanceName]; ok && o.ManagedObjectStore != nil {
-			o.ManagedObjectStore.Telemetry.Enabled = true
+			o.ManagedObjectStore.Telemetry.Enabled = enabled
 		}
 	}
 

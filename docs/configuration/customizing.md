@@ -58,7 +58,7 @@ The `--observability-otel-*` / `--observability-forward-*` flags configure the o
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--observability-mode` | `off` | Telemetry mode for managed MySQL, Redis, Kafka, etc.: `off`, `full` (in-cluster Victoria + Grafana), or `forward` (Victoria stack + external OTLP forwarding) |
+| `--observability-mode` | `off` | Telemetry mode for managed MySQL, Redis, Kafka, etc.: `off`, `full` (in-cluster Victoria + Grafana), or `forward` (Victoria stack + external OTLP forwarding). Per-service telemetry on the CR stays at the operator default (enabled) unless the flag is set; `off` disables it |
 | `--observability-forward-endpoint` | — | OTLP endpoint to forward telemetry to. Required when mode is `forward` |
 | `--observability-otel-secret` | — | OTEL connection secret name (`telemetry.otel.secretName`); chart default `wandb-otel-connection` if unset |
 | `--observability-otel-protocol` | — | OTEL exporter protocol, e.g. `http/protobuf` or `grpc` |

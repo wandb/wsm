@@ -111,7 +111,7 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 | Field | Type | Description |
 |-------|------|-------------|
 | `managedMysql` | object | Configuration for operator-managed MySQL |
-| `managedMysql.telemetry.enabled` | bool | Enable MySQL telemetry |
+| `managedMysql.telemetry.enabled` | bool | Enable MySQL telemetry (default `true`; `--observability-mode off` disables) |
 | `external` | object | (Alternative) External MySQL connection details |
 
 ---
@@ -121,7 +121,7 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 | Field | Type | Description |
 |-------|------|-------------|
 | `managedRedis` | object | Configuration for operator-managed Redis |
-| `managedRedis.telemetry.enabled` | bool | Enable Redis telemetry |
+| `managedRedis.telemetry.enabled` | bool | Enable Redis telemetry (default `true`; `--observability-mode off` disables) |
 | `external` | object | (Alternative) External Redis connection details |
 
 ---
@@ -131,7 +131,7 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 | Field | Type | Description |
 |-------|------|-------------|
 | `managedKafka` | object | Configuration for operator-managed Kafka |
-| `managedKafka.telemetry.enabled` | bool | Enable Kafka telemetry |
+| `managedKafka.telemetry.enabled` | bool | Enable Kafka telemetry (default `true`; `--observability-mode off` disables) |
 | `managedKafka.serviceAccount` | object | ServiceAccount for the Kafka pods — set `annotations` for IRSA / GKE Workload Identity, `serviceAccountName` / `create` to reuse an existing identity. No dedicated flag; use `--cr-file` (dotted annotation keys) or `--cr-set …serviceAccount.serviceAccountName=…` |
 
 ---
@@ -141,7 +141,7 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 | Field | Type | Description |
 |-------|------|-------------|
 | `managedObjectStore` | object | Configuration for operator-managed object storage |
-| `managedObjectStore.telemetry.enabled` | bool | Enable object store telemetry |
+| `managedObjectStore.telemetry.enabled` | bool | Enable object store telemetry (default `true`; `--observability-mode off` disables) |
 | `managedObjectStore.copies` | int | Replica copies for managed object storage (`--objectstore-copies`); operator default when unset |
 | `external` | object | (Alternative) External S3/GCS/Azure Blob connection details |
 
@@ -152,7 +152,7 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 | Field | Type | Description |
 |-------|------|-------------|
 | `managedClickhouse` | object | Configuration for operator-managed ClickHouse |
-| `managedClickhouse.telemetry.enabled` | bool | Enable ClickHouse telemetry |
+| `managedClickhouse.telemetry.enabled` | bool | Enable ClickHouse telemetry (default `true`; `--observability-mode off` disables) |
 | `managedClickhouse.serviceAccount` | object | ServiceAccount for the ClickHouse pods — `annotations` for IRSA / GKE Workload Identity, `serviceAccountName` / `create` to reuse an existing identity. Same authoring path as Kafka (see above) |
 | `external` | object | (Alternative) External ClickHouse connection details |
 

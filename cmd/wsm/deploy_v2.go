@@ -1978,6 +1978,11 @@ func readCRFile(crPath string) (*v2.WeightsAndBiases, error) {
 	if err := sigsyaml.UnmarshalStrict(crData, cr); err != nil {
 		return nil, fmt.Errorf("failed to parse CR YAML from %s: %w", crPath, err)
 	}
+	var raw map[string]interface{}
+	if err := sigsyaml.Unmarshal(crData, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse CR YAML from %s: %w", crPath, err)
+	}
+	telemetry.DefaultOmittedEnabled(cr, raw)
 	return cr, nil
 }
 

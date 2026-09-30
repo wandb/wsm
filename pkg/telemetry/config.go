@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	v2 "github.com/wandb/operator/api/v2"
 	"github.com/wandb/wsm/pkg/kubectl"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -389,4 +390,36 @@ func ParseValues(values map[string]interface{}) Config {
 		}
 	}
 	return t
+}
+
+// DefaultOmittedEnabled enables telemetry (the CRD default) on managed blocks
+// that raw declares without telemetry.enabled; the typed round-trip would send false.
+func DefaultOmittedEnabled(cr *v2.WeightsAndBiases, raw map[string]interface{}) {
+	omitted := func(fields ...string) bool {
+		_, set, _ := unstructured.NestedFieldNoCopy(raw, append(fields, "telemetry", "enabled")...)
+		return !set
+	}
+	for name, s := range cr.Spec.MySQL {
+		if s.ManagedMysql != nil && omitted("spec", "mysql", name, "managedMysql") {
+			s.ManagedMysql.Telemetry.Enabled = true
+		}
+	}
+	for name, s := range cr.Spec.Redis {
+		if s.ManagedRedis != nil && omitted("spec", "redis", name, "managedRedis") {
+			s.ManagedRedis.Telemetry.Enabled = true
+		}
+	}
+	for name, s := range cr.Spec.ObjectStore {
+		if s.ManagedObjectStore != nil && omitted("spec", "objectStore", name, "managedObjectStore") {
+			s.ManagedObjectStore.Telemetry.Enabled = true
+		}
+	}
+	for name, s := range cr.Spec.ClickHouse {
+		if s.ManagedClickHouse != nil && omitted("spec", "clickhouse", name, "managedClickhouse") {
+			s.ManagedClickHouse.Telemetry.Enabled = true
+		}
+	}
+	if cr.Spec.Kafka.ManagedKafka != nil && omitted("spec", "kafka", "managedKafka") {
+		cr.Spec.Kafka.ManagedKafka.Telemetry.Enabled = true
+	}
 }

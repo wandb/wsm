@@ -6,8 +6,50 @@ import (
 	"testing"
 
 	wmanifest "github.com/wandb/operator/pkg/wandb/manifest"
+	yamlv3 "gopkg.in/yaml.v3"
 	"sigs.k8s.io/yaml"
 )
+
+func TestRewriteManifestPreservesContractVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		metadata string
+	}{
+		{"legacy", ""},
+		{"explicit", "manifestVersion: 1\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := []byte(tc.metadata + testManifest)
+			refs, err := collectManifestImages(map[string][]byte{"manifest.yaml": input}, mustExclude(t, nil, nil, false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			mirrored := map[string]string{}
+			for _, ref := range refs {
+				mirrored[ref.GetImage("")] = rewriteRepoForMirror("mirror.test", upstreamRepo(ref))
+			}
+			out, unknown, err := rewriteManifestImages(input, mirrored)
+			if err != nil || len(unknown) != 0 {
+				t.Fatalf("rewrite: err=%v unknown=%v", err, unknown)
+			}
+			if !strings.Contains(string(out), "mirror.test/") {
+				t.Fatal("test did not exercise rewritten image references")
+			}
+			var document yamlv3.Node
+			if err := yamlv3.Unmarshal(out, &document); err != nil {
+				t.Fatal(err)
+			}
+			version := mappingValue(document.Content[0], "manifestVersion")
+			if tc.metadata == "" {
+				if version != nil {
+					t.Fatal("mirroring added a version to an unversioned artifact")
+				}
+			} else if version == nil || version.Tag != "!!int" || version.Value != "1" {
+				t.Fatalf("mirroring changed the contract declaration: %#v", version)
+			}
+		})
+	}
+}
 
 // A manifest fixture exercising both image-ref encodings: legacy embedded
 // (applications/migrations, registry baked into repository) and the newer

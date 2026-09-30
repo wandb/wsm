@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	appsv1 "github.com/wandb/operator/api/v1"
 	"github.com/wandb/wsm/pkg/operator"
 	sigsyaml "sigs.k8s.io/yaml"
 )
@@ -17,8 +18,8 @@ func init() {
 }
 
 var roundTripAnnotations = []string{
-	"legacy.operator.wandb.com/v1-chart",
-	"legacy.operator.wandb.com/v1-values",
+	appsv1.V1ChartAnnotation,
+	appsv1.V1ValuesAnnotation,
 }
 
 // ConvertV2Cmd returns the convert-v2 command: a read-only preview of the v1→v2

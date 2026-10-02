@@ -326,7 +326,7 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *Mirror
 		}
 	}
 
-	exists, err := gatewayApiCRDsExist(ctx)
+	exists, err := gatewayApiCRDsExist()
 	if err != nil {
 		return fmt.Errorf("failed to check if gateway api crds exist: %w", err)
 	}
@@ -528,7 +528,7 @@ func DeleteNginxGateway(ctx context.Context) (removed bool, err error) {
 }
 
 // gatewayApiCRDsExist checks if Gateway API CRDs exist in the cluster
-func gatewayApiCRDsExist(_ context.Context) (bool, error) {
+func gatewayApiCRDsExist() (bool, error) {
 	_, cs, err := kubectl.GetClientset()
 	if err != nil {
 		return false, err

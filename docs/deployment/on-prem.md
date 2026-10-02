@@ -170,8 +170,8 @@ they do:
 > `registry:2` — which create a repository implicitly on first push — **ECR rejects a push to a
 > repository that doesn't exist** (`name unknown: The repository ... does not exist`).
 > `wsm registry mirror` fans out to dozens of distinct repo paths, so run `wsm registry create-repos`
-> once (same `--operator-chart-version` / `--wandb-version` / `--skip-managed-images` flags as
-> `mirror`) **before** mirroring:
+> once (same `--operator-chart-version` / `--wandb-version` / `--exclude-operators` /
+> `--exclude-managed` / `--skip-managed-images` flags as `mirror`) **before** mirroring:
 >
 > ```bash
 > REG=<acct>.dkr.ecr.<region>.amazonaws.com/<optional/prefix>

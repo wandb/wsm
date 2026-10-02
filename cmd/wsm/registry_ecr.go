@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/spf13/cobra"
+
+	"github.com/wandb/wsm/pkg/operator"
 )
 
 var ecrHostRe = regexp.MustCompile(`^[0-9]+\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com$`)
@@ -20,6 +22,8 @@ func registryCreateReposCmd() *cobra.Command {
 		operatorChartVersion string
 		wandbVersion         string
 		skipManaged          bool
+		excludeOperators     []string
+		excludeManaged       []string
 		region               string
 		dryRun               bool
 	)
@@ -33,8 +37,9 @@ repository implicitly, so this command is needed only for ECR.
 
 create-repos computes the exact destination set 'wsm registry mirror' would push
 to — using the SAME --to / --operator-chart-version / --wandb-version /
---skip-managed-images flags — and creates each repository in ECR. Run it once,
-before mirroring. It is idempotent: repositories that already exist are skipped.
+--exclude-operators / --exclude-managed / --skip-managed-images flags — and
+creates each repository in ECR. Run it once, before mirroring. It is
+idempotent: repositories that already exist are skipped.
 
 Credentials come from your AWS config (env / ~/.aws / IRSA) via the 'aws' CLI —
 the same credentials you use for 'aws ecr get-login-password'. The caller needs
@@ -63,7 +68,12 @@ IAM permission ecr:CreateRepository.`,
 				return fmt.Errorf("--region %q does not match ECR host region %q", region, m[1])
 			}
 
-			repos, err := collectMirrorRepos(cmd.Context(), targetRegistry, operatorChartVersion, wandbVersion, skipManaged)
+			exclusions, err := parseManagedExclusions(excludeOperators, excludeManaged, skipManaged)
+			if err != nil {
+				return err
+			}
+
+			repos, err := collectMirrorRepos(cmd.Context(), targetRegistry, operatorChartVersion, wandbVersion, exclusions)
 			if err != nil {
 				return err
 			}
@@ -107,11 +117,13 @@ IAM permission ecr:CreateRepository.`,
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version; when set, also create the server-manifest repo and every application-image repo the manifest references")
 	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Skip the managed-service operator + data-plane repos; match the flag you mirror with")
 	cmd.Flags().StringVar(&region, "region", "", "AWS region for create-repository (default: parsed from the ECR host)")
+	cmd.Flags().StringSliceVar(&excludeOperators, "exclude-operators", nil, "Managed types whose operator repos to skip; match the flag you mirror with")
+	cmd.Flags().StringSliceVar(&excludeManaged, "exclude-managed", nil, "Managed types whose operator AND data-plane repos to skip; match the flag you mirror with")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print the repositories that would be created, without creating them")
 	return cmd
 }
 
-func collectMirrorRepos(ctx context.Context, target, operatorChartVersion, wandbVersion string, skipManaged bool) ([]string, error) {
+func collectMirrorRepos(ctx context.Context, target, operatorChartVersion, wandbVersion string, exclusions managedExclusions) ([]string, error) {
 	seen := map[string]bool{}
 	var repos []string
 	add := func(ref string) {
@@ -123,13 +135,19 @@ func collectMirrorRepos(ctx context.Context, target, operatorChartVersion, wandb
 		repos = append(repos, repo)
 	}
 
-	for _, it := range buildMirrorPlan(target, operatorChartVersion) {
+	mirrorPlan, err := buildMirrorPlan(ctx, target, operatorChartVersion, false, false)
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range mirrorPlan {
 		add(it.dst)
 	}
-	if !skipManaged {
-		for _, it := range buildManagedImagePlan(target) {
-			add(it.dst)
-		}
+	managed, err := buildManagedImagePlan(ctx, target, operator.OperatorChartRepo, operatorChartVersion, exclusions, false)
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range managed {
+		add(it.dst)
 	}
 
 	if wandbVersion != "" {
@@ -137,7 +155,7 @@ func collectMirrorRepos(ctx context.Context, target, operatorChartVersion, wandb
 		if err != nil {
 			return nil, fmt.Errorf("pull server manifest %s to enumerate application images: %w", wandbVersion, err)
 		}
-		refs, err := collectManifestImages(files)
+		refs, err := collectManifestImages(files, exclusions)
 		if err != nil {
 			return nil, fmt.Errorf("enumerate manifest images: %w", err)
 		}

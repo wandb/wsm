@@ -127,9 +127,14 @@ func mirrorServerManifest(
 		src := ref.GetImage("")
 		dst := mirrorImageRef(target, ref)
 		fmt.Printf("→ %s\n  → %s ... ", src, dst)
-		if err := copyImage(ctx, src, dst, insecure, srcCtx, dstCtx, policyCtx); err != nil {
+		skipped, err := copyImage(ctx, src, dst, insecure, srcCtx, dstCtx, policyCtx)
+		if err != nil {
 			fmt.Printf("✗ %v\n", err)
 			failedImages = append(failedImages, src)
+			continue
+		}
+		if skipped {
+			fmt.Println("• already mirrored")
 			continue
 		}
 		fmt.Println("✓")
@@ -171,15 +176,18 @@ func copyImage(
 	dstInsecure bool,
 	srcCtx, dstCtx *types.SystemContext,
 	policyCtx *signature.PolicyContext,
-) error {
+) (bool, error) {
+	if alreadyMirrored(ctx, src, dst, dstInsecure) {
+		return true, nil
+	}
 	err := mirrorOne(ctx, src, dst, srcCtx, dstCtx, policyCtx)
 	if err == nil {
-		return nil
+		return false, nil
 	}
 	if cerr := craneCopyImage(ctx, src, dst, dstInsecure); cerr != nil {
-		return fmt.Errorf("%w (crane fallback also failed: %v)", err, cerr)
+		return false, fmt.Errorf("%w (crane fallback also failed: %v)", err, cerr)
 	}
-	return nil
+	return false, nil
 }
 
 // craneCopyImage copies an image (or multi-arch index) from src to dst using
@@ -755,4 +763,35 @@ func sortedKeys(m map[string][]byte) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func alreadyMirrored(ctx context.Context, src, dst string, dstInsecure bool) bool {
+	srcRef, err := name.ParseReference(src)
+	if err != nil {
+		return false
+	}
+	var dstNameOpts []name.Option
+	if dstInsecure {
+		dstNameOpts = append(dstNameOpts, name.Insecure)
+	}
+	dstRef, err := name.ParseReference(dst, dstNameOpts...)
+	if err != nil {
+		return false
+	}
+
+	srcOpts := []v1remote.Option{v1remote.WithAuthFromKeychain(authn.DefaultKeychain), v1remote.WithContext(ctx)}
+	dstOpts := []v1remote.Option{v1remote.WithAuthFromKeychain(authn.DefaultKeychain), v1remote.WithContext(ctx)}
+	if dstInsecure {
+		dstOpts = append(dstOpts, v1remote.WithTransport(insecureHTTPTransport()))
+	}
+
+	srcDesc, err := v1remote.Head(srcRef, srcOpts...)
+	if err != nil {
+		return false
+	}
+	dstDesc, err := v1remote.Head(dstRef, dstOpts...)
+	if err != nil {
+		return false
+	}
+	return srcDesc.Digest == dstDesc.Digest
 }

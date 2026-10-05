@@ -774,9 +774,6 @@ func alreadyMirrored(ctx context.Context, src, dst string, dstInsecure bool) boo
 	if dstInsecure {
 		dstNameOpts = append(dstNameOpts, name.Insecure)
 	}
-	if dstInsecure {
-		dstNameOpts = append(dstNameOpts, name.Insecure)
-	}
 	dstRef, err := name.ParseReference(dst, dstNameOpts...)
 	if err != nil {
 		return false

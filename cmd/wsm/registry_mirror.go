@@ -98,16 +98,22 @@ external databases).`,
 				dstCtx.OCIInsecureSkipTLSVerify = true
 			}
 
-			var pushed, failed int
+			var pushed, failed, skips int
 			for _, item := range items {
 				if dryRun {
 					fmt.Printf("  %s\n  → %s\n\n", item.src, item.dst)
 					continue
 				}
 				fmt.Printf("→ %s\n  → %s ... ", item.src, item.dst)
-				if err := copyImage(ctx, item.src, item.dst, insecure, srcCtx, dstCtx, policyCtx); err != nil {
+				skipped, err := copyImage(ctx, item.src, item.dst, insecure, srcCtx, dstCtx, policyCtx)
+				if err != nil {
 					fmt.Printf("✗ %v\n", err)
 					failed++
+					continue
+				}
+				if skipped {
+					fmt.Println("• already mirrored")
+					skips++
 					continue
 				}
 				fmt.Println("✓")
@@ -115,7 +121,7 @@ external databases).`,
 			}
 
 			if !dryRun {
-				fmt.Printf("\n%d total — %d pushed, %d failed\n", len(items), pushed, failed)
+				fmt.Printf("\n %d total — %d pushed, %d skipped, %d failed\n", len(items), pushed, skips, failed)
 				if failed > 0 {
 					return fmt.Errorf("%d artifact(s) failed to mirror", failed)
 				}

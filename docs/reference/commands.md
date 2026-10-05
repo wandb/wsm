@@ -496,6 +496,8 @@ Scope: the operator OCI chart + binary image, and the cert-manager, nginx-gatewa
 
 The two exclusion flags cover independent cases: `--exclude-operators <type>` mirrors the managed data-plane service but not W&B's operator for it (you bring your own); `--exclude-managed <type>` skips the type completely (you bring an external service).
 
+Re-runs are idempotent: before copying, `mirror` compares the upstream manifest digest with the one already at the destination and skips the artifact when they match (reported as `• already mirrored` and counted under `skipped` in the summary). Only missing or changed artifacts are pushed, so a run that failed partway can simply be repeated. If either digest can't be read, the artifact is copied. The rewritten server manifest is always re-pushed, since its refs point at your mirror and it never matches upstream.
+
 Auth is read from your Docker config (`~/.docker/config.json`). Run `docker login <mirror-host>` before this command for any registry that requires credentials.
 
 ### `wsm registry check`

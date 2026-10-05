@@ -523,6 +523,31 @@ wsm registry check --registry <host> --wandb-version <version> [flags]
 | `--insecure` | `false` | Skip TLS verification when contacting the registry. |
 | `--fail-on-missing` | `false` | Exit non-zero if any artifact is missing. |
 
+### `wsm registry create-repos`
+
+Pre-creates, in **Amazon ECR**, every repository `wsm registry mirror` will push to. ECR — unlike Harbor, Artifactory, GCR, or a local `registry:2` — does not create a repository on first push, so run this once before mirroring. It computes the same destination set as `mirror` and is idempotent: repositories that already exist are skipped.
+
+Pass the **same** `--operator-chart-version` / `--wandb-version` / `--exclude-operators` / `--exclude-managed` / `--skip-managed-images` you will mirror with, or some pushes will target repositories that were never created.
+
+```bash
+wsm registry create-repos --to <acct>.dkr.ecr.<region>.amazonaws.com[/<prefix>] [flags]
+```
+
+Shells out to the `aws` CLI using your AWS config (env / `~/.aws` / IRSA); the caller needs IAM `ecr:CreateRepository`.
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--to` | — | **Required.** ECR registry host plus optional path prefix. Non-ECR hosts are rejected. |
+| `--operator-chart-version` | `2.0.0-beta.1` | Operator chart version (must match `wsm registry mirror`). |
+| `--wandb-version` | — | W&B server version; when set, also create the server-manifest repo and every application-image repo the manifest references. |
+| `--exclude-operators` | — | Managed types whose operator repos to skip (match `--exclude-operators` you mirror with). |
+| `--exclude-managed` | — | Managed types whose operator **and** data-plane repos to skip (match `--exclude-managed` you mirror with). |
+| `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store` (match the flag you mirror with). |
+| `--region` | parsed from `--to` | AWS region for `create-repository`; must match the region in the ECR host. |
+| `--dry-run` | `false` | Print the repositories that would be created, without creating them. |
+
 ### `wsm registry values`
 
 Emits a `values.yaml` fragment that overrides each image reference to use your mirror instead of the upstream source. Used by the legacy v1 install flow; not required for the v2 `--mirror-registry` path.

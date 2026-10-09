@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/wandb/wsm/pkg/observabaility/supportbundle"
 	"github.com/wandb/wsm/pkg/operator"
 	"go.podman.io/image/v5/copy"
 	"go.podman.io/image/v5/docker"
@@ -200,6 +201,7 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 			dst: target + "/prometheus-community/charts/kube-state-metrics:" + ksmChartVersion,
 		},
 	}
+	plan = append(plan, supportBundleMirrorItems(target)...)
 
 	// pick selects the upstream chart ref (mirror) or its pushed copy under target
 	// (check); rendered image refs are upstream either way, so they translate() to
@@ -230,6 +232,16 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 	}
 
 	return plan, nil
+}
+
+// supportBundleMirrorItems are the images `wsm support-bundle create` runs:
+// Lumen (pinned) and the helper image its victoriaStack collector starts.
+func supportBundleMirrorItems(target string) []mirrorItem {
+	lumen := supportbundle.LumenRepository + ":" + supportbundle.DefaultLumenVersion
+	return []mirrorItem{
+		{src: wandbPublicPrefix + lumen, dst: target + "/" + lumen},
+		{src: supportbundle.VictoriaHelperImage, dst: translate(supportbundle.VictoriaHelperImage, target)},
+	}
 }
 
 // buildManagedImagePlan returns the managed-service operator + moco-sidecar images,

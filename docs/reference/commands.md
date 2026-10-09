@@ -668,6 +668,58 @@ Each subcommand takes `--service` (override the resolved Service name), `--local
 
 ---
 
+### `wsm support-bundle` (preview)
+
+Run Lumen support-bundle collection as a Kubernetes Job and manage the resulting bundles. Alias: `wsm supportbundle`. See [Support Bundles](../operations/support-bundles.md) for behaviour, retention and the permission model.
+
+#### Persistent flags (all subcommands)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | — | Name of the kubeconfig context to use (defaults to the current context) |
+| `--wandb-name` | discovered | Name of the WeightsAndBiases resource; only needed when several match |
+| `--wandb-namespace` | discovered | Namespace of the WeightsAndBiases resource |
+
+#### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `create` | Start a collection Job; prints the bundle ID immediately |
+| `list` | Bundles for the installation, newest first (ID, created, window, status, size, expiry) |
+| `status <id>` | Progress, startup problems, result, size, checksum, expiry; `--watch` reconnects |
+| `retrieve <id>` | Resumable download (`-o/--output`); `--delete-after-download` deletes the bucket copy after size + SHA-256 verification |
+| `cancel <id>` | Stop a running collection; the record is kept as `Cancelled` |
+| `delete <id>` | Delete a finished bundle's bucket object and record. For a running bundle it asks to cancel first (`--yes` skips the prompt; required without a terminal) |
+
+#### `create` flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--wait` | `false` | Watch until done; Ctrl-C stops watching, the Job keeps running |
+| `--since` | `1h` | Log/telemetry window |
+| `--timeout` | `30m` | Job deadline (`activeDeadlineSeconds`) |
+| `--retention` | `24h` | Bundle expiry; expired bundles are pruned by later `create` runs |
+| `--skip-telemetry` | `false` | Skip Victoria metrics/logs/traces |
+| `--lumen-version` | pinned | Lumen image tag (`latest` rejected) |
+| `--image-registry` | CR `spec.global.imageRegistry` | Registry to pull Lumen from |
+| `--image-pull-secret` | — | Extra pull Secret (repeatable) |
+| `--service-account` | `wsm-lumen` (managed) | Existing, pre-authorized ServiceAccount to run as |
+
+#### Examples
+
+```bash
+# Collect the last hour and watch
+wsm support-bundle create --context kind-wsm --wait
+
+# Reconnect after Ctrl-C or a dropped connection
+wsm support-bundle status sb-7f92ac --context kind-wsm --watch
+
+# Download, verify, and remove the bucket copy
+wsm support-bundle retrieve sb-7f92ac --context kind-wsm -o ./sb-7f92ac.tgz --delete-after-download
+```
+
+---
+
 ## Utility Commands
 
 ### `wsm version`

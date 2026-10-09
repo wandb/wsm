@@ -15,7 +15,7 @@ import (
 	v2 "github.com/wandb/operator/api/v2"
 	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/license"
-	"github.com/wandb/wsm/pkg/telemetry"
+	"github.com/wandb/wsm/pkg/observabaility/telemetry"
 	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/loader"

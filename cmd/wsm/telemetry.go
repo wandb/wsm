@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/kubectl"
+	"github.com/wandb/wsm/pkg/observability/telemetry"
 	"github.com/wandb/wsm/pkg/operator"
-	"github.com/wandb/wsm/pkg/telemetry"
 )
 
 func init() {

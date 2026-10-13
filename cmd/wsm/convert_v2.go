@@ -31,6 +31,7 @@ func ConvertV2Cmd() *cobra.Command {
 		wandbNamespace string
 		outputPath     string
 		stripRoundTrip bool
+		skipPreflight  bool
 	)
 
 	cmd := &cobra.Command{
@@ -70,7 +71,17 @@ what the in-cluster webhook would emit after upgrade.`,
 				return fmt.Errorf("failed to marshal v2 CR to YAML: %w", err)
 			}
 
-			return writeSplit(outputPath, wandbName, v1YAML, v2YAML)
+			if err := writeSplit(outputPath, wandbName, v1YAML, v2YAML); err != nil {
+				return err
+			}
+			if skipPreflight {
+				return nil
+			}
+
+			fmt.Println("\nRunning preflight checks against the converted v2 CR...")
+			runs := runPreflights(ctx, v2CR, "")
+			printPreflightResults(runs)
+			return preflightError(runs)
 		},
 	}
 
@@ -78,7 +89,7 @@ what the in-cluster webhook would emit after upgrade.`,
 	cmd.Flags().StringVar(&wandbNamespace, "wandb-namespace", "default", "Namespace of the W&B CR to convert")
 	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Output path: the diff file (unified) or the base path for the two files (split)")
 	cmd.Flags().BoolVar(&stripRoundTrip, "strip-roundtrip", false, "Drop the legacy v1-chart/v1-values round-trip annotations that bloat the output")
-
+	cmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "Don't run prefligh checks against the converted v2 CR")
 	return cmd
 }
 

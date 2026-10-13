@@ -683,6 +683,18 @@ The values are stamped in at build time (GoReleaser on tagged releases; `make bu
 
 ---
 
+### `wsm preflight`
+
+Run validation checks against values provided in CR file. Checks for each piece of infra are in the Operator preflight package
+```bash
+wsm preflight
+```
+
+Use:   
+```
+wsm preflight <cr-file>"
+```
+
 ## Flag Precedence
 
 When multiple configuration sources specify the same value, the resolution order is:

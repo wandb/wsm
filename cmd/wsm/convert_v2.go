@@ -89,7 +89,7 @@ what the in-cluster webhook would emit after upgrade.`,
 	cmd.Flags().StringVar(&wandbNamespace, "wandb-namespace", "default", "Namespace of the W&B CR to convert")
 	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Output path: the diff file (unified) or the base path for the two files (split)")
 	cmd.Flags().BoolVar(&stripRoundTrip, "strip-roundtrip", false, "Drop the legacy v1-chart/v1-values round-trip annotations that bloat the output")
-	cmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "Don't run prefligh checks against the converted v2 CR")
+	cmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "Don't run preflight checks against the converted v2 CR")
 	return cmd
 }
 

@@ -33,6 +33,18 @@ func PreflightCmd() *cobra.Command {
 		Use:   "preflight <cr-file>",
 		Short: "Run the operator's preflight checks against a v2 WeightsAndBiases CR file",
 		Args:  cobra.ExactArgs(1),
+		Long: `Run the operator's preflight checks client-side against a v2 WeightsAndBiases CR file.
+		
+		  Checks are selected from the operator's preflight registry: each registered CR field
+		  present in the file triggers its check. Currently only spec.mysql.<instance>.externalMysql
+		  is checked; other external services report "No preflight checks apply".
+		
+		  Checks run from the machine running wsm, not from inside the cluster. An endpoint
+		  reachable only from the cluster network (e.g. *.svc, private VPC hosts) may FAIL here
+		  even though W&B pods can reach it.
+		
+		  Exits non-zero if any check fails or is inconclusive (unknown). Skip checks with the
+		  skipPreflights annotation (comma-separated check names).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if kubeContext != "" {
 				kubectl.SetContext(kubeContext)
@@ -188,14 +200,27 @@ func printPreflightResults(runs []preflightRun) {
 }
 
 func preflightError(runs []preflightRun) error {
-	var failed []string
+	var failed, inconclusive []string
 	for _, r := range runs {
-		if r.Result.Outcome == preflight.OutcomeFail {
-			failed = append(failed, r.Result.Check+" ("+r.FieldPath+")")
+		label := r.Result.Check + " (" + r.FieldPath + ")"
+		switch r.Result.Outcome {
+		case preflight.OutcomeFail:
+			failed = append(failed, label)
+		case preflight.OutcomeUnknown:
+			inconclusive = append(inconclusive, label)
 		}
 	}
+	var msgs []string
 	if len(failed) > 0 {
-		return fmt.Errorf("%d preflight check(s) failed: %s", len(failed), strings.Join(failed, ", "))
+		msgs = append(msgs, fmt.Sprintf("%d failed: %s", len(failed), strings.Join(failed,
+			", ")))
+	}
+	if len(inconclusive) > 0 {
+		msgs = append(msgs, fmt.Sprintf("%d inconclusive: %s", len(inconclusive),
+			strings.Join(inconclusive, ", ")))
+	}
+	if len(msgs) > 0 {
+		return fmt.Errorf("preflight checks did not pass: %s", strings.Join(msgs, "; "))
 	}
 	return nil
 }

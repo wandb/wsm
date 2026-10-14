@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	appsv1 "github.com/wandb/operator/api/v1"
 	"github.com/wandb/wsm/pkg/operator"
+	"github.com/wandb/wsm/pkg/preflight"
 	sigsyaml "sigs.k8s.io/yaml"
 )
 
@@ -79,9 +80,9 @@ what the in-cluster webhook would emit after upgrade.`,
 			}
 
 			fmt.Println("\nRunning preflight checks against the converted v2 CR...")
-			runs := runPreflights(ctx, v2CR, "")
+			runs := preflight.RunChecks(ctx, v2CR, "", nil)
 			printPreflightResults(runs)
-			return preflightError(runs)
+			return preflight.Err(runs)
 		},
 	}
 

@@ -18,7 +18,7 @@ New deployments should use **v2**.
 
 ## Install
 
-Requires **Go 1.27.1+**. Build from source:
+Requires **Go 1.27.2+**. Build from source:
 
 ```bash
 git clone https://github.com/wandb/wsm
@@ -74,7 +74,7 @@ wsm deploy-v2 wandb deploy|destroy|get-ca-cert --context <ctx> [flags]
 
 **`operator` — key flags:**
 - `--operator-chart-version string`: operator chart version, which selects the
-  operator image tag (default `2.0.0-beta.7`).
+  operator image tag (default `2.0.0-beta.8`).
 - `--operator-namespace string`: operator namespace (default `wandb-operators`).
 - `--install-cert-manager string`: `auto` (detect & reuse), `true` (force
   install), `false` (skip) (default `auto`).
@@ -134,7 +134,7 @@ wsm registry mirror|check|values|push [flags]
 
 - `mirror`: pull every chart/image `deploy-v2 operator` needs and re-push to your
   mirror. `--to <host>` (required), `--insecure`, `--dry-run`,
-  `--operator-chart-version` (default `2.0.0-beta.7`).
+  `--operator-chart-version` (default `2.0.0-beta.8`).
 - `check`: verify all required images exist in your mirror. `--registry <host>`
   (required), `--fail-on-missing`, `--insecure`.
 - `values`: emit a `values.yaml` fragment that re-points images at your registry.
@@ -206,13 +206,13 @@ walkthrough (including a laptop test against a local `registry:2`) is in
 [`docs/deployment/on-prem.md`](./docs/deployment/on-prem.md). TL;DR:
 ```bash
 # 1. Mirror artifacts upstream -> your registry
-wsm registry mirror --to harbor.corp.internal --operator-chart-version 2.0.0-beta.7
+wsm registry mirror --to harbor.corp.internal --operator-chart-version 2.0.0-beta.8
 
 # 2. Install pulling only from the mirror
 wsm deploy-v2 operator \
   --context <cluster> \
   --mirror-registry harbor.corp.internal \
-  --operator-chart-version 2.0.0-beta.7
+  --operator-chart-version 2.0.0-beta.8
 ```
 
 **Air-gapped bundle prep (v1, legacy):**

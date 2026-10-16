@@ -616,6 +616,7 @@ func applyOpenShiftValues(releaseValues map[string]interface{}) {
 	}})
 	mergeValues(releaseValues, "moco", map[string]interface{}{"extraArgs": []interface{}{"--disable-default-security-context"}})
 	mergeValues(releaseValues, "grafana-operator", map[string]interface{}{"isOpenShift": true})
+	mergeValues(releaseValues, "telemetry", map[string]any{"logAgent": map[string]interface{}{"enabled": false}})
 }
 
 // OpenShiftConfig reports how OpenShift mode is configured on the operator release.

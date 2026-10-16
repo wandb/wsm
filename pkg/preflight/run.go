@@ -12,6 +12,7 @@ import (
 	oppreflight "github.com/wandb/operator/pkg/preflight"
 	"github.com/wandb/wsm/pkg/kubectl"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/kubernetes"
 	sigsyaml "sigs.k8s.io/yaml"
 )
 
@@ -75,7 +76,14 @@ func RunChecks(ctx context.Context, cr *unstructured.Unstructured, resolve oppre
 // Checks never read Secrets themselves; they only call the resolver they're
 // handed, so new checks reuse this unchanged.
 func SecretResolver(namespace string) oppreflight.ValueResolver {
-	secrets := kubectl.NewSecretReader(namespace)
+	return resolverFor(namespace, kubectl.NewSecretReader(namespace))
+}
+
+func SecretResolverWithClient(namespace string, cs kubernetes.Interface) oppreflight.ValueResolver {
+	return resolverFor(namespace, kubectl.NewSecretReaderWithClient(namespace, cs))
+}
+
+func resolverFor(namespace string, secrets *kubectl.SecretReader) oppreflight.ValueResolver {
 	return func(ctx context.Context, v v2.ValueOrSecret) (string, error) {
 		if v.Value != "" {
 			return v.Value, nil

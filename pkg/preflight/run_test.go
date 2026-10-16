@@ -77,7 +77,7 @@ func TestRunChecksSkipAnnotation(t *testing.T) {
 		t.Fatal("resolver called for a skipped check")
 		return "", nil
 	}
-	runs := RunChecks(context.Background(), cr, "", resolve)
+	runs := RunChecks(context.Background(), cr, resolve)
 	if len(runs) != 1 {
 		t.Fatalf("got %d runs, want 1: %+v", len(runs), runs)
 	}

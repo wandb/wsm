@@ -38,7 +38,6 @@ import (
 	v2 "github.com/wandb/operator/api/v2"
 	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/operator"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // dialTimeout bounds the connect attempt. The MySQL host is an in-cluster
@@ -119,14 +118,16 @@ func Connect(ctx context.Context, namespace, crName string) (*sql.DB, error) {
 	return db, nil
 }
 
-// secretResolver returns a function that reads a ValueOrSecret, caching the
-// Secrets it fetches — every connection field usually points at the same one.
+// secretResolver returns a function that reads a ValueOrSecret from the
+// instance's published connection, where every field is expected to be set.
+// Optional refs (the TLS fields the operator publishes for external MySQL)
+// resolve to "" when their key is absent, which resolveTLS reads as TLS off.
 func secretResolver(ctx context.Context, namespace string) (func(string, v2.ValueOrSecret) (string, error), error) {
 	_, clientset, err := kubectl.GetClientset()
 	if err != nil {
 		return nil, fmt.Errorf("not connected to cluster: %w", err)
 	}
-	cache := map[string]map[string][]byte{}
+	secrets := kubectl.NewSecretReaderWithClient(namespace, clientset)
 
 	return func(field string, v v2.ValueOrSecret) (string, error) {
 		if v.Value != "" {
@@ -136,20 +137,11 @@ func secretResolver(ctx context.Context, namespace string) (func(string, v2.Valu
 		if ref == nil {
 			return "", fmt.Errorf("MySQL connection field %q is unset on the instance status", field)
 		}
-		data, ok := cache[ref.Name]
-		if !ok {
-			secret, err := clientset.CoreV1().Secrets(namespace).Get(ctx, ref.Name, metav1.GetOptions{})
-			if err != nil {
-				return "", fmt.Errorf("read secret %s/%s for MySQL %s: %w", namespace, ref.Name, field, err)
-			}
-			data = secret.Data
-			cache[ref.Name] = data
+		value, err := secrets.Get(ctx, *ref)
+		if err != nil {
+			return "", fmt.Errorf("MySQL %s: %w", field, err)
 		}
-		value, ok := data[ref.Key]
-		if !ok {
-			return "", fmt.Errorf("secret %s/%s has no key %q (needed for MySQL %s)", namespace, ref.Name, ref.Key, field)
-		}
-		return string(value), nil
+		return value, nil
 	}, nil
 }
 

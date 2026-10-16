@@ -52,14 +52,19 @@ func PreflightCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("%s: %w", args[0], err)
 			}
-			runs := preflight.RunChecks(cmd.Context(), cr, namespace, nil)
+			// Mirrors deploy-v2, which places the CR in --wandb-namespace regardless of
+			// the file's metadata.namespace, so Secrets resolve where they will live.
+			if namespace != "" {
+				cr.SetNamespace(namespace)
+			}
+			runs := preflight.RunChecks(cmd.Context(), cr, nil)
 			printPreflightResults(runs)
 			return preflight.Err(runs)
 		},
 	}
 
 	cmd.Flags().StringVar(&kubeContext, "context", "", "Kubeconfig context used to resolve Secret-backed values (valueFrom.secretKeyRef)")
-	cmd.Flags().StringVar(&namespace, "wandb-namespace", "", "Namespace holding referenced Secrets (default: the CR's metadata.namespace)")
+	cmd.Flags().StringVar(&namespace, "wandb-namespace", "", "Namespace the CR will be deployed to; overrides metadata.namespace and is where referenced Secrets are read (default: the CR's metadata.namespace)")
 
 	return cmd
 }

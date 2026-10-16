@@ -11,7 +11,6 @@ import (
 	v2 "github.com/wandb/operator/api/v2"
 	oppreflight "github.com/wandb/operator/pkg/preflight"
 	"github.com/wandb/wsm/pkg/kubectl"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	sigsyaml "sigs.k8s.io/yaml"
 )
@@ -37,14 +36,11 @@ func ReadCR(data []byte) (*unstructured.Unstructured, error) {
 }
 
 // RunChecks runs every registered check whose CRField is present in cr, so new
-// upstream checks land on `go get`. An empty namespace defaults to the CR's
-// metadata.namespace; a nil resolve reads Secrets from it via wsm's kubectl client.
-func RunChecks(ctx context.Context, cr *unstructured.Unstructured, namespace string, resolve oppreflight.ValueResolver) []CheckRun {
-	if namespace == "" {
-		namespace = cr.GetNamespace()
-	}
+// upstream checks land on `go get`. A nil resolve reads Secrets from the CR's
+// metadata.namespace via wsm's kubectl client.
+func RunChecks(ctx context.Context, cr *unstructured.Unstructured, resolve oppreflight.ValueResolver) []CheckRun {
 	if resolve == nil {
-		resolve = SecretResolver(namespace)
+		resolve = SecretResolver(cr.GetNamespace())
 	}
 	skip := oppreflight.ParseSkipList(cr.GetAnnotations()[oppreflight.SkipPreflightsAnnotation])
 
@@ -74,10 +70,12 @@ func RunChecks(ctx context.Context, cr *unstructured.Unstructured, namespace str
 }
 
 // SecretResolver mirrors the operator's external.ResolveValue (internal, not
-// importable): a literal wins, otherwise the Secret key is read from namespace.
-// Each Secret is fetched once, since a connection's fields usually share one.
+// importable): a literal wins, otherwise the Secret key is read from namespace,
+// and an unset field resolves to "" so the check decides whether it's required.
+// Checks never read Secrets themselves; they only call the resolver they're
+// handed, so new checks reuse this unchanged.
 func SecretResolver(namespace string) oppreflight.ValueResolver {
-	cache := map[string]map[string][]byte{}
+	secrets := kubectl.NewSecretReader(namespace)
 	return func(ctx context.Context, v v2.ValueOrSecret) (string, error) {
 		if v.Value != "" {
 			return v.Value, nil
@@ -89,26 +87,7 @@ func SecretResolver(namespace string) oppreflight.ValueResolver {
 		if namespace == "" {
 			return "", fmt.Errorf("secret %s is referenced but the CR has no metadata.namespace", ref.Name)
 		}
-		data, ok := cache[ref.Name]
-		if !ok {
-			_, cs, err := kubectl.GetClientset()
-			if err != nil {
-				return "", err
-			}
-			// ctx, not context.Background() as in kubectl.GetSecretData, so the
-			// caller's timeout also bounds the Secret read.
-			secret, err := cs.CoreV1().Secrets(namespace).Get(ctx, ref.Name, metav1.GetOptions{})
-			if err != nil {
-				return "", err
-			}
-			data = secret.Data
-			cache[ref.Name] = data
-		}
-		value, ok := data[ref.Key]
-		if !ok {
-			return "", fmt.Errorf("secret %s/%s does not contain key %q", namespace, ref.Name, ref.Key)
-		}
-		return string(value), nil
+		return secrets.Get(ctx, *ref)
 	}
 }
 

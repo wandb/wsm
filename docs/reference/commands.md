@@ -231,7 +231,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--smtp-password` | — | SMTP password as `<secret-name>:<key>` (`spec.wandb.notifications.email.smtp.password`). May complete SMTP settings supplied by `--cr-file` |
 | `--slack-client-id` | — | Slack client ID. Client ID and secret must both be present after merging flags with `--cr-file` (`spec.wandb.notifications.slack.clientId`) |
 | `--slack-client-secret` | — | Slack client secret as `<secret-name>:<key>` (`spec.wandb.notifications.slack.clientSecret`). May complete Slack settings supplied by `--cr-file` |
-| `--cr-set` | — | Set an arbitrary CR field as `<path>=<value>`, e.g. `spec.wandb.version=0.82.2`; repeatable. Values are YAML-typed (`3`→number, `true`→bool, `[a,b]`→list). Overrides the built-in template, `--cr-file`, and the typed flags above (see note below) |
+| `--cr-set` | — | Set an arbitrary CR field as `<path>=<value>`, e.g. `spec.wandb.version=0.85.1`; repeatable. Values are YAML-typed (`3`→number, `true`→bool, `[a,b]`→list). Overrides the built-in template, `--cr-file`, and the typed flags above (see note below) |
 | `--gateway-class` | `nginx` | Gateway class name (selects Gateway API mode; the default). Mutually exclusive with `--ingress-class` |
 | `--ingress-class` | — | Ingress class name (selects Ingress mode). Takes precedence over the default `--gateway-class`; setting both explicitly is an error |
 | `--ingress-name` | — | Override the generated Ingress resource name (defaults to the CR name) |
@@ -314,7 +314,7 @@ wsm deploy-v2 wandb deploy --context prod \
   --smtp-username wandb --smtp-password wandb-notifications:smtp-password
 
 # Air-gapped: pull everything (app + DB images, server manifest) from one mirror
-wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --wandb-version 0.82.2
+wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --wandb-version 0.85.1
 
 # Air-gapped, split registry (replaces the deprecated --image-registry): charts/manifest
 # from the mirror, but the managed data-plane images from a different registry.
@@ -323,7 +323,7 @@ wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --w
 # Without --cr-set, spec.global.imageRegistry stays empty and the data-plane images
 # reach the mirror only via each node's container-runtime registry mirror (see on-prem.md).
 wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 \
-  --cr-set spec.global.imageRegistry=other-reg.corp:5443 --wandb-version 0.82.2
+  --cr-set spec.global.imageRegistry=other-reg.corp:5443 --wandb-version 0.85.1
 
 # Set a CR field that has no dedicated flag, via --cr-set (repeatable, YAML-typed)
 wsm deploy-v2 wandb deploy --context prod \

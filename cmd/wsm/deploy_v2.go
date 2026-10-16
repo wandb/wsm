@@ -149,7 +149,7 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("proxy-http-secret", "", "Secret ref <name>:<key> for a credentialed HTTP_PROXY URL (spec.global.proxy.httpProxy.valueFrom; optional)")
 	cmd.PersistentFlags().String("proxy-https-secret", "", "Secret ref <name>:<key> for a credentialed HTTPS_PROXY URL (spec.global.proxy.httpsProxy.valueFrom; optional)")
 	cmd.PersistentFlags().StringArray("no-proxy", nil, "Extra NO_PROXY entry appended to the operator's in-cluster exclusions; repeatable (spec.global.proxy.noProxy; optional)")
-	cmd.PersistentFlags().StringArray("cr-set", nil, "Set an arbitrary CR field as <path>=<value>, e.g. spec.wandb.version=0.82.2; repeatable, YAML-typed, overrides the built-in template, --cr-file, and the typed flags above")
+	cmd.PersistentFlags().StringArray("cr-set", nil, "Set an arbitrary CR field as <path>=<value>, e.g. spec.wandb.version=0.85.1; repeatable, YAML-typed, overrides the built-in template, --cr-file, and the typed flags above")
 	// TODO readd this when the CR reports ready properly
 	//cmd.Flags().Bool("wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
 

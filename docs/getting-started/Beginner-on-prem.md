@@ -28,7 +28,7 @@ You'll need, on your PATH:
 ```bash
 docker run -d -p 5000:5000 --name wandb-registry registry:2
 export REG=host.docker.internal:5000
-export VER=0.82.2                       # the W&B server version to install
+export VER=0.85.1                       # the W&B server version to install
 ```
 
 `registry:2` is a throwaway stand-in for the private registry you'd use in production
@@ -112,7 +112,7 @@ pull from the public registries directly:
 ```bash
 wsm cluster create --cluster-name wandb
 wsm deploy-v2 operator     --context kind-wandb
-wsm deploy-v2 wandb deploy --context kind-wandb --wandb-version 0.82.2
+wsm deploy-v2 wandb deploy --context kind-wandb --wandb-version 0.85.1
 ```
 
 ## What this is (and isn't)

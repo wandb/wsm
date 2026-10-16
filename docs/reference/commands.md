@@ -30,7 +30,7 @@ wsm deploy-v2 operator [flags]
 | `--setup-k8s-cluster` | `false` | Create a Kind cluster before deploying |
 | `--cluster-name` | `kind` | Name of the Kind cluster (used with `--setup-k8s-cluster`) |
 | `--workers` | `0` | Number of Kind worker nodes |
-| `--operator-chart-version` | `2.0.0-beta.7` | Operator Helm chart version (a leading `v` is accepted) |
+| `--operator-chart-version` | `2.0.0-beta.8` | Operator Helm chart version (a leading `v` is accepted) |
 | `--operator-install-timeout` | `0s` | Helm timeout in seconds, minutes, or hours, such as `30s`, `5m`, or `1h`. `0` uses Helm's default. |
 | `--operator-image-pull-policy` | `IfNotPresent` | Operator image pull policy: `Always`, `IfNotPresent`, or `Never` (case-insensitive). |
 | `--operator-version` | — | Operator image version (defaults to chart value) |
@@ -46,7 +46,7 @@ wsm deploy-v2 operator [flags]
 | `--gateway-api-crd-url` | — | Fetch the Gateway API CRDs from this URL instead of the GitHub default (use a mirrored copy for air-gapped installs). |
 | `--skip-gateway-api-crds` | `false` | Assume the Gateway API CRDs are already installed; fail instead of fetching them from the internet. |
 | `--allow-unsupported-arch` | `false` | Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is amd64-only and crashes under emulation on arm64 (e.g. Kind on Apple Silicon); WSM fails fast on this by default. |
-| `--openshift` | `false` | Enable OpenShift compatibility for the operator and bundled managed-service pods (MySQL/moco, Redis, ClickHouse, SeaweedFS). The bundled frontend still can't run on OpenShift, so bring your own ingress — see [On-Prem Deployment](../deployment/on-prem.md). |
+| `--openshift` | `false` | Enable OpenShift compatibility for the operator and bundled managed-service pods (MySQL/moco, Redis, ClickHouse, SeaweedFS), and disables the telemetry pod-log agent (it needs hostPath and root). The bundled frontend still can't run on OpenShift, so bring your own ingress — see [On-Prem Deployment](../deployment/on-prem.md). |
 | `--watchtower-enable-secret-writes` | `false` | Set `WATCHTOWER_ENABLE_SECRET_WRITES` on the operator, granting Watchtower `create/update/patch/delete` on Secrets in the install namespace. **Broad** — that namespace holds the database, object-store, OIDC, license and operator-managed credentials. Off by default; Watchtower can still reference Secrets an admin created out of band. |
 | `--watchtower-enable-db-admin` | `false` | Set `WATCHTOWER_ENABLE_DB_ADMIN` on the operator, enabling Watchtower's email-domain migration, which writes directly to the W&B application database. **Irreversible** bulk rewrite of user records; cluster mode only. Off by default. |
 | `--observability-forward-endpoint` | — | OTLP endpoint to forward telemetry to. **Required** when `--observability-mode=forward` |
@@ -69,7 +69,7 @@ wsm deploy-v2 operator --context my-cluster
 
 # Pin an operator chart version; an optional leading v is normalized for OCI
 wsm deploy-v2 operator --context my-cluster \
-  --operator-chart-version v2.0.0-beta.7
+  --operator-chart-version v2.0.0-beta.8
 
 # One shot: create a local Kind cluster, install the operator, and deploy the CR
 wsm deploy-v2 operator --context kind-wandb \
@@ -195,7 +195,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--wandb-name` | `wandb` | Name of the W&B instance |
 | `--wandb-namespace` | `wandb` | Kubernetes namespace for the CR |
 | `--wandb-hostname` | `http://localhost:8080` | External URL for accessing W&B |
-| `--wandb-version` | — | Server manifest version (defaults to `0.84.0`; a leading `v` is accepted). Cross-checked against the published [`wandb/local`](https://hub.docker.com/r/wandb/local/tags) tags — see the note below. List valid values with [`wsm deploy-v2 wandb list-versions`](#wsm-deploy-v2-wandb-list-versions) |
+| `--wandb-version` | — | Server manifest version (defaults to `0.85.1`; a leading `v` is accepted). Cross-checked against the published [`wandb/local`](https://hub.docker.com/r/wandb/local/tags) tags — see the note below. List valid values with [`wsm deploy-v2 wandb list-versions`](#wsm-deploy-v2-wandb-list-versions) |
 | `--mirror-registry` | — | Install the W&B instance from this mirror. Defaults `--manifest-repository` to `oci://<mirror>/wandb/server-manifest` (charts, operator/infra images, and the rewritten app images come from the mirror). The managed data-plane images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) keep their upstream refs and reach the mirror via each node's container-runtime registry mirror — not `spec.global.imageRegistry`. Populate the mirror first with `wsm registry mirror`. |
 | `--manifest-repository` | — | Server manifest source. Accepts an OCI repository (`oci://…`, pulled over HTTPS) **or** a local `file://` path mounted onto the operator pod (the no-TLS option for plain-HTTP / insecure air-gap installs; a plain-HTTP `oci://` mirror is rejected). Auto-set to `oci://<mirror>/wandb/server-manifest` when `--mirror-registry` is provided and this is unset. |
 | `--size` | `dev` | Deployment size profile: `dev`, `micro`, `small`, `medium`, `large`, `xlarge`, `xxlarge` |
@@ -231,7 +231,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--smtp-password` | — | SMTP password as `<secret-name>:<key>` (`spec.wandb.notifications.email.smtp.password`). May complete SMTP settings supplied by `--cr-file` |
 | `--slack-client-id` | — | Slack client ID. Client ID and secret must both be present after merging flags with `--cr-file` (`spec.wandb.notifications.slack.clientId`) |
 | `--slack-client-secret` | — | Slack client secret as `<secret-name>:<key>` (`spec.wandb.notifications.slack.clientSecret`). May complete Slack settings supplied by `--cr-file` |
-| `--cr-set` | — | Set an arbitrary CR field as `<path>=<value>`, e.g. `spec.wandb.version=0.82.2`; repeatable. Values are YAML-typed (`3`→number, `true`→bool, `[a,b]`→list). Overrides the built-in template, `--cr-file`, and the typed flags above (see note below) |
+| `--cr-set` | — | Set an arbitrary CR field as `<path>=<value>`, e.g. `spec.wandb.version=0.85.1`; repeatable. Values are YAML-typed (`3`→number, `true`→bool, `[a,b]`→list). Overrides the built-in template, `--cr-file`, and the typed flags above (see note below) |
 | `--gateway-class` | `nginx` | Gateway class name (selects Gateway API mode; the default). Mutually exclusive with `--ingress-class` |
 | `--ingress-class` | — | Ingress class name (selects Ingress mode). Takes precedence over the default `--gateway-class`; setting both explicitly is an error |
 | `--ingress-name` | — | Override the generated Ingress resource name (defaults to the CR name) |
@@ -314,7 +314,7 @@ wsm deploy-v2 wandb deploy --context prod \
   --smtp-username wandb --smtp-password wandb-notifications:smtp-password
 
 # Air-gapped: pull everything (app + DB images, server manifest) from one mirror
-wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --wandb-version 0.82.2
+wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --wandb-version 0.85.1
 
 # Air-gapped, split registry (replaces the deprecated --image-registry): charts/manifest
 # from the mirror, but the managed data-plane images from a different registry.
@@ -323,7 +323,7 @@ wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 --w
 # Without --cr-set, spec.global.imageRegistry stays empty and the data-plane images
 # reach the mirror only via each node's container-runtime registry mirror (see on-prem.md).
 wsm deploy-v2 wandb deploy --context prod --mirror-registry harbor.corp:5443 \
-  --cr-set spec.global.imageRegistry=other-reg.corp:5443 --wandb-version 0.82.2
+  --cr-set spec.global.imageRegistry=other-reg.corp:5443 --wandb-version 0.85.1
 
 # Set a CR field that has no dedicated flag, via --cr-set (repeatable, YAML-typed)
 wsm deploy-v2 wandb deploy --context prod \
@@ -488,7 +488,7 @@ Scope: the operator OCI chart + binary image, and the cert-manager, nginx-gatewa
 | `--to` | — | **Required.** Hostname of your mirror, e.g. `harbor.example.com` or `localhost:5000`. |
 | `--insecure` | `false` | Skip TLS verification when pushing to the mirror. Use for plain-HTTP registries like a local `registry:2`. **Never** in production. |
 | `--dry-run` | `false` | Print the source → target mirroring plan without pushing. |
-| `--operator-chart-version` | `2.0.0-beta.7` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
+| `--operator-chart-version` | `2.0.0-beta.8` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
 | `--wandb-version` | — | W&B server version (e.g. `0.84.0`). When set, also mirror the server manifest and every application + managed data-plane image it references, rewriting them to point at the mirror. |
 | `--exclude-operators` | — | Comma-separated managed types (`clickhouse`, `mysql`, `redis`, `object-store`) whose **operator** images to skip — for when you run your own cluster-wide operator. The managed data-plane service is still mirrored. |
 | `--exclude-managed` | — | Comma-separated managed types to skip **entirely** — operator *and* data-plane images — for when you use an external service. |
@@ -516,7 +516,7 @@ wsm registry check --registry <host> --wandb-version <version> [flags]
 |------|---------|-------------|
 | `--registry` | — | **Required.** Hostname of your mirror to check against. |
 | `--wandb-version` | — | W&B server version that was mirrored; when set, also check the server manifest and every application image it references. |
-| `--operator-chart-version` | `2.0.0-beta.7` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
+| `--operator-chart-version` | `2.0.0-beta.8` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
 | `--exclude-operators` | — | Managed types whose operator images to skip checking (match `--exclude-operators` you mirrored with). |
 | `--exclude-managed` | — | Managed types to skip checking entirely (match `--exclude-managed` you mirrored with). |
 | `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store` (match the flag you mirrored with). |

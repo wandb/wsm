@@ -47,7 +47,8 @@ CR field reference: [`docs/reference/cr-fields.md`](./docs/reference/cr-fields.m
 | [`wsm deploy-v2`](#wsm-deploy-v2) | v2 | Install the v2 operator stack and the W&B CR. |
 | [`wsm cluster`](#wsm-cluster) | v2 | Kind cluster lifecycle for local/testing. |
 | [`wsm registry`](#wsm-registry) | v2 | Mirror install artifacts to a private registry (on-prem / air-gapped). |
-| `wsm convert-v2` | v2 | Diff the live v1 CR against the v2 CR the conversion webhook would produce. |
+| `wsm convert-v2` | v2 | Diff the live v1 CR against the v2 CR the conversion webhook would produce, then preflight it. |
+| `wsm preflight` | v2 | Run the operator's preflight checks against a v2 CR file before applying it. |
 | `wsm telemetry` | v2 | Open the in-cluster telemetry UIs (Grafana, VictoriaMetrics). |
 | `wsm set-version` | — | Set the version of a wsm-managed W&B instance. |
 | `wsm console` | v1 | Port-forward and open the W&B console in a browser. |

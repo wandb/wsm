@@ -683,6 +683,53 @@ The values are stamped in at build time (GoReleaser on tagged releases; `make bu
 
 ---
 
+### `wsm preflight`
+
+Runs the operator's preflight checks client-side against a v2 `WeightsAndBiases` CR file, before you apply it. Which checks run comes from the operator's preflight registry (`github.com/wandb/operator/pkg/preflight`): each registered CR field present in the file triggers its check, so new upstream checks arrive with a dependency bump. Today only `spec.mysql.<instance>.externalMysql` is checked — it connects and authenticates with the configured host, port, database, credentials and TLS settings. A CR with no matching field prints `No preflight checks apply to this CR.`
+
+```bash
+wsm preflight <cr-file> [--context <kubeconfig-context>] [--wandb-namespace <ns>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | current context | Kubeconfig context used to read Secret-backed values (`valueFrom.secretKeyRef`) |
+| `--wandb-namespace` | the CR's `metadata.namespace` | Namespace the CR will be deployed to; overrides `metadata.namespace` and is where referenced Secrets are read |
+
+Each result prints as `[OUTCOME] <check> (<field path>): <message>`, where the outcome is `PASS`, `FAIL`, `UNKNOWN` (inconclusive — e.g. a referenced Secret can't be read) or `SKIPPED`. The command exits non-zero if any check fails **or** is unknown.
+
+To skip checks, list their names (comma-separated) in the CR's `skipPreflights` annotation:
+
+```yaml
+metadata:
+  annotations:
+    skipPreflights: externalMysqlCheck
+```
+
+> **Note:** checks run from the machine running `wsm`, not from inside the cluster. An endpoint reachable only from the cluster network (`*.svc`, a private VPC) can `FAIL` here even though W&B pods can reach it. The operator runs the same checks in-cluster during reconcile and reports them in the CR's `status.preflights`.
+
+An example CR is at `hack/preflight-example.yaml`.
+
+---
+
+### `wsm convert-v2`
+
+Diffs the live v1 CR against the v2 CR the conversion webhook would produce, then runs [`wsm preflight`](#wsm-preflight)'s checks against the converted v2 CR.
+
+```bash
+wsm convert-v2 --context <kubeconfig-context> [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--wandb-name` | `wandb` | Name of the W&B CR to convert |
+| `--wandb-namespace` | `default` | Namespace of the W&B CR to convert |
+| `-o`, `--output` | — | Output path: the diff file (unified) or the base path for the two files (split) |
+| `--strip-roundtrip` | `false` | Drop the legacy v1-chart/v1-values round-trip annotations that bloat the output |
+| `--skip-preflight` | `false` | Don't run preflight checks against the converted v2 CR |
+
+Like `wsm preflight`, it exits non-zero when a preflight check fails or is unknown; pass `--skip-preflight` to only produce the conversion.
+
 ## Flag Precedence
 
 When multiple configuration sources specify the same value, the resolution order is:

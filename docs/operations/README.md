@@ -8,7 +8,7 @@ Day-to-day management, monitoring, and troubleshooting of W&B deployments.
 |-------|-------------|
 | [Managing the Deployment](managing.md) | Check status, upgrade, destroy, cleanup |
 | [Troubleshooting](troubleshooting.md) | Common issues, log collection, fixes |
-| [Support Bundles](support-bundles.md) | Collect and manage Lumen support bundles |
+| [Support Bundles](support-bundles.md) | Collect, list, download, and delete Lumen support bundles |
 
 ## Operational Tasks at a Glance
 

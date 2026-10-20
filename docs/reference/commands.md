@@ -680,6 +680,18 @@ wsm support-bundle retrieve <bundle-id|s3://location|latest> [-o file] [--timeou
 | `--output`, `-o` | archive name | Output file |
 | `--timeout` | `2h` | How long the download may take (the management Job gets 5 extra minutes for the lookup) |
 
+### `wsm support-bundle delete`
+
+Deletes a stored bundle from the bucket by ID or exact `s3://` location. If the ID's collection is still running, wsm cancels it, waits for its pod to stop, then deletes whatever it uploaded. It asks `[y/N]` once first, and without a terminal it refuses unless `--yes` is passed. If the connection drops mid-delete, wsm exits non-zero with "deletion outcome unknown"; run `list` to check.
+
+```bash
+wsm support-bundle delete <bundle-id|s3://location> [-y]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--yes`, `-y` | `false` | Don't ask for confirmation |
+
 ### `wsm support-bundle --enabled=true|false`
 
 Sets `spec.supportBundle.enabled` on the CR. `--enabled` alone means `true`. When disabled, the operator waits for a running collection, then removes the collector CronJob, its RBAC, and collection Jobs. Bundles already uploaded to the bucket are kept.

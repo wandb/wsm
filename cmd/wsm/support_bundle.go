@@ -61,6 +61,7 @@ func SupportBundleCmd() *cobra.Command {
 	cmd.AddCommand(supportBundleStatusCmd())
 	cmd.AddCommand(supportBundleListCmd())
 	cmd.AddCommand(supportBundleRetrieveCmd())
+	cmd.AddCommand(supportBundleDeleteCmd())
 
 	return cmd
 }
@@ -446,6 +447,99 @@ func downloadBundle(ctx context.Context, session *supportbundle.Session, id, loc
 func isTerminal(f *os.File) bool {
 	info, err := f.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func supportBundleDeleteCmd() *cobra.Command {
+	var yes bool
+
+	cmd := &cobra.Command{
+		Use:               "delete <bundle-id|s3://location>",
+		Short:             "Delete a stored support bundle, cancelling its collection if it's still running",
+		Args:              bundleIDArg,
+		ValidArgsFunction: completeBundleIDs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			if !yes && !isTerminal(os.Stdin) {
+				return fmt.Errorf("refusing to delete without confirmation - stdin is not a terminal, so pass --yes")
+			}
+			ref := args[0]
+
+			cancelled := false
+			if !supportbundle.IsLocation(ref) {
+				cr, err := discoverInstallation(ctx, cmd)
+				if err != nil {
+					return err
+				}
+				_, client, err := kubectl.GetClientset()
+				if err != nil {
+					return err
+				}
+				status, err := supportbundle.DescribeCollection(ctx, client, cr, ref)
+				if err != nil {
+					return err
+				}
+				if status != nil && status.Running() {
+					if ok, err := confirm(ctx, yes, fmt.Sprintf("Cancel the running collection %s and delete anything it uploaded?", ref)); !ok || err != nil {
+						return err
+					}
+					if cancelled, err = supportbundle.CancelAndWait(ctx, client, cr, ref); err != nil {
+						return err
+					}
+					yes = true
+				}
+			}
+
+			_, _, session, err := openManagerSession(ctx, cmd, supportbundle.OperationDelete, 0)
+			if err != nil {
+				return err
+			}
+			defer closeManagerSession(session)
+			bundle, err := session.Resolve(ctx, ref)
+			if cancelled && errors.Is(err, supportbundle.ErrBundleNotFound) {
+				fmt.Printf("Support bundle %s cancelled - nothing was uploaded\n", ref)
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if cancelled {
+				fmt.Printf("Support bundle %s cancelled\n", ref)
+			}
+			if ok, err := confirm(ctx, yes, fmt.Sprintf("Delete %s (%s)? This cannot be undone", bundle.Location, humanBytes(bundle.SizeBytes))); !ok || err != nil {
+				return err
+			}
+			if err := session.Delete(ctx, bundle.Location); err != nil {
+				return err
+			}
+			fmt.Printf("Deleted %s\n", bundle.Location)
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Don't ask for confirmation")
+
+	return cmd
+}
+
+// confirm asks y/N unless yes is set. Ctrl+C at the prompt returns the
+// context error, so deferred cleanup still runs.
+func confirm(ctx context.Context, yes bool, prompt string) (bool, error) {
+	if yes {
+		return true, nil
+	}
+	answer := make(chan bool, 1)
+	go func() { answer <- confirmOnStdin(prompt) }()
+	select {
+	case ok := <-answer:
+		if !ok {
+			fmt.Println("Nothing changed")
+		}
+		return ok, nil
+	case <-ctx.Done():
+		fmt.Println()
+		return false, ctx.Err()
+	}
 }
 
 // openManagerSession discovers the instance and starts a manager Job for op.

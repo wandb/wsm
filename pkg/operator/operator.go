@@ -1505,6 +1505,12 @@ func stripFieldsNotInCRDSchema(obj *unstructured.Unstructured) {
 	if isEmptyNestedMap(obj, "spec", "wandb", "probes") {
 		unstructured.RemoveNestedField(obj.Object, "spec", "wandb", "probes")
 	}
+	if isEmptyNestedMap(obj, "spec", "wandb", "securityProfile") {
+		unstructured.RemoveNestedField(obj.Object, "spec", "wandb", "securityProfile")
+	}
+	if isEmptyNestedMap(obj, "spec", "supportBundle") {
+		unstructured.RemoveNestedField(obj.Object, "spec", "supportBundle")
+	}
 
 	// ManagedServiceAccountSpec is a by-value struct on managed Kafka/ClickHouse,
 	// so an unconfigured one serializes as serviceAccount: {}. Strip when empty.

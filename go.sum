@@ -505,8 +505,8 @@ github.com/vbauerster/cupwriter v0.0.4 h1:9sBPe0uXWLZuWQU5lqVbhyFlxX6c09asST/Yfa
 github.com/vbauerster/cupwriter v0.0.4/go.mod h1:IFyzS6Xis5dnBH/rdAhrnuzg3c+KkUqEN6yE8lhJlDw=
 github.com/vbauerster/mpb/v8 v8.14.0 h1:55SR80dptMfASxIG/oCEkBXgBhxeSu4GrVsjl16oKmA=
 github.com/vbauerster/mpb/v8 v8.14.0/go.mod h1:HgpQPKfcWe3kbuGGPmi+jatHreMase5C3Fp5dpdAy0Q=
-github.com/wandb/operator v1.22.1-0.20261014150905-c17acc84f98f h1:FDqt3cLh2YFAxkU4dsZFBOqwFs4+WgXGMdPArsBYj8U=
-github.com/wandb/operator v1.22.1-0.20261014150905-c17acc84f98f/go.mod h1:q9hNyHWkNVcrsVOPgk8F5r+rOWwzweLUeh3UzgUEcfg=
+github.com/wandb/operator v1.22.1-0.20261020212958-81f766a20470 h1:+HCGMz5CXSPFh3mFmNeXkzxZIr26D/v89SpiM47n2+Q=
+github.com/wandb/operator v1.22.1-0.20261020212958-81f766a20470/go.mod h1:PrZLAulziEB08GM1MLqi3N7JLVA0Be+h9KKKj278gSk=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
 github.com/x448/float16 v0.8.4/go.mod h1:14CWIYCyZA/cWjXOioeEpHeN/83MdbZDRQHoFcYsOfg=
 github.com/xlab/treeprint v1.2.0 h1:HzHnuAF1plUN2zGlAFHbSQP2qJ0ZAD3XF5XD7OesXRQ=

@@ -17,6 +17,7 @@ const (
 	PhaseRunning   = "Running"
 	PhaseSucceeded = "Succeeded"
 	PhaseFailed    = "Failed"
+	PhaseUnknown   = "Unknown"
 )
 
 // bundleIDPattern is a Kubernetes Job name, which is what bundle IDs are.
@@ -30,6 +31,7 @@ type CollectionStatus struct {
 	Finished    *metav1.Time `json:"finished,omitempty"`
 	Result      *Result      `json:"result,omitempty"`
 	ResultError string       `json:"resultError,omitempty"`
+	Stored      *Bundle      `json:"stored,omitempty"`
 }
 
 // Running reports whether the collection hasn't finished yet.

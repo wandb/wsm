@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -60,20 +61,33 @@ func Template(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAn
 	return cronJob, nil
 }
 
-// Running returns the name of an unfinished collection Job for a CR, or "".
-func Running(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndBiases) (string, error) {
+// Collections lists the collection Jobs for a CR, finished or not.
+func Collections(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndBiases) ([]batchv1.Job, error) {
 	jobs, err := client.BatchV1().Jobs(cr.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labels.SelectorFromSet(selectorLabels(cr)).String(),
 	})
 	if err != nil {
-		return "", fmt.Errorf("list support-bundle Jobs in %s: %w", cr.Namespace, err)
+		return nil, fmt.Errorf("list support-bundle Jobs in %s: %w", cr.Namespace, err)
 	}
-	for _, job := range jobs.Items {
-		if !jobFinished(&job) {
-			return job.Name, nil
-		}
+	return jobs.Items, nil
+}
+
+// RunningCollections returns the unfinished collection Jobs for a CR.
+func RunningCollections(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndBiases) ([]batchv1.Job, error) {
+	jobs, err := Collections(ctx, client, cr)
+	if err != nil {
+		return nil, err
 	}
-	return "", nil
+	return slices.DeleteFunc(jobs, func(job batchv1.Job) bool { return jobFinished(&job) }), nil
+}
+
+// Running returns the name of an unfinished collection Job for a CR, or "".
+func Running(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndBiases) (string, error) {
+	jobs, err := RunningCollections(ctx, client, cr)
+	if err != nil || len(jobs) == 0 {
+		return "", err
+	}
+	return jobs[0].Name, nil
 }
 
 // NewCollectionJob builds a Job from the collector template the way
@@ -155,14 +169,12 @@ func Create(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndB
 
 // olderCollection returns another unfinished collection created before job, or "".
 func olderCollection(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndBiases, job *batchv1.Job) (string, error) {
-	jobs, err := client.BatchV1().Jobs(cr.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: labels.SelectorFromSet(selectorLabels(cr)).String(),
-	})
+	jobs, err := RunningCollections(ctx, client, cr)
 	if err != nil {
-		return "", fmt.Errorf("list support-bundle Jobs in %s: %w", cr.Namespace, err)
+		return "", err
 	}
-	for _, other := range jobs.Items {
-		if other.Name == job.Name || jobFinished(&other) {
+	for _, other := range jobs {
+		if other.Name == job.Name {
 			continue
 		}
 		created, mine := other.CreationTimestamp.Time, job.CreationTimestamp.Time

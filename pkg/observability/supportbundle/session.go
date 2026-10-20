@@ -27,6 +27,9 @@ var (
 	slowStart      = 30 * time.Second
 )
 
+// managerLifetime bounds each manager pod; it sleeps this long, then exits.
+const managerLifetime = 15 * time.Minute
+
 // Executor runs a command in a pod's container.
 type Executor interface {
 	Exec(ctx context.Context, namespace, pod, container string, command []string, stdout, stderr io.Writer) error

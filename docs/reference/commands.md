@@ -640,7 +640,7 @@ wsm support-bundle cancel <bundle-id>
 
 ### `wsm support-bundle status`
 
-Shows a collection's status (`Pending`, `Running`, `Succeeded`, `Failed`), its start and finish times, and Lumen's result once it has one. Collection Jobs expire 24h after they finish and are removed when support bundles are disabled.
+Shows a collection's status (`Pending`, `Running`, `Succeeded`, `Failed`), its start and finish times, and Lumen's result once it has one. Collection Jobs expire 24h after they finish. After that, `status <id>` checks the bucket and reports the stored bundle's location and size, without collection details. The bucket check runs a management Job from the collector template, so it needs support bundles enabled.
 
 ```bash
 wsm support-bundle status <bundle-id> [--watch | --json]
@@ -650,6 +650,21 @@ wsm support-bundle status <bundle-id> [--watch | --json]
 |------|---------|-------------|
 | `--watch`, `-w` | `false` | If the collection is still running, stream its logs and print the result when it finishes, like `create --wait` |
 | `--json` | `false` | Print the status as JSON |
+
+### `wsm support-bundle list`
+
+Lists the bundles stored in the instance's bucket, plus collections that haven't uploaded yet (status `collecting`). wsm reads the bucket by running Lumen's `bundle-manager` in a short-lived management Job; see [Support Bundles](../operations/support-bundles.md#how-it-works).
+
+```bash
+wsm support-bundle list [--sort-by created|size|id|status] [--order ascending|descending|asc|desc] [--limit N] [--json]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--sort-by` | `created` | `created`, `size`, `id`, or `status` (`collecting` before `uploaded`, newest first within each) |
+| `--order` | per key | `ascending`/`asc` or `descending`/`desc`; by default `created` and `size` are descending (newest, largest first), `id` and `status` ascending |
+| `--limit` | `0` | Show at most this many rows, after sorting; `0` shows all |
+| `--json` | `false` | Print the rows as JSON |
 
 ### `wsm support-bundle --enabled=true|false`
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -58,6 +59,7 @@ func SupportBundleCmd() *cobra.Command {
 	cmd.AddCommand(supportBundleCreateCmd())
 	cmd.AddCommand(supportBundleCancelCmd())
 	cmd.AddCommand(supportBundleStatusCmd())
+	cmd.AddCommand(supportBundleListCmd())
 
 	return cmd
 }
@@ -111,9 +113,10 @@ func supportBundleCreateCmd() *cobra.Command {
 
 func supportBundleCancelCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "cancel <bundle-id>",
-		Short: "Stop a running support-bundle collection",
-		Args:  cobra.ExactArgs(1),
+		Use:               "cancel <bundle-id>",
+		Short:             "Stop a running support-bundle collection",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeBundleIDs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			cr, err := discoverInstallation(ctx, cmd)
@@ -142,9 +145,10 @@ func supportBundleStatusCmd() *cobra.Command {
 	var watch, asJSON bool
 
 	cmd := &cobra.Command{
-		Use:   "status <bundle-id>",
-		Short: "Show a support bundle's collection status",
-		Args:  bundleIDArg,
+		Use:               "status <bundle-id>",
+		Short:             "Show a support bundle's collection status",
+		Args:              bundleIDArg,
+		ValidArgsFunction: completeBundleIDs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
@@ -163,7 +167,7 @@ func supportBundleStatusCmd() *cobra.Command {
 				return err
 			}
 			if status == nil {
-				return fmt.Errorf("support bundle %s not found in namespace: %s", id, cr.Namespace)
+				return printStoredBundle(ctx, cmd, id, asJSON)
 			}
 
 			if asJSON {
@@ -210,6 +214,184 @@ func bundleIDArg(cmd *cobra.Command, args []string) error {
 		return errors.New("bundle ID is required - please run `wsm support-bundle list` to retrieve list of bundles")
 	}
 	return cobra.ExactArgs(1)(cmd, args)
+}
+
+// printStoredBundle reports a bundle whose collection Job is gone.
+func printStoredBundle(ctx context.Context, cmd *cobra.Command, id string, asJSON bool) error {
+	_, _, session, err := openManagerSession(ctx, cmd, supportbundle.OperationList)
+	if err != nil {
+		return fmt.Errorf("support bundle %s has no collection Job, and the bucket can't be checked: %w", id, err)
+	}
+	defer closeManagerSession(session)
+	bundle, err := session.Resolve(ctx, id)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		out, err := json.MarshalIndent(supportbundle.StoredStatus(id, bundle), "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(out))
+		return nil
+	}
+	printField("Bundle ID:", id)
+	printField("Collection Status:", "unknown (the collection Job is gone)")
+	printField("Bundle Location:", bundle.Location)
+	printField("Size:", fmt.Sprintf("%d bytes (%s)", bundle.SizeBytes, humanBytes(bundle.SizeBytes)))
+	printField("Uploaded:", bundle.LastModified)
+	return nil
+}
+
+func supportBundleListCmd() *cobra.Command {
+	var (
+		sortBy string
+		order  string
+		limit  int
+		asJSON bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List stored support bundles and running collections",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			if limit < 0 {
+				return fmt.Errorf("--limit must be 0 or more")
+			}
+			if err := supportbundle.SortEntries(nil, sortBy, order); err != nil {
+				return err
+			}
+			cr, client, session, err := openManagerSession(ctx, cmd, supportbundle.OperationList)
+			if err != nil {
+				return err
+			}
+			defer closeManagerSession(session)
+
+			result, err := session.List(ctx, nil)
+			if err != nil {
+				return err
+			}
+			running, err := supportbundle.RunningCollections(ctx, client, cr)
+			if err != nil {
+				return err
+			}
+			entries := supportbundle.Entries(result.Bundles, running)
+			if err := supportbundle.SortEntries(entries, sortBy, order); err != nil {
+				return err
+			}
+			if limit > 0 && len(entries) > limit {
+				entries = entries[:limit]
+			}
+
+			if asJSON {
+				out, err := json.MarshalIndent(entries, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(out))
+				return nil
+			}
+			if len(entries) == 0 {
+				fmt.Println("No support bundles found")
+				return nil
+			}
+			rows := [][]string{}
+			for _, e := range entries {
+				size := "-"
+				if e.Status == supportbundle.EntryUploaded {
+					size = humanBytes(e.SizeBytes)
+				}
+				rows = append(rows, []string{orDash(e.ID), e.Status, e.Created.Local().Format(time.DateTime), size, orDash(e.Location)})
+			}
+			printTable([]string{"ID", "STATUS", "CREATED", "SIZE", "LOCATION"}, rows)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&sortBy, "sort-by", "created", "Sort by "+strings.Join(supportbundle.SortKeys, ", "))
+	cmd.Flags().StringVar(&order, "order", "", strings.Join(supportbundle.SortOrders, ", ")+" (default: newest and largest first, id and status A-Z)")
+	cmd.Flags().IntVar(&limit, "limit", 0, "Show at most this many rows (0: all)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Print the rows as JSON")
+	_ = cmd.RegisterFlagCompletionFunc("sort-by", cobra.FixedCompletions(supportbundle.SortKeys, cobra.ShellCompDirectiveNoFileComp))
+	_ = cmd.RegisterFlagCompletionFunc("order", cobra.FixedCompletions(supportbundle.SortOrders, cobra.ShellCompDirectiveNoFileComp))
+
+	return cmd
+}
+
+// openManagerSession discovers the instance and starts a manager Job for op.
+// The caller must close the session.
+func openManagerSession(ctx context.Context, cmd *cobra.Command, op supportbundle.Operation) (*v2.WeightsAndBiases, kubernetes.Interface, *supportbundle.Session, error) {
+	cr, err := discoverInstallation(ctx, cmd)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	config, client, err := kubectl.GetClientset()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	executor := supportbundle.KubeExecutor{Config: config, Client: client}
+	session, err := supportbundle.OpenSession(ctx, client, executor, cr, op, func(msg string) {
+		fmt.Fprintln(os.Stderr, "  "+msg)
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return cr, client, session, nil
+}
+
+func closeManagerSession(session *supportbundle.Session) {
+	if err := session.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	}
+}
+
+// completeBundleIDs tab-completes the IDs of collection Jobs that still exist.
+// Shell completion skips PersistentPreRunE, so it applies --context itself.
+func completeBundleIDs(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+	if len(args) > 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	if kubeContext, _ := cmd.Flags().GetString("context"); kubeContext != "" {
+		kubectl.SetContext(kubeContext)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cr, err := discoverInstallation(ctx, cmd)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	_, client, err := kubectl.GetClientset()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	jobs, err := supportbundle.Collections(ctx, client, cr)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	ids := make([]string, len(jobs))
+	for i, job := range jobs {
+		ids[i] = job.Name
+	}
+	return ids, cobra.ShellCompDirectiveNoFileComp
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+func printTable(headers []string, rows [][]string) {
+	cell := lipgloss.NewStyle().Padding(0, 1)
+	fmt.Println(table.New().
+		Border(lipgloss.NormalBorder()).
+		StyleFunc(func(row, col int) lipgloss.Style { return cell }).
+		Headers(headers...).
+		Rows(rows...))
 }
 
 func setSupportBundleEnabled(cmd *cobra.Command, enabled bool) error {
@@ -330,12 +512,7 @@ func printResultDetails(result *supportbundle.Result) {
 		}
 	}
 	fmt.Println("\nCollector Status:")
-	cell := lipgloss.NewStyle().Padding(0, 1)
-	fmt.Println(table.New().
-		Border(lipgloss.NormalBorder()).
-		StyleFunc(func(row, col int) lipgloss.Style { return cell }).
-		Headers("NAME", "STATUS").
-		Rows(rows...))
+	printTable([]string{"NAME", "STATUS"}, rows)
 	if result.CollectorsTruncated {
 		fmt.Println("(collector list truncated)")
 	}

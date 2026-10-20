@@ -60,12 +60,13 @@ func SupportBundleCmd() *cobra.Command {
 	cmd.AddCommand(supportBundleCancelCmd())
 	cmd.AddCommand(supportBundleStatusCmd())
 	cmd.AddCommand(supportBundleListCmd())
+	cmd.AddCommand(supportBundleRetrieveCmd())
 
 	return cmd
 }
 
 func supportBundleCreateCmd() *cobra.Command {
-	var waitForBundle bool
+	var waitForBundle, retrieveBundle bool
 
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -87,7 +88,7 @@ func supportBundleCreateCmd() *cobra.Command {
 			}
 			fmt.Printf("Started support bundle %s in %s/%s\n", job.Name, cr.Namespace, cr.Name)
 
-			if !waitForBundle {
+			if !waitForBundle && !retrieveBundle {
 				fmt.Printf("Follow it with:\n  kubectl -n %s get job %s\n  kubectl -n %s logs job/%s\n", job.Namespace, job.Name, job.Namespace, job.Name)
 				return nil
 			}
@@ -95,18 +96,33 @@ func supportBundleCreateCmd() *cobra.Command {
 			ctxSig, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			fmt.Println("Streaming collector logs (Ctrl+C stops following; the collection keeps running)...")
-			if err := followCollection(ctxSig, client, job); err != nil {
+			result, err := followCollection(ctxSig, client, job)
+			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					fmt.Printf("Stopped following; %s is still running. Check it with: kubectl -n %s get job %s\n", job.Name, job.Namespace, job.Name)
 					return nil
 				}
 				return err
 			}
-			return nil
+			if !retrieveBundle {
+				return nil
+			}
+			if result == nil || result.Artifact == nil {
+				return fmt.Errorf("support bundle %s uploaded no archive - nothing to retrieve", job.Name)
+			}
+			fmt.Println()
+			_, _, session, err := openManagerSession(ctxSig, cmd, supportbundle.OperationRetrieve, defaultRetrieveTimeout)
+			if err != nil {
+				return err
+			}
+			defer closeManagerSession(session)
+			artifact := result.Artifact
+			return downloadBundle(ctxSig, session, job.Name, artifact.Location, artifact.SizeBytes, supportbundle.DefaultOutputName(artifact.Location), artifact.SHA256, "")
 		},
 	}
 
 	cmd.Flags().BoolVar(&waitForBundle, "wait", false, "Stream the collector logs and print the result when it finishes")
+	cmd.Flags().BoolVar(&retrieveBundle, "retrieve", false, "Wait, then download the bundle to the current directory (implies --wait)")
 
 	return cmd
 }
@@ -190,7 +206,7 @@ func supportBundleStatusCmd() *cobra.Command {
 			printField("Bundle ID:", id)
 			printField("Collection Status:", status.Phase)
 			fmt.Println()
-			if err := followCollection(ctx, client, job); err != nil {
+			if _, err := followCollection(ctx, client, job); err != nil {
 				if errors.Is(err, context.Canceled) {
 					fmt.Printf("Stopped watching - %s is still running\n", id)
 					return nil
@@ -218,7 +234,7 @@ func bundleIDArg(cmd *cobra.Command, args []string) error {
 
 // printStoredBundle reports a bundle whose collection Job is gone.
 func printStoredBundle(ctx context.Context, cmd *cobra.Command, id string, asJSON bool) error {
-	_, _, session, err := openManagerSession(ctx, cmd, supportbundle.OperationList)
+	_, _, session, err := openManagerSession(ctx, cmd, supportbundle.OperationList, 0)
 	if err != nil {
 		return fmt.Errorf("support bundle %s has no collection Job, and the bucket can't be checked: %w", id, err)
 	}
@@ -264,7 +280,7 @@ func supportBundleListCmd() *cobra.Command {
 			if err := supportbundle.SortEntries(nil, sortBy, order); err != nil {
 				return err
 			}
-			cr, client, session, err := openManagerSession(ctx, cmd, supportbundle.OperationList)
+			cr, client, session, err := openManagerSession(ctx, cmd, supportbundle.OperationList, 0)
 			if err != nil {
 				return err
 			}
@@ -321,9 +337,120 @@ func supportBundleListCmd() *cobra.Command {
 	return cmd
 }
 
+const defaultRetrieveTimeout = 2 * time.Hour
+
+func supportBundleRetrieveCmd() *cobra.Command {
+	var (
+		output  string
+		timeout time.Duration
+	)
+
+	cmd := &cobra.Command{
+		Use:   "retrieve <bundle-id|s3://location|latest>",
+		Short: "Download a support bundle to a local file",
+		Args:  bundleIDArg,
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			ids, directive := completeBundleIDs(cmd, args, toComplete)
+			if len(args) == 0 {
+				ids = append([]string{supportbundle.LatestRef}, ids...)
+			}
+			return ids, directive
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			if timeout < time.Minute {
+				return fmt.Errorf("--timeout must be at least 1m")
+			}
+			if output != "" {
+				if _, err := os.Lstat(output); err == nil {
+					return fmt.Errorf("%w: %s", supportbundle.ErrDestinationExists, output)
+				}
+			}
+			cr, client, session, err := openManagerSession(ctx, cmd, supportbundle.OperationRetrieve, timeout+5*time.Minute)
+			if err != nil {
+				return err
+			}
+			defer closeManagerSession(session)
+
+			bundle, err := session.Resolve(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			dest := output
+			if dest == "" {
+				dest = supportbundle.DefaultOutputName(bundle.Location)
+			}
+			// The collector's sha256 is only known while its Job still exists.
+			expectedSHA256, unverified := "", "retrieved by location - retrieve by bundle ID to verify it"
+			if id := bundle.ID(); id != "" {
+				status, err := supportbundle.DescribeCollection(ctx, client, cr, id)
+				switch {
+				case err != nil:
+					return err
+				case status == nil:
+					unverified = "the collection Job is gone"
+				case status.Result == nil || status.Result.Artifact == nil || status.Result.Artifact.Location != bundle.Location:
+					unverified = "the collection Job has no result for this archive"
+				default:
+					expectedSHA256 = status.Result.Artifact.SHA256
+				}
+			}
+			downloadCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			return downloadBundle(downloadCtx, session, bundle.ID(), bundle.Location, bundle.SizeBytes, dest, expectedSHA256, unverified)
+		},
+	}
+
+	cmd.Flags().StringVarP(&output, "output", "o", "", "Output file (default: the archive's name in the current directory)")
+	cmd.Flags().DurationVar(&timeout, "timeout", defaultRetrieveTimeout, "The download must finish within this time")
+
+	return cmd
+}
+
+// downloadBundle streams a bundle into dest, showing progress on a terminal.
+func downloadBundle(ctx context.Context, session *supportbundle.Session, id, location string, size int64, dest, expectedSHA256, unverified string) error {
+	fmt.Printf("Downloading %s (%s)\n", location, humanBytes(size))
+	var progress func(written, total int64)
+	if isTerminal(os.Stderr) {
+		lastPercent := int64(-1)
+		progress = func(written, total int64) {
+			if total <= 0 {
+				return
+			}
+			if percent := written * 100 / total; percent != lastPercent {
+				lastPercent = percent
+				fmt.Fprintf(os.Stderr, "\r  %s / %s (%d%%)", humanBytes(written), humanBytes(total), percent)
+			}
+		}
+	}
+	download, err := session.Retrieve(ctx, location, dest, expectedSHA256, progress)
+	if progress != nil {
+		fmt.Fprintln(os.Stderr)
+	}
+	if err != nil {
+		return err
+	}
+	check := "size checked, SHA256 not verified (" + unverified + ")"
+	if download.Verified {
+		check = "size and SHA256 verified"
+	}
+	printField("Bundle ID:", orDash(id))
+	printField("Saved To:", download.Path)
+	printField("Size:", fmt.Sprintf("%d bytes (%s)", download.Bytes, humanBytes(download.Bytes)))
+	printField("SHA256:", download.SHA256)
+	printField("Check:", check)
+	return nil
+}
+
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
 // openManagerSession discovers the instance and starts a manager Job for op.
 // The caller must close the session.
-func openManagerSession(ctx context.Context, cmd *cobra.Command, op supportbundle.Operation) (*v2.WeightsAndBiases, kubernetes.Interface, *supportbundle.Session, error) {
+func openManagerSession(ctx context.Context, cmd *cobra.Command, op supportbundle.Operation, lifetime time.Duration) (*v2.WeightsAndBiases, kubernetes.Interface, *supportbundle.Session, error) {
 	cr, err := discoverInstallation(ctx, cmd)
 	if err != nil {
 		return nil, nil, nil, err
@@ -333,7 +460,7 @@ func openManagerSession(ctx context.Context, cmd *cobra.Command, op supportbundl
 		return nil, nil, nil, err
 	}
 	executor := supportbundle.KubeExecutor{Config: config, Client: client}
-	session, err := supportbundle.OpenSession(ctx, client, executor, cr, op, func(msg string) {
+	session, err := supportbundle.OpenSession(ctx, client, executor, cr, op, lifetime, func(msg string) {
 		fmt.Fprintln(os.Stderr, "  "+msg)
 	})
 	if err != nil {
@@ -418,12 +545,12 @@ func discoverInstallation(ctx context.Context, cmd *cobra.Command) (*v2.WeightsA
 }
 
 // followCollection streams the collector's logs, waits for the Job, and prints Lumen's result.
-func followCollection(ctx context.Context, client kubernetes.Interface, job *batchv1.Job) error {
+func followCollection(ctx context.Context, client kubernetes.Interface, job *batchv1.Job) (*supportbundle.Result, error) {
 	pod, err := supportbundle.WaitForCollectorPod(ctx, client, job, func(reason string) {
 		fmt.Println("  waiting: " + reason)
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	container := supportbundle.CollectorContainer(job)
 	if pod != nil {
@@ -437,11 +564,11 @@ func followCollection(ctx context.Context, client kubernetes.Interface, job *bat
 
 	_, jobErr := supportbundle.Wait(ctx, client, job.Namespace, job.Name)
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
+	var result *supportbundle.Result
 	if pod, err = supportbundle.CollectorPod(ctx, client, job); err == nil && pod != nil {
-		result, err := supportbundle.PodResult(pod, container)
-		if err != nil {
+		if result, err = supportbundle.PodResult(pod, container); err != nil {
 			fmt.Printf("Could not read the collection result: %v\n", err)
 		} else if result != nil {
 			fmt.Println()
@@ -449,10 +576,10 @@ func followCollection(ctx context.Context, client kubernetes.Interface, job *bat
 		}
 	}
 	if jobErr != nil {
-		return jobErr
+		return nil, jobErr
 	}
 	fmt.Println("\nSupport bundle has been completed")
-	return nil
+	return result, nil
 }
 
 func printCollectionStatus(status *supportbundle.CollectionStatus) {

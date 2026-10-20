@@ -6,8 +6,10 @@ The operator installs a suspended CronJob, `<name>-support-bundle-collector`, fo
 
 ```bash
 wsm support-bundle create --wait     # collect; the Job name is the bundle ID
+wsm support-bundle create --retrieve # collect, then download it here
 wsm support-bundle status <id> -w    # follow a collection
 wsm support-bundle list              # stored bundles and running collections
+wsm support-bundle retrieve latest   # download the newest bundle
 ```
 
 See [`wsm support-bundle`](../reference/commands.md#wsm-support-bundle) for every flag.
@@ -16,11 +18,13 @@ See [`wsm support-bundle`](../reference/commands.md#wsm-support-bundle) for ever
 
 `create` starts a collection Job from the template.
 
-Commands that read the bucket (`list`) run one short-lived **management Job**, also copied from the template:
+Commands that read the bucket (`list`, `retrieve`) run one short-lived **management Job**, also copied from the template:
 
 - It keeps the template's image, ServiceAccount, bucket credentials, pull secrets, scheduling, and security settings. Its command becomes a bounded `sleep`, and wsm runs Lumen's `bundle-manager` in it over `kubectl exec`.
 - It's named `support-bundle-<operation>-<hex>` and labelled `app.kubernetes.io/component=support-bundle-manager`, so it never counts as a collection.
-- wsm deletes it when the command ends, including on Ctrl+C. If wsm is killed, the `sleep`, a 16-minute Job deadline, and a 5-minute TTL clean it up.
+- Downloads stream over exec into a temp file, so archive bytes never pass through pod logs. There's no resume; a failed download leaves nothing behind.
+- Its `sleep` is 15 minutes, or `retrieve --timeout` (2h by default) plus 5 minutes for downloads. A download still running when it ends fails, so raise `--timeout` for large bundles on slow links.
+- wsm deletes it when the command ends, including on Ctrl+C. If wsm is killed, the `sleep`, a Job deadline six minutes longer, and a 5-minute TTL clean it up.
 
 The management Job runs as the collector's ServiceAccount, but wsm creates it and execs into it with your kubeconfig credentials. Those need, in the instance namespace, `get` and `list` on `weightsandbiases`, `get` on CronJobs, `get`, `list`, `create` and `delete` on Jobs, `get` and `list` on pods, `create` on `pods/exec`, and `list` on events.
 

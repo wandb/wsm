@@ -103,17 +103,22 @@ func TestResolve(t *testing.T) {
 		t.Errorf("ambiguous ID: err = %v", err)
 	}
 
-	executor := &fakeExecutor{stdout: listOutput}
-	bundle, err = fakeSession(executor).Resolve(ctx, "s3://bucket/agent/service-bundles/support-bundle-2026-10-19T15_00_00Z.tar.gz")
-	if err != nil || bundle.ID() != "sb-test" {
-		t.Errorf("by location: %+v, %v (the location must map back to its ID)", bundle, err)
+	location := "s3://bucket/agent/service-bundles/support-bundle-2026-10-19T15_00_00Z.tar.gz"
+	executor := &fakeExecutor{stdout: `{"size":7,"etag":"abc"}`}
+	bundle, err = fakeSession(executor).Resolve(ctx, location)
+	if err != nil || bundle.Location != location || bundle.SizeBytes != 7 {
+		t.Errorf("by location: %+v, %v", bundle, err)
 	}
-	if got := executor.commands[0]; !reflect.DeepEqual(got, []string{"bundle-manager", "list"}) {
-		t.Errorf("location lookup must list everything, ran %v", got)
+	if got := executor.commands[0]; !reflect.DeepEqual(got, []string{"bundle-manager", "retrieve", "--location", location, "--stat"}) {
+		t.Errorf("location lookup must stat the object, not list the bucket, ran %v", got)
 	}
 
-	if _, err := fakeSession(&fakeExecutor{stdout: listOutput}).Resolve(ctx, "s3://bucket/agent/service-bundles/missing.tar.gz"); !errors.Is(err, ErrBundleNotFound) {
-		t.Errorf("unknown location: err = %v", err)
+	bundle, err = fakeSession(&fakeExecutor{stdout: listOutput}).Resolve(ctx, LatestRef)
+	if err != nil || bundle.ID() != "sb-test" {
+		t.Errorf("latest: %+v, %v", bundle, err)
+	}
+	if _, err := fakeSession(&fakeExecutor{stdout: none}).Resolve(ctx, LatestRef); !errors.Is(err, ErrBundleNotFound) {
+		t.Errorf("latest of empty bucket: err = %v", err)
 	}
 
 	if _, err := fakeSession(&fakeExecutor{}).Resolve(ctx, "--location=x"); err == nil {

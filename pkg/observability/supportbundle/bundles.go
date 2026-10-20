@@ -88,22 +88,30 @@ func StoredStatus(id string, bundle Bundle) *CollectionStatus {
 // ErrBundleNotFound means no stored bundle matched an ID or location.
 var ErrBundleNotFound = errors.New("support bundle not found")
 
+// LatestRef resolves to the most recently uploaded bundle.
+const LatestRef = "latest"
+
 // IsLocation reports whether ref is an object URI rather than a bundle ID.
 func IsLocation(ref string) bool { return strings.HasPrefix(ref, "s3://") }
 
-// Resolve finds the one stored bundle for an ID or an exact s3:// location.
+// Resolve finds the stored bundle for an ID, an exact s3:// location, or "latest".
 func (s *Session) Resolve(ctx context.Context, ref string) (Bundle, error) {
 	if IsLocation(ref) {
+		size, err := s.Stat(ctx, ref)
+		if err != nil {
+			return Bundle{}, err
+		}
+		return Bundle{Location: ref, SizeBytes: size}, nil
+	}
+	if ref == LatestRef {
 		result, err := s.List(ctx, nil)
 		if err != nil {
 			return Bundle{}, err
 		}
-		for _, b := range result.Bundles {
-			if b.Location == ref {
-				return b, nil
-			}
+		if len(result.Bundles) == 0 {
+			return Bundle{}, fmt.Errorf("%w: the bucket has no support bundles", ErrBundleNotFound)
 		}
-		return Bundle{}, fmt.Errorf("%w: no support bundle stored at %s", ErrBundleNotFound, ref)
+		return slices.MaxFunc(result.Bundles, func(a, b Bundle) int { return strings.Compare(a.LastModified, b.LastModified) }), nil
 	}
 	if !bundleIDPattern.MatchString(ref) {
 		return Bundle{}, fmt.Errorf("%q is neither a bundle ID nor an s3:// location", ref)
@@ -126,14 +134,17 @@ func (s *Session) Resolve(ctx context.Context, ref string) (Bundle, error) {
 	}
 }
 
-// OpenSession checks the template and starts a manager Job for op. The caller
-// must Close the session.
-func OpenSession(ctx context.Context, client kubernetes.Interface, executor Executor, cr *v2.WeightsAndBiases, op Operation, progress func(string)) (*Session, error) {
+// OpenSession checks the template and starts a manager Job for op that lives
+// for lifetime (0: 15m). The caller must Close the session.
+func OpenSession(ctx context.Context, client kubernetes.Interface, executor Executor, cr *v2.WeightsAndBiases, op Operation, lifetime time.Duration, progress func(string)) (*Session, error) {
 	template, err := Template(ctx, client, cr)
 	if err != nil {
 		return nil, err
 	}
-	return StartSession(ctx, client, executor, cr, template, op, SessionOptions{Lifetime: managerLifetime, Progress: progress})
+	if lifetime == 0 {
+		lifetime = managerLifetime
+	}
+	return StartSession(ctx, client, executor, cr, template, op, SessionOptions{Lifetime: lifetime, Progress: progress})
 }
 
 // Entry is one row of `wsm support-bundle list`: a stored bundle, or a

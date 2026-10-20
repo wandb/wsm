@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
@@ -15,6 +17,7 @@ import (
 	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/observability/supportbundle"
 	batchv1 "k8s.io/api/batch/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -54,6 +57,7 @@ func SupportBundleCmd() *cobra.Command {
 
 	cmd.AddCommand(supportBundleCreateCmd())
 	cmd.AddCommand(supportBundleCancelCmd())
+	cmd.AddCommand(supportBundleStatusCmd())
 
 	return cmd
 }
@@ -134,6 +138,80 @@ func supportBundleCancelCmd() *cobra.Command {
 	}
 }
 
+func supportBundleStatusCmd() *cobra.Command {
+	var watch, asJSON bool
+
+	cmd := &cobra.Command{
+		Use:   "status <bundle-id>",
+		Short: "Show a support bundle's collection status",
+		Args:  bundleIDArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			cr, err := discoverInstallation(ctx, cmd)
+			if err != nil {
+				return err
+			}
+			_, client, err := kubectl.GetClientset()
+			if err != nil {
+				return err
+			}
+
+			id := args[0]
+			status, err := supportbundle.DescribeCollection(ctx, client, cr, id)
+			if err != nil {
+				return err
+			}
+			if status == nil {
+				return fmt.Errorf("support bundle %s not found in namespace: %s", id, cr.Namespace)
+			}
+
+			if asJSON {
+				out, err := json.MarshalIndent(status, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(out))
+				return nil
+			}
+			if !watch || !status.Running() {
+				printCollectionStatus(status)
+				return nil
+			}
+
+			job, err := client.BatchV1().Jobs(cr.Namespace).Get(ctx, id, metav1.GetOptions{})
+			if err != nil {
+				return err
+			}
+			printField("Bundle ID:", id)
+			printField("Collection Status:", status.Phase)
+			fmt.Println()
+			if err := followCollection(ctx, client, job); err != nil {
+				if errors.Is(err, context.Canceled) {
+					fmt.Printf("Stopped watching - %s is still running\n", id)
+					return nil
+				}
+				return err
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "Stream the collector logs until the collection finishes")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Print the status as JSON")
+	cmd.MarkFlagsMutuallyExclusive("watch", "json")
+
+	return cmd
+}
+
+// bundleIDArg requires one bundle ID and points at `list` when it's missing.
+func bundleIDArg(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return errors.New("bundle ID is required - please run `wsm support-bundle list` to retrieve list of bundles")
+	}
+	return cobra.ExactArgs(1)(cmd, args)
+}
+
 func setSupportBundleEnabled(cmd *cobra.Command, enabled bool) error {
 	ctx := context.Background()
 	cr, err := discoverInstallation(ctx, cmd)
@@ -195,7 +273,35 @@ func followCollection(ctx context.Context, client kubernetes.Interface, job *bat
 	return nil
 }
 
+func printCollectionStatus(status *supportbundle.CollectionStatus) {
+	printField("Bundle ID:", status.ID)
+	phase := status.Phase
+	if status.Message != "" {
+		phase += " (" + status.Message + ")"
+	}
+	printField("Collection Status:", phase)
+	if status.Started != nil {
+		printField("Started:", status.Started.Local().Format(time.DateTime))
+	}
+	if status.Finished != nil {
+		printField("Finished:", status.Finished.Local().Format(time.DateTime))
+	}
+	if status.ResultError != "" {
+		printField("Result:", status.ResultError)
+	}
+	if status.Result != nil {
+		printResultDetails(status.Result)
+	}
+}
+
+func printField(label, value string) { fmt.Printf("%-23s%s\n", label, value) }
+
 func printBundleResult(id string, result *supportbundle.Result) {
+	printField("Bundle ID:", id)
+	printResultDetails(result)
+}
+
+func printResultDetails(result *supportbundle.Result) {
 	status := "Complete"
 	if result.Failure != nil {
 		status = "Failed"
@@ -203,16 +309,14 @@ func printBundleResult(id string, result *supportbundle.Result) {
 		status = "Partial"
 	}
 
-	field := func(label, value string) { fmt.Printf("%-23s%s\n", label, value) }
-	field("Bundle ID:", id)
 	if result.Artifact != nil {
-		field("Bundle Location:", result.Artifact.Location)
-		field("Size:", fmt.Sprintf("%d bytes (%s)", result.Artifact.SizeBytes, humanBytes(result.Artifact.SizeBytes)))
-		field("SHA256:", result.Artifact.SHA256)
+		printField("Bundle Location:", result.Artifact.Location)
+		printField("Size:", fmt.Sprintf("%d bytes (%s)", result.Artifact.SizeBytes, humanBytes(result.Artifact.SizeBytes)))
+		printField("SHA256:", result.Artifact.SHA256)
 	}
-	field("Bundle Overall Status:", status)
+	printField("Bundle Overall Status:", status)
 	if result.Failure != nil {
-		field("Failure:", fmt.Sprintf("%s: %s %s", result.Failure.Stage, result.Failure.Reason, result.Failure.Message))
+		printField("Failure:", fmt.Sprintf("%s: %s %s", result.Failure.Stage, result.Failure.Reason, result.Failure.Message))
 	}
 
 	if len(result.Collectors) == 0 {

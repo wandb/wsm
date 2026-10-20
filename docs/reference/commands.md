@@ -638,6 +638,19 @@ Stops a running collection by deleting its Job and pod. Only Jobs labelled as th
 wsm support-bundle cancel <bundle-id>
 ```
 
+### `wsm support-bundle status`
+
+Shows a collection's status (`Pending`, `Running`, `Succeeded`, `Failed`), its start and finish times, and Lumen's result once it has one. Collection Jobs expire 24h after they finish and are removed when support bundles are disabled.
+
+```bash
+wsm support-bundle status <bundle-id> [--watch | --json]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--watch`, `-w` | `false` | If the collection is still running, stream its logs and print the result when it finishes, like `create --wait` |
+| `--json` | `false` | Print the status as JSON |
+
 ### `wsm support-bundle --enabled=true|false`
 
 Sets `spec.supportBundle.enabled` on the CR. `--enabled` alone means `true`. When disabled, the operator waits for a running collection, then removes the collector CronJob, its RBAC, and collection Jobs. Bundles already uploaded to the bucket are kept.

@@ -80,7 +80,10 @@ what the in-cluster webhook would emit after upgrade.`,
 			}
 
 			fmt.Println("\nRunning preflight checks against the converted v2 CR...")
-			runs := preflight.RunChecks(ctx, v2CR, nil)
+			runs, err := runPreflight(ctx, v2CR, preflight.ExecOptions{})
+			if err != nil {
+				return err
+			}
 			printPreflightResults(runs)
 			return preflight.Err(runs)
 		},

@@ -130,3 +130,70 @@ func TestSecretResolverWithoutNamespace(t *testing.T) {
 		t.Errorf("secret ref with no namespace: err = %v, want a metadata.namespace error", err)
 	}
 }
+
+func fakeCheck(name string, typ oppreflight.CheckType, ran *[]string, reqs ...oppreflight.ResourceReq) oppreflight.Check {
+	return oppreflight.Check{
+		Name:         name,
+		Type:         typ,
+		ResourceReqs: reqs,
+		NewSpec:      func() any { return &map[string]any{} },
+		Run: func(context.Context, any, oppreflight.ValueResolver) oppreflight.Result {
+			*ran = append(*ran, name)
+			return oppreflight.Result{Check: name, Outcome: oppreflight.OutcomePass}
+		},
+	}
+}
+
+func TestExecuteChecksOfflineRunsOnlyStatic(t *testing.T) {
+	var ran []string
+	plan := []PlannedRun{
+		{Check: fakeCheck("static", oppreflight.TypeStatic, &ran, oppreflight.ReqReadOnly), FieldPath: "spec.a", value: map[string]any{}},
+		{Check: fakeCheck("cluster", oppreflight.TypeCluster, &ran, oppreflight.ReqReadOnly), FieldPath: "spec.b", value: map[string]any{}},
+		{Check: fakeCheck("conn", oppreflight.TypeConnection, &ran, oppreflight.ReqReadOnly), FieldPath: "spec.c", value: map[string]any{}},
+	}
+	cr := &unstructured.Unstructured{Object: map[string]any{}}
+
+	runs := ExecuteChecks(context.Background(), cr, plan, ExecOptions{Offline: true})
+
+	if len(ran) != 1 || ran[0] != "static" {
+		t.Fatalf("ran = %v, want only [static]", ran)
+	}
+	want := []oppreflight.Outcome{oppreflight.OutcomePass, oppreflight.OutcomeSkipped, oppreflight.OutcomeSkipped}
+	for i, r := range runs {
+		if r.Result.Outcome != want[i] {
+			t.Errorf("%s outcome = %q, want %q", r.Result.Check, r.Result.Outcome, want[i])
+		}
+	}
+}
+
+func TestRequiringConfirmation(t *testing.T) {
+	var ran []string
+	create := fakeCheck("createsPods", oppreflight.TypeConnection, &ran, oppreflight.ReqReadWrite, oppreflight.ReqResourceCreate)
+	plan := []PlannedRun{
+		{Check: fakeCheck("readOnly", oppreflight.TypeConnection, &ran, oppreflight.ReqReadOnly), FieldPath: "spec.a"},
+		{Check: create, FieldPath: "spec.objectStore.default.externalObjectStore"},
+		{Check: create, FieldPath: "spec.objectStore.other.externalObjectStore"},
+	}
+
+	got := RequiringConfirmation(plan, ExecOptions{})
+	if len(got) != 1 || got[0].Name != "createsPods" {
+		t.Errorf("online: got %v, want one createsPods", got)
+	}
+	// Offline never runs non-static checks, so there is nothing to confirm.
+	if got := RequiringConfirmation(plan, ExecOptions{Offline: true}); len(got) != 0 {
+		t.Errorf("offline: got %v, want none", got)
+	}
+}
+
+func TestOfflineResolverRejectsSecretRefs(t *testing.T) {
+	if v, err := offlineResolver(context.Background(), v2.ValueOrSecret{Value: "literal"}); err != nil || v != "literal" {
+		t.Errorf("literal = (%q, %v), want (literal, nil)", v, err)
+	}
+	ref := v2.ValueOrSecret{ValueFrom: &v2.SecretValueSource{SecretKeyRef: &corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: "mysql"},
+		Key:                  "password",
+	}}}
+	if _, err := offlineResolver(context.Background(), ref); err == nil || !strings.Contains(err.Error(), "offline") {
+		t.Errorf("secret ref offline: err = %v, want an offline error", err)
+	}
+}

@@ -82,6 +82,11 @@ func BuildValues(t Config) map[string]interface{} {
 		values["crds"] = crds
 	}
 
+	// full and forward keep the chart default (enabled).
+	if t.Mode == ModeOff {
+		values["logAgent"] = logAgentOff()
+	}
+
 	if t.Mode == ModeForward {
 		otlp := map[string]interface{}{"endpoint": t.ForwardEndpoint}
 		if t.ForwardProtocol != "" {
@@ -111,6 +116,10 @@ func crdToggles(mode string) map[string]interface{} {
 	return nil
 }
 
+func logAgentOff() map[string]interface{} {
+	return map[string]interface{}{"enabled": false}
+}
+
 // PrepValues is the base values with telemetry off and its operators disabled
 // but the CRDs enabled — the CRD-preparation upgrade that runs before the stack
 // is turned on.
@@ -119,7 +128,7 @@ func PrepValues(base map[string]interface{}, mode string) map[string]interface{}
 	for k, v := range base {
 		prep[k] = v
 	}
-	telemetry := map[string]interface{}{"mode": ModeOff}
+	telemetry := map[string]interface{}{"mode": ModeOff, "logAgent": logAgentOff()}
 	if crds := crdToggles(mode); crds != nil {
 		telemetry["crds"] = crds
 	}

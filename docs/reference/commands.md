@@ -685,33 +685,53 @@ The values are stamped in at build time (GoReleaser on tagged releases; `make bu
 
 ### `wsm preflight`
 
-Runs the operator's preflight checks client-side against a v2 `WeightsAndBiases` CR file, before you apply it. Which checks run comes from the operator's preflight registry (`github.com/wandb/operator/pkg/preflight`): each registered CR field present in the file triggers its check, so new upstream checks arrive with a dependency bump. Today only `spec.mysql.<instance>.externalMysql` is checked — it connects and authenticates with the configured host, port, database, credentials and TLS settings. A CR with no matching field prints `No preflight checks apply to this CR.`
+Runs the operator's preflight checks client-side against a v2 `WeightsAndBiases` CR file, before you apply it. Which checks run comes from the operator's preflight registry (`github.com/wandb/operator/pkg/preflight`): each
+registered CR field present in the file triggers its check, so new upstream checks arrive with a dependency bump. A CR with no matching field prints `No preflight checks apply to this CR.`
 
-```bash
-wsm preflight <cr-file> [--context <kubeconfig-context>] [--wandb-namespace <ns>]
-```
+Each check has a **type** and the **access** it needs:
+
+| Type | What it touches |
+  |------|-----------------|
+| `static` | Only the CR itself (no cluster, no network) |
+| `cluster` | The Kubernetes API of `--context` |
+| `connection` | An external service the CR points to (database, cache, bucket) |
+
+Access is one or more of `readOnly`, `readWrite` and `resourceCreate`. Today the registry contains `externalMysqlCheck` (`spec.mysql.<instance>.externalMysql`, type `connection`, access `readOnly`). It connects and authenticates
+with the configured host, port, database, credentials and TLS settings.
+
+  ```bash
+  wsm preflight <cr-file> [--context <kubeconfig-context>] [--wandb-namespace <ns>] [--offline]
+  ```
 
 | Flag | Default | Description |
-|------|---------|-------------|
+  |------|---------|-------------|
 | `--context` | current context | Kubeconfig context used to read Secret-backed values (`valueFrom.secretKeyRef`) |
 | `--wandb-namespace` | the CR's `metadata.namespace` | Namespace the CR will be deployed to; overrides `metadata.namespace` and is where referenced Secrets are read |
+| `--offline` | `false` | Only run `static` checks; `cluster` and `connection` checks are reported `SKIPPED` and neither the cluster nor external services are contacted. Secret-backed values are not read, so a static check that
+  needs one reports `UNKNOWN` |
 
-Each result prints as `[OUTCOME] <check> (<field path>): <message>`, where the outcome is `PASS`, `FAIL`, `UNKNOWN` (inconclusive — e.g. a referenced Secret can't be read) or `SKIPPED`. The command exits non-zero if any check fails **or** is unknown.
+#### What happens when you run it
+
+1. **Plan.** Before anything runs, `wsm` lists every check found as `<check> (<field path>) [type: <type>, access: <access>]`. With `--offline` the header notes that only static checks will run.
+2. **Confirmation.** If any check that will actually run needs `resourceCreate` access, `wsm` lists those checks once and asks `Run them?`. Declining aborts the whole run and no check is executed, including read-only ones. Checks
+   skipped by `--offline` or by the `skipPreflights` annotation never trigger the prompt.
+3. **Results.** Each result prints as `[OUTCOME] <check> (<field path>): <message>`, where the outcome is `PASS`, `FAIL`, `UNKNOWN` (inconclusive, e.g. a referenced Secret can't be read) or `SKIPPED`. The command exits non-zero if
+   any check fails **or** is unknown.
+
+With today's registry, `--offline` runs no checks: `externalMysqlCheck` is a `connection` check, so it is reported `SKIPPED`. `--offline` is still useful for seeing which checks a CR triggers without reaching the cluster.
 
 To skip checks, list their names (comma-separated) in the CR's `skipPreflights` annotation:
 
-```yaml
-metadata:
-  annotations:
-    skipPreflights: externalMysqlCheck
-```
+  ```yaml
+  metadata:
+    annotations:
+      skipPreflights: externalMysqlCheck
+  ```
 
-> **Note:** checks run from the machine running `wsm`, not from inside the cluster. An endpoint reachable only from the cluster network (`*.svc`, a private VPC) can `FAIL` here even though W&B pods can reach it. The operator runs the same checks in-cluster during reconcile and reports them in the CR's `status.preflights`.
+> **Note:** checks run from the machine running `wsm`, not from inside the cluster. An endpoint reachable only from the cluster network (`*.svc`, a private VPC) can `FAIL` here even though W&B pods can reach it. The operator runs
+the same checks in-cluster during reconcile and reports them in the CR's `status.preflights`.
 
 An example CR is at `hack/preflight-example.yaml`.
-
----
-
 ### `wsm convert-v2`
 
 Diffs the live v1 CR against the v2 CR the conversion webhook would produce, then runs [`wsm preflight`](#wsm-preflight)'s checks against the converted v2 CR.

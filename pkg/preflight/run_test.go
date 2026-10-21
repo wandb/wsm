@@ -170,18 +170,38 @@ func TestRequiringConfirmation(t *testing.T) {
 	var ran []string
 	create := fakeCheck("createsPods", oppreflight.TypeConnection, &ran, oppreflight.ReqReadWrite, oppreflight.ReqResourceCreate)
 	plan := []PlannedRun{
-		{Check: fakeCheck("readOnly", oppreflight.TypeConnection, &ran, oppreflight.ReqReadOnly), FieldPath: "spec.a"},
-		{Check: create, FieldPath: "spec.objectStore.default.externalObjectStore"},
-		{Check: create, FieldPath: "spec.objectStore.other.externalObjectStore"},
+		{Check: fakeCheck("readOnly", oppreflight.TypeConnection, &ran, oppreflight.ReqReadOnly), FieldPath: "spec.a", value: map[string]any{}},
+		{Check: create, FieldPath: "spec.objectStore.default.externalObjectStore", value: map[string]any{}},
+		{Check: create, FieldPath: "spec.objectStore.other.externalObjectStore", value: map[string]any{}},
 	}
+	cr := &unstructured.Unstructured{Object: map[string]any{}}
 
-	got := RequiringConfirmation(plan, ExecOptions{})
+	got := RequiringConfirmation(cr, plan, ExecOptions{})
 	if len(got) != 1 || got[0].Name != "createsPods" {
 		t.Errorf("online: got %v, want one createsPods", got)
 	}
 	// Offline never runs non-static checks, so there is nothing to confirm.
-	if got := RequiringConfirmation(plan, ExecOptions{Offline: true}); len(got) != 0 {
+	if got := RequiringConfirmation(cr, plan, ExecOptions{Offline: true}); len(got) != 0 {
 		t.Errorf("offline: got %v, want none", got)
+	}
+
+	// A skipped create check needs no confirmation, and the runnable check beside it still runs.
+	skipped := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]any{oppreflight.SkipPreflightsAnnotation: "createsPods"},
+		},
+	}}
+	if got := RequiringConfirmation(skipped, plan, ExecOptions{}); len(got) != 0 {
+		t.Errorf("skipped: got %v, want none", got)
+	}
+	runs := ExecuteChecks(context.Background(), skipped, plan, ExecOptions{})
+	if len(ran) != 1 || ran[0] != "readOnly" {
+		t.Errorf("skipped: ran = %v, want only [readOnly]", ran)
+	}
+	for _, r := range runs[1:] {
+		if r.Result.Outcome != oppreflight.OutcomeSkipped {
+			t.Errorf("%s (%s) outcome = %q, want skipped", r.Result.Check, r.FieldPath, r.Result.Outcome)
+		}
 	}
 }
 

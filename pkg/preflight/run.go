@@ -81,11 +81,12 @@ func NeedsConfirmation(c oppreflight.Check) bool {
 
 // RequiringConfirmation returns the distinct checks in plan that would run under
 // opts and need confirmation, in plan order.
-func RequiringConfirmation(plan []PlannedRun, opts ExecOptions) []oppreflight.Check {
+func RequiringConfirmation(cr *unstructured.Unstructured, plan []PlannedRun, opts ExecOptions) []oppreflight.Check {
+	skip := skipList(cr)
 	seen := map[string]bool{}
 	var out []oppreflight.Check
 	for _, p := range plan {
-		if seen[p.Check.Name] || !willRun(p.Check, opts) || !NeedsConfirmation(p.Check) {
+		if seen[p.Check.Name] || skip[p.Check.Name] || !willRun(p.Check, opts) || !NeedsConfirmation(p.Check) {
 			continue
 		}
 		seen[p.Check.Name] = true
@@ -109,7 +110,7 @@ func ExecuteChecks(ctx context.Context, cr *unstructured.Unstructured, plan []Pl
 	default:
 		resolve = SecretResolver(cr.GetNamespace())
 	}
-	skip := oppreflight.ParseSkipList(cr.GetAnnotations()[oppreflight.SkipPreflightsAnnotation])
+	skip := skipList(cr)
 
 	runs := make([]CheckRun, 0, len(plan))
 	for _, p := range plan {
@@ -247,4 +248,11 @@ func decodeInto(value, spec any) error {
 		return err
 	}
 	return json.Unmarshal(raw, spec)
+}
+
+// skipList is the CR's skipPreflights annotation parsed into check names; both
+// RequiringConfirmation and ExecuteChecks use it so a skipped check is never
+// confirmed nor run.
+func skipList(cr *unstructured.Unstructured) map[string]bool {
+	return oppreflight.ParseSkipList(cr.GetAnnotations()[oppreflight.SkipPreflightsAnnotation])
 }

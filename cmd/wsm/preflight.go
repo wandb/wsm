@@ -90,7 +90,7 @@ func runPreflight(ctx context.Context, cr *unstructured.Unstructured, opts prefl
 	plan := preflight.PlanChecks(cr)
 	printPreflightPlan(plan, opts)
 
-	if needs := preflight.RequiringConfirmation(plan, opts); len(needs) > 0 {
+	if needs := preflight.RequiringConfirmation(cr, plan, opts); len(needs) > 0 {
 		fmt.Println("These checks create resources in the cluster:")
 		for _, c := range needs {
 			fmt.Printf("  %s (%s)\n", c.Name, joinResourceReqs(c.ResourceReqs))

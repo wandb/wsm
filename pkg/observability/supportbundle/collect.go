@@ -2,10 +2,9 @@ package supportbundle
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,11 +39,11 @@ func selectorLabels(cr *v2.WeightsAndBiases) map[string]string {
 // Template returns the operator's collector CronJob for a CR, or why it can't be used.
 func Template(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndBiases) (*batchv1.CronJob, error) {
 	if enabled := cr.Spec.SupportBundle.Enabled; enabled == nil || !*enabled {
-		return nil, fmt.Errorf("support bundles are disabled on namespace: %s and instance: %s; run `wsm support-bundle --enabled=true`", cr.Namespace, cr.Name)
+		return nil, fmt.Errorf("support bundles are disabled on namespace: %s and instance: %s - run `wsm support-bundle --enabled=true`", cr.Namespace, cr.Name)
 	}
 	status := cr.Status.SupportBundle
 	if status == nil {
-		return nil, fmt.Errorf("WeightsAndBiases namespace: %s and instance: %s reports no support-bundle status; the operator predates support bundles or hasn't reconciled yet", cr.Namespace, cr.Name)
+		return nil, fmt.Errorf("WeightsAndBiases namespace: %s and instance: %s reports no support-bundle status - the operator predates support bundles or hasn't reconciled yet", cr.Namespace, cr.Name)
 	}
 	if !status.Ready || status.CronJob == "" {
 		return nil, fmt.Errorf("the support-bundle template for namespace: %s and instance: %s is not ready yet", cr.Namespace, cr.Name)
@@ -62,20 +61,33 @@ func Template(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAn
 	return cronJob, nil
 }
 
-// Running returns the name of an unfinished collection Job for a CR, or "".
-func Running(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndBiases) (string, error) {
+// Collections lists the collection Jobs for a CR, finished or not.
+func Collections(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndBiases) ([]batchv1.Job, error) {
 	jobs, err := client.BatchV1().Jobs(cr.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labels.SelectorFromSet(selectorLabels(cr)).String(),
 	})
 	if err != nil {
-		return "", fmt.Errorf("list support-bundle Jobs in %s: %w", cr.Namespace, err)
+		return nil, fmt.Errorf("list support-bundle Jobs in %s: %w", cr.Namespace, err)
 	}
-	for _, job := range jobs.Items {
-		if !jobFinished(&job) {
-			return job.Name, nil
-		}
+	return jobs.Items, nil
+}
+
+// RunningCollections returns the unfinished collection Jobs for a CR.
+func RunningCollections(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndBiases) ([]batchv1.Job, error) {
+	jobs, err := Collections(ctx, client, cr)
+	if err != nil {
+		return nil, err
 	}
-	return "", nil
+	return slices.DeleteFunc(jobs, func(job batchv1.Job) bool { return jobFinished(&job) }), nil
+}
+
+// Running returns the name of an unfinished collection Job for a CR, or "".
+func Running(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndBiases) (string, error) {
+	jobs, err := RunningCollections(ctx, client, cr)
+	if err != nil || len(jobs) == 0 {
+		return "", err
+	}
+	return jobs[0].Name, nil
 }
 
 // NewCollectionJob builds a Job from the collector template the way
@@ -126,13 +138,13 @@ func Create(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndB
 		return nil, err
 	}
 	if running != "" {
-		return nil, fmt.Errorf("support bundle %s is still collecting; wait for it to finish", running)
+		return nil, fmt.Errorf("support bundle %s is still collecting - wait for it to finish", running)
 	}
-	suffix := make([]byte, 3)
-	if _, err := rand.Read(suffix); err != nil {
-		return nil, fmt.Errorf("generate bundle ID: %w", err)
+	suffix, err := NewSuffix()
+	if err != nil {
+		return nil, err
 	}
-	job, err := NewCollectionJob(cronJob, "support-bundle-"+hex.EncodeToString(suffix), opts)
+	job, err := NewCollectionJob(cronJob, "support-bundle-"+suffix, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -150,21 +162,19 @@ func Create(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndB
 	}
 	propagation := metav1.DeletePropagationBackground
 	if err := client.BatchV1().Jobs(cr.Namespace).Delete(ctx, created.Name, metav1.DeleteOptions{PropagationPolicy: &propagation}); err != nil && !apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("support bundle %s started at the same time and is still collecting, and the duplicate %s couldn't be removed; run `wsm support-bundle cancel %s`: %w", winner, created.Name, created.Name, err)
+		return nil, fmt.Errorf("support bundle %s started at the same time and is still collecting, and the duplicate %s couldn't be removed - run `wsm support-bundle cancel %s`: %w", winner, created.Name, created.Name, err)
 	}
-	return nil, fmt.Errorf("support bundle %s started at the same time and is still collecting; wait for it to finish", winner)
+	return nil, fmt.Errorf("support bundle %s started at the same time and is still collecting - wait for it to finish", winner)
 }
 
 // olderCollection returns another unfinished collection created before job, or "".
 func olderCollection(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndBiases, job *batchv1.Job) (string, error) {
-	jobs, err := client.BatchV1().Jobs(cr.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: labels.SelectorFromSet(selectorLabels(cr)).String(),
-	})
+	jobs, err := RunningCollections(ctx, client, cr)
 	if err != nil {
-		return "", fmt.Errorf("list support-bundle Jobs in %s: %w", cr.Namespace, err)
+		return "", err
 	}
-	for _, other := range jobs.Items {
-		if other.Name == job.Name || jobFinished(&other) {
+	for _, other := range jobs {
+		if other.Name == job.Name {
 			continue
 		}
 		created, mine := other.CreationTimestamp.Time, job.CreationTimestamp.Time
@@ -181,15 +191,12 @@ func Cancel(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndB
 	if id == "" {
 		return false, fmt.Errorf("a support bundle ID is required")
 	}
-	job, err := client.BatchV1().Jobs(cr.Namespace).Get(ctx, id, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return false, fmt.Errorf("support bundle %s not found in namespace: %s", id, cr.Namespace)
-	}
+	job, err := collectionJob(ctx, client, cr, id)
 	if err != nil {
-		return false, fmt.Errorf("get support bundle %s: %w", id, err)
+		return false, err
 	}
-	if !labels.SelectorFromSet(selectorLabels(cr)).Matches(labels.Set(job.Labels)) {
-		return false, fmt.Errorf("job %s is not a support bundle for namespace: %s and instance: %s", id, cr.Namespace, cr.Name)
+	if job == nil {
+		return false, fmt.Errorf("support bundle %s not found in namespace: %s", id, cr.Namespace)
 	}
 	if jobFinished(job) {
 		return false, nil
@@ -199,6 +206,21 @@ func Cancel(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndB
 		return false, fmt.Errorf("cancel support bundle %s: %w", id, err)
 	}
 	return true, nil
+}
+
+// collectionJob returns the collection Job for a bundle ID, or nil if it's gone.
+func collectionJob(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndBiases, id string) (*batchv1.Job, error) {
+	job, err := client.BatchV1().Jobs(cr.Namespace).Get(ctx, id, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get support bundle %s: %w", id, err)
+	}
+	if !labels.SelectorFromSet(selectorLabels(cr)).Matches(labels.Set(job.Labels)) {
+		return nil, fmt.Errorf("job %s is not a support bundle for namespace: %s and instance: %s", id, cr.Namespace, cr.Name)
+	}
+	return job, nil
 }
 
 // Wait polls a collection Job until it finishes. The template's deadline bounds it.

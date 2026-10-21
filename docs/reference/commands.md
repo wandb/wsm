@@ -621,12 +621,13 @@ All subcommands share these flags:
 Starts a collection with the operator's `full` preset and prints the bundle ID, which is the Job name (`support-bundle-<hex>`). Only one collection runs at a time per instance; `create` refuses while one is still running, and if two `create`s race, the newer Job deletes itself. Fails if support bundles are disabled or the operator hasn't reported the template ready.
 
 ```bash
-wsm support-bundle create [--wait]
+wsm support-bundle create [--wait | --retrieve]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--wait` | `false` | Stream the collector's logs, then print Lumen's result: bundle location, size, sha256, and each collector's outcome (`collected`, `partial`, `failed`). Ctrl+C stops following but leaves the collection running |
+| `--retrieve` | `false` | Implies `--wait`, then downloads the bundle to the current directory with its SHA256 verified, like `retrieve` with its default `--timeout`. For longer downloads, run `retrieve <id> --timeout` instead |
 
 The collection is an ordinary Job (labelled `weightsandbiases.apps.wandb.com/component=support-bundle`), so its logs are also visible with `kubectl logs job/<id>` and in Watchtower's Jobs tab. Lumen logs one line per step (plan, redaction, upload); per-collector outcomes only appear in the final result.
 
@@ -637,6 +638,59 @@ Stops a running collection by deleting its Job and pod. Only Jobs labelled as th
 ```bash
 wsm support-bundle cancel <bundle-id>
 ```
+
+### `wsm support-bundle status`
+
+Shows a collection's status (`Pending`, `Running`, `Succeeded`, `Failed`), its start and finish times, and Lumen's result once it has one. Collection Jobs expire 24h after they finish. After that, `status <id>` checks the bucket and reports the stored bundle's location and size, without collection details. The bucket check runs a management Job from the collector template, so it needs support bundles enabled.
+
+```bash
+wsm support-bundle status <bundle-id> [--watch | --json]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--watch`, `-w` | `false` | If the collection is still running, stream its logs and print the result when it finishes, like `create --wait` |
+| `--json` | `false` | Print the status as JSON |
+
+### `wsm support-bundle list`
+
+Lists the bundles stored in the instance's bucket, plus collections that haven't uploaded yet (status `collecting`). wsm reads the bucket by running Lumen's `bundle-manager` in a short-lived management Job; see [Support Bundles](../operations/support-bundles.md#how-it-works).
+
+```bash
+wsm support-bundle list [--sort-by created|size|id|status] [--order ascending|descending|asc|desc] [--limit N] [--json]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--sort-by` | `created` | `created`, `size`, `id`, or `status` (`collecting` before `uploaded`, newest first within each) |
+| `--order` | per key | `ascending`/`asc` or `descending`/`desc`; by default `created` and `size` are descending (newest, largest first), `id` and `status` ascending |
+| `--limit` | `0` | Show at most this many rows, after sorting; `0` shows all |
+| `--json` | `false` | Print the rows as JSON |
+
+### `wsm support-bundle retrieve`
+
+Downloads a stored bundle by ID, exact `s3://` location, or `latest` (the most recently uploaded). It saves to the archive's own name in the current directory unless `-o` is given, and never overwrites a file. The file appears only once the size matches, and the SHA256 too while the collection Job still exists to report it. An `s3://` location is looked up directly, without listing the bucket, so it carries no bundle ID and its SHA256 isn't verified; retrieve by ID to verify it. On a terminal it shows progress (`2.42 MB / 4.93 MB (49%)`). The archive stays a compressed `.tar.gz`; unpack it with `tar xzf`.
+
+```bash
+wsm support-bundle retrieve <bundle-id|s3://location|latest> [-o file] [--timeout 2h]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--output`, `-o` | archive name | Output file |
+| `--timeout` | `2h` | How long the download may take (the management Job gets 5 extra minutes for the lookup) |
+
+### `wsm support-bundle delete`
+
+Deletes a stored bundle from the bucket by ID or exact `s3://` location. If the ID's collection is still running, wsm cancels it, waits for its pod to stop, then deletes whatever it uploaded. It asks `[y/N]` once first, and without a terminal it refuses unless `--yes` is passed. If the connection drops mid-delete, wsm exits non-zero with "deletion outcome unknown"; run `list` to check.
+
+```bash
+wsm support-bundle delete <bundle-id|s3://location> [-y]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--yes`, `-y` | `false` | Don't ask for confirmation |
 
 ### `wsm support-bundle --enabled=true|false`
 

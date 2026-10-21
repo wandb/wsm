@@ -8,6 +8,7 @@ Day-to-day management, monitoring, and troubleshooting of W&B deployments.
 |-------|-------------|
 | [Managing the Deployment](managing.md) | Check status, upgrade, destroy, cleanup |
 | [Troubleshooting](troubleshooting.md) | Common issues, log collection, fixes |
+| [Support Bundles](support-bundles.md) | Collect, list, download, and delete Lumen support bundles |
 
 ## Operational Tasks at a Glance
 
@@ -19,6 +20,7 @@ Day-to-day management, monitoring, and troubleshooting of W&B deployments.
 | Upgrade W&B | `wsm deploy-v2 wandb deploy --wandb-version <ver>` |
 | Destroy W&B only | `wsm deploy-v2 wandb destroy` |
 | Full cleanup | `wsm cluster cleanup --context <ctx>` |
+| List support bundles | `wsm support-bundle list --context <ctx>` |
 
 ## Health Checks
 

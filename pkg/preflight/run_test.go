@@ -1,5 +1,3 @@
-//go:build ignore
-
 package preflight
 
 import (
@@ -8,7 +6,7 @@ import (
 	"testing"
 
 	v2 "github.com/wandb/operator/api/v2"
-	oppreflight "github.com/wandb/operator/pkg/preflight"
+	operatorPreflight "github.com/wandb/operator/pkg/preflight"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -65,7 +63,7 @@ func TestRunChecksSkipAnnotation(t *testing.T) {
 		"metadata": map[string]any{
 			"name":        "wandb",
 			"namespace":   "wandb",
-			"annotations": map[string]any{oppreflight.SkipPreflightsAnnotation: oppreflight.ExternalMysqlCheck},
+			"annotations": map[string]any{operatorPreflight.SkipPreflightsAnnotation: operatorPreflight.ExternalMysqlCheck},
 		},
 		"spec": map[string]any{
 			"mysql": map[string]any{
@@ -83,7 +81,7 @@ func TestRunChecksSkipAnnotation(t *testing.T) {
 	if len(runs) != 1 {
 		t.Fatalf("got %d runs, want 1: %+v", len(runs), runs)
 	}
-	if runs[0].Result.Outcome != oppreflight.OutcomeSkipped {
+	if runs[0].Result.Outcome != operatorPreflight.OutcomeSkipped {
 		t.Errorf("outcome = %q, want skipped", runs[0].Result.Outcome)
 	}
 	if runs[0].FieldPath != "spec.mysql.default.externalMysql" {
@@ -95,18 +93,18 @@ func TestRunChecksSkipAnnotation(t *testing.T) {
 }
 
 func TestErr(t *testing.T) {
-	result := func(o oppreflight.Outcome) CheckRun {
-		return CheckRun{FieldPath: "spec.mysql.default.externalMysql", Result: oppreflight.Result{Check: "c", Outcome: o}}
+	result := func(o operatorPreflight.Outcome) CheckRun {
+		return CheckRun{FieldPath: "spec.mysql.default.externalMysql", Result: operatorPreflight.Result{Check: "c", Outcome: o}}
 	}
 
 	if err := Err(nil); err != nil {
 		t.Errorf("Err(nil) = %v", err)
 	}
-	if err := Err([]CheckRun{result(oppreflight.OutcomePass), result(oppreflight.OutcomeSkipped)}); err != nil {
+	if err := Err([]CheckRun{result(operatorPreflight.OutcomePass), result(operatorPreflight.OutcomeSkipped)}); err != nil {
 		t.Errorf("Err(pass, skipped) = %v", err)
 	}
 
-	err := Err([]CheckRun{result(oppreflight.OutcomeFail), result(oppreflight.OutcomeUnknown)})
+	err := Err([]CheckRun{result(operatorPreflight.OutcomeFail), result(operatorPreflight.OutcomeUnknown)})
 	if err == nil {
 		t.Fatal("Err(fail, unknown) = nil")
 	}
@@ -133,15 +131,15 @@ func TestSecretResolverWithoutNamespace(t *testing.T) {
 	}
 }
 
-func fakeCheck(name string, typ oppreflight.CheckType, ran *[]string, reqs ...oppreflight.ResourceReq) oppreflight.Check {
-	return oppreflight.Check{
+func fakeCheck(name string, typ operatorPreflight.CheckType, ran *[]string, reqs ...operatorPreflight.ResourceReq) operatorPreflight.Check {
+	return operatorPreflight.Check{
 		Name:         name,
 		Type:         typ,
 		ResourceReqs: reqs,
 		NewSpec:      func() any { return &map[string]any{} },
-		Run: func(context.Context, any, oppreflight.ValueResolver) oppreflight.Result {
+		Run: func(context.Context, any, operatorPreflight.Env) operatorPreflight.Result {
 			*ran = append(*ran, name)
-			return oppreflight.Result{Check: name, Outcome: oppreflight.OutcomePass}
+			return operatorPreflight.Result{Check: name, Outcome: operatorPreflight.OutcomePass}
 		},
 	}
 }
@@ -149,9 +147,9 @@ func fakeCheck(name string, typ oppreflight.CheckType, ran *[]string, reqs ...op
 func TestExecuteChecksOfflineRunsOnlyStatic(t *testing.T) {
 	var ran []string
 	plan := []PlannedRun{
-		{Check: fakeCheck("static", oppreflight.TypeStatic, &ran, oppreflight.ReqReadOnly), FieldPath: "spec.a", value: map[string]any{}},
-		{Check: fakeCheck("cluster", oppreflight.TypeCluster, &ran, oppreflight.ReqReadOnly), FieldPath: "spec.b", value: map[string]any{}},
-		{Check: fakeCheck("conn", oppreflight.TypeConnection, &ran, oppreflight.ReqReadOnly), FieldPath: "spec.c", value: map[string]any{}},
+		{Check: fakeCheck("static", operatorPreflight.TypeStatic, &ran, operatorPreflight.ReqReadOnly), FieldPath: "spec.a", value: map[string]any{}},
+		{Check: fakeCheck("cluster", operatorPreflight.TypeCluster, &ran, operatorPreflight.ReqReadOnly), FieldPath: "spec.b", value: map[string]any{}},
+		{Check: fakeCheck("conn", operatorPreflight.TypeConnection, &ran, operatorPreflight.ReqReadOnly), FieldPath: "spec.c", value: map[string]any{}},
 	}
 	cr := &unstructured.Unstructured{Object: map[string]any{}}
 
@@ -160,7 +158,7 @@ func TestExecuteChecksOfflineRunsOnlyStatic(t *testing.T) {
 	if len(ran) != 1 || ran[0] != "static" {
 		t.Fatalf("ran = %v, want only [static]", ran)
 	}
-	want := []oppreflight.Outcome{oppreflight.OutcomePass, oppreflight.OutcomeSkipped, oppreflight.OutcomeSkipped}
+	want := []operatorPreflight.Outcome{operatorPreflight.OutcomePass, operatorPreflight.OutcomeSkipped, operatorPreflight.OutcomeSkipped}
 	for i, r := range runs {
 		if r.Result.Outcome != want[i] {
 			t.Errorf("%s outcome = %q, want %q", r.Result.Check, r.Result.Outcome, want[i])
@@ -170,9 +168,9 @@ func TestExecuteChecksOfflineRunsOnlyStatic(t *testing.T) {
 
 func TestRequiringConfirmation(t *testing.T) {
 	var ran []string
-	create := fakeCheck("createsPods", oppreflight.TypeConnection, &ran, oppreflight.ReqReadWrite, oppreflight.ReqResourceCreate)
+	create := fakeCheck("createsPods", operatorPreflight.TypeConnection, &ran, operatorPreflight.ReqReadWrite, operatorPreflight.ReqResourceCreate)
 	plan := []PlannedRun{
-		{Check: fakeCheck("readOnly", oppreflight.TypeConnection, &ran, oppreflight.ReqReadOnly), FieldPath: "spec.a", value: map[string]any{}},
+		{Check: fakeCheck("readOnly", operatorPreflight.TypeConnection, &ran, operatorPreflight.ReqReadOnly), FieldPath: "spec.a", value: map[string]any{}},
 		{Check: create, FieldPath: "spec.objectStore.default.externalObjectStore", value: map[string]any{}},
 		{Check: create, FieldPath: "spec.objectStore.other.externalObjectStore", value: map[string]any{}},
 	}
@@ -190,7 +188,7 @@ func TestRequiringConfirmation(t *testing.T) {
 	// A skipped create check needs no confirmation, and the runnable check beside it still runs.
 	skipped := &unstructured.Unstructured{Object: map[string]any{
 		"metadata": map[string]any{
-			"annotations": map[string]any{oppreflight.SkipPreflightsAnnotation: "createsPods"},
+			"annotations": map[string]any{operatorPreflight.SkipPreflightsAnnotation: "createsPods"},
 		},
 	}}
 	if got := RequiringConfirmation(skipped, plan, ExecOptions{}); len(got) != 0 {
@@ -201,7 +199,7 @@ func TestRequiringConfirmation(t *testing.T) {
 		t.Errorf("skipped: ran = %v, want only [readOnly]", ran)
 	}
 	for _, r := range runs[1:] {
-		if r.Result.Outcome != oppreflight.OutcomeSkipped {
+		if r.Result.Outcome != operatorPreflight.OutcomeSkipped {
 			t.Errorf("%s (%s) outcome = %q, want skipped", r.Result.Check, r.FieldPath, r.Result.Outcome)
 		}
 	}

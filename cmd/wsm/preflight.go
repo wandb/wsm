@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	oppreflight "github.com/wandb/operator/pkg/preflight"
+	operatorPreflight "github.com/wandb/operator/pkg/preflight"
 	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/preflight"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -119,7 +119,7 @@ func printPreflightPlan(plan []preflight.PlannedRun, opts preflight.ExecOptions)
 	fmt.Println()
 }
 
-func joinResourceReqs(reqs []oppreflight.ResourceReq) string {
+func joinResourceReqs(reqs []operatorPreflight.ResourceReq) string {
 	parts := make([]string, len(reqs))
 	for i, r := range reqs {
 		parts[i] = string(r)

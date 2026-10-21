@@ -162,6 +162,37 @@ func TestCreateLosesRace(t *testing.T) {
 	}
 }
 
+func TestCancel(t *testing.T) {
+	cr := testCR()
+	running := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "support-bundle-run", Namespace: "wandb", Labels: selectorLabels(cr)}}
+	finished := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "support-bundle-done", Namespace: "wandb", Labels: selectorLabels(cr)},
+		Status:     batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}},
+	}
+	foreign := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "wandb"}}
+	client := fake.NewClientset(running, finished, foreign)
+	ctx := context.Background()
+
+	if cancelled, err := Cancel(ctx, client, cr, "support-bundle-run"); err != nil || !cancelled {
+		t.Fatalf("running: %v %v", cancelled, err)
+	}
+	if _, err := client.BatchV1().Jobs("wandb").Get(ctx, "support-bundle-run", metav1.GetOptions{}); err == nil {
+		t.Error("running Job was not deleted")
+	}
+	if cancelled, err := Cancel(ctx, client, cr, "support-bundle-done"); err != nil || cancelled {
+		t.Errorf("finished: %v %v", cancelled, err)
+	}
+	if _, err := client.BatchV1().Jobs("wandb").Get(ctx, "support-bundle-done", metav1.GetOptions{}); err != nil {
+		t.Error("finished Job should be kept")
+	}
+	if _, err := Cancel(ctx, client, cr, "other"); err == nil || !strings.Contains(err.Error(), "is not a support bundle") {
+		t.Errorf("foreign: %v", err)
+	}
+	if _, err := Cancel(ctx, client, cr, "nope"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("missing: %v", err)
+	}
+}
+
 func TestSelectInstallation(t *testing.T) {
 	refs := []operator.CRRef{{Namespace: "a", Name: "wandb"}, {Namespace: "b", Name: "wandb"}}
 	if _, err := SelectInstallation(refs, "", ""); err == nil || !strings.Contains(err.Error(), "found 2") {

@@ -53,6 +53,7 @@ func SupportBundleCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&enabled, "enabled", true, "Turn support bundles on (true) or off (false) for the W&B instance")
 
 	cmd.AddCommand(supportBundleCreateCmd())
+	cmd.AddCommand(supportBundleCancelCmd())
 
 	return cmd
 }
@@ -102,6 +103,35 @@ func supportBundleCreateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&waitForBundle, "wait", false, "Stream the collector logs and print the result when it finishes")
 
 	return cmd
+}
+
+func supportBundleCancelCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "cancel <bundle-id>",
+		Short: "Stop a running support-bundle collection",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			cr, err := discoverInstallation(ctx, cmd)
+			if err != nil {
+				return err
+			}
+			_, client, err := kubectl.GetClientset()
+			if err != nil {
+				return err
+			}
+			cancelled, err := supportbundle.Cancel(ctx, client, cr, args[0])
+			if err != nil {
+				return err
+			}
+			if !cancelled {
+				fmt.Printf("Support bundle %s already finished; nothing to cancel\n", args[0])
+				return nil
+			}
+			fmt.Printf("Support bundle %s cancelled\n", args[0])
+			return nil
+		},
+	}
 }
 
 func setSupportBundleEnabled(cmd *cobra.Command, enabled bool) error {

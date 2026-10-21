@@ -630,6 +630,14 @@ wsm support-bundle create [--wait]
 
 The collection is an ordinary Job (labelled `weightsandbiases.apps.wandb.com/component=support-bundle`), so its logs are also visible with `kubectl logs job/<id>` and in Watchtower's Jobs tab. Lumen logs one line per step (plan, redaction, upload); per-collector outcomes only appear in the final result.
 
+### `wsm support-bundle cancel`
+
+Stops a running collection by deleting its Job and pod. Only Jobs labelled as this instance's support bundles are accepted. A finished collection is left alone. Bundles already uploaded to the bucket are never deleted; a collection cancelled before its upload step uploads nothing.
+
+```bash
+wsm support-bundle cancel <bundle-id>
+```
+
 ### `wsm support-bundle --enabled=true|false`
 
 Sets `spec.supportBundle.enabled` on the CR. `--enabled` alone means `true`. When disabled, the operator waits for a running collection, then removes the collector CronJob, its RBAC, and collection Jobs. Bundles already uploaded to the bucket are kept.

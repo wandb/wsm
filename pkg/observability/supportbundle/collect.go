@@ -175,6 +175,32 @@ func olderCollection(ctx context.Context, client kubernetes.Interface, cr *v2.We
 	return "", nil
 }
 
+// Cancel stops a running collection by deleting its Job and pod; bundles
+// already uploaded are kept. It reports false when the collection had already finished.
+func Cancel(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndBiases, id string) (bool, error) {
+	if id == "" {
+		return false, fmt.Errorf("a support bundle ID is required")
+	}
+	job, err := client.BatchV1().Jobs(cr.Namespace).Get(ctx, id, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, fmt.Errorf("support bundle %s not found in namespace: %s", id, cr.Namespace)
+	}
+	if err != nil {
+		return false, fmt.Errorf("get support bundle %s: %w", id, err)
+	}
+	if !labels.SelectorFromSet(selectorLabels(cr)).Matches(labels.Set(job.Labels)) {
+		return false, fmt.Errorf("job %s is not a support bundle for namespace: %s and instance: %s", id, cr.Namespace, cr.Name)
+	}
+	if jobFinished(job) {
+		return false, nil
+	}
+	propagation := metav1.DeletePropagationBackground
+	if err := client.BatchV1().Jobs(cr.Namespace).Delete(ctx, id, metav1.DeleteOptions{PropagationPolicy: &propagation}); err != nil && !apierrors.IsNotFound(err) {
+		return false, fmt.Errorf("cancel support bundle %s: %w", id, err)
+	}
+	return true, nil
+}
+
 // Wait polls a collection Job until it finishes. The template's deadline bounds it.
 func Wait(ctx context.Context, client kubernetes.Interface, namespace, name string) (*batchv1.Job, error) {
 	var job *batchv1.Job

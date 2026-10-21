@@ -626,7 +626,9 @@ wsm support-bundle create [--wait]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--wait` | `false` | Wait for the collection to finish. Ctrl+C stops waiting but leaves the collection running |
+| `--wait` | `false` | Stream the collector's logs, then print Lumen's result: bundle location, size, sha256, and each collector's outcome (`collected`, `partial`, `failed`). Ctrl+C stops following but leaves the collection running |
+
+The collection is an ordinary Job (labelled `weightsandbiases.apps.wandb.com/component=support-bundle`), so its logs are also visible with `kubectl logs job/<id>` and in Watchtower's Jobs tab. Lumen logs one line per step (plan, redaction, upload); per-collector outcomes only appear in the final result.
 
 ### `wsm support-bundle --enabled=true|false`
 

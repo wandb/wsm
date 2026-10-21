@@ -15,7 +15,7 @@ import (
 	v2 "github.com/wandb/operator/api/v2"
 	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/license"
-	"github.com/wandb/wsm/pkg/telemetry"
+	"github.com/wandb/wsm/pkg/observability/telemetry"
 	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/loader"
@@ -1505,6 +1505,12 @@ func stripFieldsNotInCRDSchema(obj *unstructured.Unstructured) {
 	if isEmptyNestedMap(obj, "spec", "wandb", "probes") {
 		unstructured.RemoveNestedField(obj.Object, "spec", "wandb", "probes")
 	}
+	if isEmptyNestedMap(obj, "spec", "wandb", "securityProfile") {
+		unstructured.RemoveNestedField(obj.Object, "spec", "wandb", "securityProfile")
+	}
+	if isEmptyNestedMap(obj, "spec", "supportBundle") {
+		unstructured.RemoveNestedField(obj.Object, "spec", "supportBundle")
+	}
 
 	// ManagedServiceAccountSpec is a by-value struct on managed Kafka/ClickHouse,
 	// so an unconfigured one serializes as serviceAccount: {}. Strip when empty.
@@ -1666,6 +1672,25 @@ func ReconcileCR(ctx context.Context, name, namespace string) error {
 		return fmt.Errorf("failed to request reconcile for WeightsAndBiases %s/%s: %w", namespace, name, err)
 	}
 
+	return nil
+}
+
+// MergePatchCR applies a JSON merge patch to a CR. Unlike ApplyCR it only
+// touches the fields in the patch, so it can't conflict with other managers.
+func MergePatchCR(ctx context.Context, name, namespace string, patch []byte) error {
+	_, dyn, err := kubectl.GetDynamicClientset()
+	if err != nil {
+		return err
+	}
+	_, err = dyn.Resource(weightsAndBiasesV2GVR).Namespace(namespace).Patch(
+		ctx, name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: "wsm"},
+	)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return fmt.Errorf("WeightsAndBiases %s/%s not found", namespace, name)
+		}
+		return fmt.Errorf("failed to patch WeightsAndBiases %s/%s: %w", namespace, name, err)
+	}
 	return nil
 }
 

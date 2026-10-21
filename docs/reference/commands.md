@@ -30,7 +30,7 @@ wsm deploy-v2 operator [flags]
 | `--setup-k8s-cluster` | `false` | Create a Kind cluster before deploying |
 | `--cluster-name` | `kind` | Name of the Kind cluster (used with `--setup-k8s-cluster`) |
 | `--workers` | `0` | Number of Kind worker nodes |
-| `--operator-chart-version` | `2.0.0-beta.8` | Operator Helm chart version (a leading `v` is accepted) |
+| `--operator-chart-version` | `2.0.0-beta.9` | Operator Helm chart version (a leading `v` is accepted) |
 | `--operator-install-timeout` | `0s` | Helm timeout in seconds, minutes, or hours, such as `30s`, `5m`, or `1h`. `0` uses Helm's default. |
 | `--operator-image-pull-policy` | `IfNotPresent` | Operator image pull policy: `Always`, `IfNotPresent`, or `Never` (case-insensitive). |
 | `--operator-version` | — | Operator image version (defaults to chart value) |
@@ -57,6 +57,8 @@ wsm deploy-v2 operator [flags]
 | `--observability-forward-protocol` | — | OTLP forwarding protocol, e.g. `http/protobuf` or `grpc` (`telemetry.forwarding.otlp.protocol`). Only applied when `--observability-mode=forward` |
 | `--observability-forward-headers` | — | OTLP forwarding headers as repeatable `key=value` pairs, e.g. `Authorization=Bearer …` (`telemetry.forwarding.otlp.headers`). Only applied when `--observability-mode=forward` |
 
+> Watchtower's Metrics tab reads pod usage from `metrics.k8s.io`, so the cluster needs metrics-server. Kind clusters created by wsm already have it; on your own cluster, install it if `kubectl top pods` fails.
+
 > These `--observability-otel-*` / `--observability-forward-*` flags configure the operator's telemetry Helm release, so they live on `wsm deploy-v2 operator` only. `--observability-mode` is shared (it also toggles per-service telemetry on the CR — see `wsm deploy-v2 wandb deploy`).
 
 > **Phase split:** by default the operator command installs only the operator stack; it does **not** create the W&B CR. Install the operator stack here, then run `wsm deploy-v2 wandb deploy`. Pass `--include-cr` to do both in one run.
@@ -69,7 +71,7 @@ wsm deploy-v2 operator --context my-cluster
 
 # Pin an operator chart version; an optional leading v is normalized for OCI
 wsm deploy-v2 operator --context my-cluster \
-  --operator-chart-version v2.0.0-beta.8
+  --operator-chart-version v2.0.0-beta.9
 
 # One shot: create a local Kind cluster, install the operator, and deploy the CR
 wsm deploy-v2 operator --context kind-wandb \
@@ -254,7 +256,7 @@ wsm deploy-v2 wandb deploy [flags]
 >   --cr-set spec.wandb.additionalHostnames='[wandb.corp.example.com]'
 > ```
 
-> **Observability.** `--observability-mode` is applied to the operator chart during `wsm deploy-v2 operator` (it enables the `victoria-metrics-operator` and, for `full`, the `grafana-operator` dependencies the chart requires, and opts the matching telemetry CRDs — VictoriaMetrics, plus Grafana for `full` — into the operator's crd-installer) and also toggles per-service telemetry on the CR. Enabling telemetry on an existing install is done in two steps — install the telemetry CRDs and wait for them to be established, then turn the stack on — so the operators don't race missing CRDs. `full` deploys Grafana and the Victoria Metrics/Logs/Traces stack as ClusterIP services in the W&B namespace — view Grafana with [`wsm telemetry grafana`](#wsm-telemetry) and VictoriaMetrics with [`wsm telemetry victoria`](#wsm-telemetry). `forward` ships OTLP data to `--observability-forward-endpoint` and does not run Grafana (VMUI is still available via `wsm telemetry victoria`).
+> **Observability.** `--observability-mode` is applied to the operator chart during `wsm deploy-v2 operator` (it enables the `victoria-metrics-operator` and, for `full`, the `grafana-operator` dependencies the chart requires, and opts the matching telemetry CRDs — VictoriaMetrics, plus Grafana for `full` — into the operator's crd-installer) and also toggles per-service telemetry on the CR. Enabling telemetry on an existing install is done in two steps — install the telemetry CRDs and wait for them to be established, then turn the stack on — so the operators don't race missing CRDs. `full` deploys Grafana and the Victoria Metrics/Logs/Traces stack as ClusterIP services in the W&B namespace — view Grafana with [`wsm telemetry grafana`](#wsm-telemetry) and VictoriaMetrics with [`wsm telemetry victoria`](#wsm-telemetry). `forward` ships OTLP data to `--observability-forward-endpoint` and does not run Grafana (VMUI is still available via `wsm telemetry victoria`). With `full` or `forward`, a log-agent DaemonSet also collects pod logs (in `forward` they go to the external endpoint too). It runs as root with hostPath mounts and leaves `/var/lib/victoria-log-agent/<namespace>` on each node after uninstall. It's disabled when the mode is `off`, and always disabled with `--openshift`.
 
 #### Examples
 
@@ -488,7 +490,7 @@ Scope: the operator OCI chart + binary image, and the cert-manager, nginx-gatewa
 | `--to` | — | **Required.** Hostname of your mirror, e.g. `harbor.example.com` or `localhost:5000`. |
 | `--insecure` | `false` | Skip TLS verification when pushing to the mirror. Use for plain-HTTP registries like a local `registry:2`. **Never** in production. |
 | `--dry-run` | `false` | Print the source → target mirroring plan without pushing. |
-| `--operator-chart-version` | `2.0.0-beta.8` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
+| `--operator-chart-version` | `2.0.0-beta.9` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
 | `--wandb-version` | — | W&B server version (e.g. `0.84.0`). When set, also mirror the server manifest and every application + managed data-plane image it references, rewriting them to point at the mirror. |
 | `--exclude-operators` | — | Comma-separated managed types (`clickhouse`, `mysql`, `redis`, `object-store`) whose **operator** images to skip — for when you run your own cluster-wide operator. The managed data-plane service is still mirrored. |
 | `--exclude-managed` | — | Comma-separated managed types to skip **entirely** — operator *and* data-plane images — for when you use an external service. |
@@ -516,7 +518,7 @@ wsm registry check --registry <host> --wandb-version <version> [flags]
 |------|---------|-------------|
 | `--registry` | — | **Required.** Hostname of your mirror to check against. |
 | `--wandb-version` | — | W&B server version that was mirrored; when set, also check the server manifest and every application image it references. |
-| `--operator-chart-version` | `2.0.0-beta.8` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
+| `--operator-chart-version` | `2.0.0-beta.9` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
 | `--exclude-operators` | — | Managed types whose operator images to skip checking (match `--exclude-operators` you mirrored with). |
 | `--exclude-managed` | — | Managed types to skip checking entirely (match `--exclude-managed` you mirrored with). |
 | `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store` (match the flag you mirrored with). |
@@ -602,6 +604,105 @@ wsm license set --context <ctx> (--license <jwt> | --license-file <path> | --cle
 
 ---
 
+## `wsm support-bundle`
+
+Collect Lumen support bundles from a v2 instance. The operator (`2.0.0-beta.9`+) installs a suspended collector CronJob per instance, and support bundles are enabled by default on new installs. wsm only reads that CronJob; each collection is a Job created from it, like `kubectl create job --from=cronjob/<name>-support-bundle-collector`.
+
+All subcommands share these flags:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | current context | Name of the kubeconfig context; falls back to in-cluster config |
+| `--wandb-name` | auto-discover | Name of the W&B instance; only needed when more than one matches |
+| `--wandb-namespace` | auto-discover | Namespace of the W&B instance; only needed when more than one matches |
+
+### `wsm support-bundle create`
+
+Starts a collection with the operator's `full` preset and prints the bundle ID, which is the Job name (`support-bundle-<hex>`). Only one collection runs at a time per instance; `create` refuses while one is still running, and if two `create`s race, the newer Job deletes itself. Fails if support bundles are disabled or the operator hasn't reported the template ready.
+
+```bash
+wsm support-bundle create [--wait | --retrieve]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--wait` | `false` | Stream the collector's logs, then print Lumen's result: bundle location, size, sha256, and each collector's outcome (`collected`, `partial`, `failed`). Ctrl+C stops following but leaves the collection running |
+| `--retrieve` | `false` | Implies `--wait`, then downloads the bundle to the current directory with its SHA256 verified, like `retrieve` with its default `--timeout`. For longer downloads, run `retrieve <id> --timeout` instead |
+
+The collection is an ordinary Job (labelled `weightsandbiases.apps.wandb.com/component=support-bundle`), so its logs are also visible with `kubectl logs job/<id>` and in Watchtower's Jobs tab. Lumen logs one line per step (plan, redaction, upload); per-collector outcomes only appear in the final result.
+
+### `wsm support-bundle cancel`
+
+Stops a running collection by deleting its Job and pod. Only Jobs labelled as this instance's support bundles are accepted. A finished collection is left alone. Bundles already uploaded to the bucket are never deleted; a collection cancelled before its upload step uploads nothing.
+
+```bash
+wsm support-bundle cancel <bundle-id>
+```
+
+### `wsm support-bundle status`
+
+Shows a collection's status (`Pending`, `Running`, `Succeeded`, `Failed`), its start and finish times, and Lumen's result once it has one. Collection Jobs expire 24h after they finish. After that, `status <id>` checks the bucket and reports the stored bundle's location and size, without collection details. The bucket check runs a management Job from the collector template, so it needs support bundles enabled.
+
+```bash
+wsm support-bundle status <bundle-id> [--watch | --json]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--watch`, `-w` | `false` | If the collection is still running, stream its logs and print the result when it finishes, like `create --wait` |
+| `--json` | `false` | Print the status as JSON |
+
+### `wsm support-bundle list`
+
+Lists the bundles stored in the instance's bucket, plus collections that haven't uploaded yet (status `collecting`). wsm reads the bucket by running Lumen's `bundle-manager` in a short-lived management Job; see [Support Bundles](../operations/support-bundles.md#how-it-works).
+
+```bash
+wsm support-bundle list [--sort-by created|size|id|status] [--order ascending|descending|asc|desc] [--limit N] [--json]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--sort-by` | `created` | `created`, `size`, `id`, or `status` (`collecting` before `uploaded`, newest first within each) |
+| `--order` | per key | `ascending`/`asc` or `descending`/`desc`; by default `created` and `size` are descending (newest, largest first), `id` and `status` ascending |
+| `--limit` | `0` | Show at most this many rows, after sorting; `0` shows all |
+| `--json` | `false` | Print the rows as JSON |
+
+### `wsm support-bundle retrieve`
+
+Downloads a stored bundle by ID, exact `s3://` location, or `latest` (the most recently uploaded). It saves to the archive's own name in the current directory unless `-o` is given, and never overwrites a file. The file appears only once the size matches, and the SHA256 too while the collection Job still exists to report it. An `s3://` location is looked up directly, without listing the bucket, so it carries no bundle ID and its SHA256 isn't verified; retrieve by ID to verify it. On a terminal it shows progress (`2.42 MB / 4.93 MB (49%)`). The archive stays a compressed `.tar.gz`; unpack it with `tar xzf`.
+
+```bash
+wsm support-bundle retrieve <bundle-id|s3://location|latest> [-o file] [--timeout 2h]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--output`, `-o` | archive name | Output file |
+| `--timeout` | `2h` | How long the download may take (the management Job gets 5 extra minutes for the lookup) |
+
+### `wsm support-bundle delete`
+
+Deletes a stored bundle from the bucket by ID or exact `s3://` location. If the ID's collection is still running, wsm cancels it, waits for its pod to stop, then deletes whatever it uploaded. It asks `[y/N]` once first, and without a terminal it refuses unless `--yes` is passed. If the connection drops mid-delete, wsm exits non-zero with "deletion outcome unknown"; run `list` to check.
+
+```bash
+wsm support-bundle delete <bundle-id|s3://location> [-y]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--yes`, `-y` | `false` | Don't ask for confirmation |
+
+### `wsm support-bundle --enabled=true|false`
+
+Sets `spec.supportBundle.enabled` on the CR. `--enabled` alone means `true`. When disabled, the operator waits for a running collection, then removes the collector CronJob, its RBAC, and collection Jobs. Bundles already uploaded to the bucket are kept.
+
+```bash
+wsm support-bundle --enabled=false
+wsm support-bundle --enabled=true
+```
+
+---
+
 ## Legacy Commands
 
 ### `wsm deploy` (Legacy v1 Operator)
@@ -638,7 +739,7 @@ This command port-forwards the `wandb-console` service on `localhost:8082` and o
 
 ### `wsm telemetry`
 
-View the in-cluster telemetry UIs deployed by the v2 operator. The telemetry stack is deployed when the operator is installed with `--observability-mode=full` (Grafana + Victoria stack) or `forward` (Victoria stack only). The services are ClusterIP-only, so each subcommand port-forwards to a service (natively, via client-go — **no `kubectl` binary required**) and opens it in your browser. It first reads the installed telemetry mode from the operator release and prints it; if telemetry is off (or Grafana is requested under `forward`) it exits with a clear message instead of a failed forward. Grafana opens straight to the W&B overview dashboard with anonymous admin — no login.
+View the in-cluster telemetry UIs deployed by the v2 operator. The telemetry stack is deployed when the operator is installed with `--observability-mode=full` (Grafana + Victoria stack) or `forward` (Victoria stack only). The services are ClusterIP-only, so each subcommand port-forwards to a service (natively, via client-go — **no `kubectl` binary required**) and opens it in your browser. It first reads the installed telemetry mode from the operator release and prints it; if telemetry is off (or Grafana is requested under `forward`) it exits with a clear message instead of a failed forward. Grafana opens straight to the W&B overview dashboard as an anonymous Viewer (dashboards can be edited but not saved) — no login.
 
 ```bash
 wsm telemetry grafana  --context <kubeconfig-context>   # Grafana dashboards (localhost:3000)

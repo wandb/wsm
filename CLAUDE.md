@@ -67,9 +67,9 @@ This is the single most important architectural fact about v2. The implication i
 ### Hand-bumped per release
 
 Constants in `cmd/wsm/deploy_v2.go` need updating each W&B/operator release. The two W&B server-version knobs sit together in one commented `const` block near the top of the file (search `W&B server version policy`):
-- `defaultWandbVersion` (currently `"0.84.0"`) — used when `--wandb-version` is unset.
+- `defaultWandbVersion` (currently `"0.85.1"`) — used when `--wandb-version` is unset.
 - `minWandbVersion` (currently `"0.80.0"`) — the oldest server wsm will deploy; a resolved version below it (via `--wandb-version`, `--cr-file`, or `--cr-set spec.wandb.version`) is rejected up front by `validateWandbVersion`. Raise it when dropping support for old servers.
-- The default of `--operator-chart-version` flag (currently `"2.0.0-beta.7"`).
+- The default of `--operator-chart-version` flag (currently `"2.0.0-beta.9"`).
 
 cert-manager (`v1.20.2`) and nginx-gateway-fabric (`2.5.1`) versions are pinned as constants in `pkg/operator/operator.go:53-64`. Gateway API CRDs come from a hardcoded URL at line 66.
 
@@ -88,6 +88,7 @@ v1 architecture is unchanged from before the v2 work — the orchestration trian
 - `pkg/operator/operator.go` (~900 lines) — Helm v4 wrappers for installing/uninstalling/waiting on cert-manager, nginx-gateway-fabric, wandb-operator; SSA `ApplyCR` / `DeleteCR` / `ListCRs` against the `apps.wandb.com/v2` GVR; readiness polls. `WaitForOperator` waits for `wandb-operator-mutating-webhook-configuration` to get a non-empty CA bundle injected before considering the operator ready.
 - `pkg/kind/kind.go` — wraps `sigs.k8s.io/kind` to create/delete clusters in-process. Used by `wsm cluster` and by `--setup-k8s-cluster` in `deploy-v2 operator`.
 - `pkg/kubectl/kubectl.go` — context-aware singleton client. `SetContext` + `ResetClients` are the API for switching kubeconfig context mid-process. Also hosts SSA helpers `ApplyUnstructured`, `ApplyCertificate`, `ApplyIssuer`, `ApplyClusterIssuer`, `ApplyIngressClass`, `ApplyStorageClass`, and the deployment-marker ConfigMap helpers (`CreateDeploymentMarker`, `HasDeploymentMarker`, `FindNamespacesWithMarker`, `DeleteDeploymentMarker`) that track what `wsm` owns.
+- `pkg/observability/supportbundle` — backs `wsm support-bundle`. Creates collection Jobs from the operator's suspended collector CronJob (named in `status.supportBundle.cronJob`), like `kubectl create job --from`; the Job name is the bundle ID. `list`/`retrieve`/`delete` copy the same CronJob into a one-off manager Job that sleeps and exec `bundle-manager` in it (`pkg/kubectl/exec.go`); manager Jobs use `app.kubernetes.io/component=support-bundle-manager`, never the operator's component label, or they'd count as collections. `CollectOptions` (today just `Preset`, mirroring the operator's collection ConfigMap keys; `full` only) is where future knobs like lookback windows go. `pkg/observability/telemetry` holds the observability chart values.
 - `pkg/helm` (v1 only) — wraps Helm SDK v3. `GetRuntimeObjects` does a client-only dry-run install to render manifests; `ExtractImages` walks the rendered Deployment/StatefulSet/DaemonSet/Job/CronJob/etc. to enumerate container images. This is what `list`/`download` depend on — only those workload kinds are inspected.
 - `pkg/helm/values` (v1 only) — `Values` is `map[string]interface{}` with dot-path `GetValue`/`SetValue`/`Merge`/`Coalesce`/`AddHelmValue` helpers. User-supplied values from `--values` files are merged under `wandb:` (chart values) or `operator:` (operator-chart values).
 - `pkg/crd/weightsandbiases.go` (v1 only) — hand-rolled v1 CR struct + dynamic-client SSA with `FieldManager: "wandb-controller-manager"`. v2 does not use this; v2's CR comes from the imported operator types and is applied via `pkg/operator.ApplyCR` with `FieldManager: "wsm"`.

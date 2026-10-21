@@ -26,6 +26,18 @@ kind: WeightsAndBiases
 | `spec.objectStore` | map[string]object | No | Object store instances keyed by instance name (reserved key `default`) |
 | `spec.clickhouse` | map[string]object | No | ClickHouse instances keyed by instance name (reserved key `default`) |
 | `spec.adminConsoleEnabled` | bool | No | Enable the admin console. Defaults to `true`; disable with `--admin-console=false` |
+| `spec.supportBundle` | object | No | Support-bundle collector template (operator `2.0.0-beta.9`+); see below |
+
+---
+
+## `spec.supportBundle`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Install the suspended `<name>-support-bundle-collector` CronJob that `wsm support-bundle create` runs. Set with `wsm support-bundle --enabled=true\|false`. When `false`, the operator waits for a running collection, then removes the CronJob, its RBAC, and collection Jobs; uploaded bundles are kept |
+| `version` | string | Operator's pinned Lumen version | Collector image tag override |
+
+If a GitOps tool (Argo CD, Flux) manages the CR, set `spec.supportBundle.enabled` in its manifest instead; it will revert changes made with `wsm support-bundle --enabled`.
 
 ---
 

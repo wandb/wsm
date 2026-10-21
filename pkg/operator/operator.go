@@ -1675,6 +1675,25 @@ func ReconcileCR(ctx context.Context, name, namespace string) error {
 	return nil
 }
 
+// MergePatchCR applies a JSON merge patch to a CR. Unlike ApplyCR it only
+// touches the fields in the patch, so it can't conflict with other managers.
+func MergePatchCR(ctx context.Context, name, namespace string, patch []byte) error {
+	_, dyn, err := kubectl.GetDynamicClientset()
+	if err != nil {
+		return err
+	}
+	_, err = dyn.Resource(weightsAndBiasesV2GVR).Namespace(namespace).Patch(
+		ctx, name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: "wsm"},
+	)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return fmt.Errorf("WeightsAndBiases %s/%s not found", namespace, name)
+		}
+		return fmt.Errorf("failed to patch WeightsAndBiases %s/%s: %w", namespace, name, err)
+	}
+	return nil
+}
+
 func GetCR(ctx context.Context, name, namespace string) (*v2.WeightsAndBiases, error) {
 	_, dyn, err := kubectl.GetDynamicClientset()
 	if err != nil {

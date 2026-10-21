@@ -30,7 +30,7 @@ wsm deploy-v2 operator [flags]
 | `--setup-k8s-cluster` | `false` | Create a Kind cluster before deploying |
 | `--cluster-name` | `kind` | Name of the Kind cluster (used with `--setup-k8s-cluster`) |
 | `--workers` | `0` | Number of Kind worker nodes |
-| `--operator-chart-version` | `2.0.0-beta.8` | Operator Helm chart version (a leading `v` is accepted) |
+| `--operator-chart-version` | `2.0.0-beta.9` | Operator Helm chart version (a leading `v` is accepted) |
 | `--operator-install-timeout` | `0s` | Helm timeout in seconds, minutes, or hours, such as `30s`, `5m`, or `1h`. `0` uses Helm's default. |
 | `--operator-image-pull-policy` | `IfNotPresent` | Operator image pull policy: `Always`, `IfNotPresent`, or `Never` (case-insensitive). |
 | `--operator-version` | — | Operator image version (defaults to chart value) |
@@ -57,6 +57,8 @@ wsm deploy-v2 operator [flags]
 | `--observability-forward-protocol` | — | OTLP forwarding protocol, e.g. `http/protobuf` or `grpc` (`telemetry.forwarding.otlp.protocol`). Only applied when `--observability-mode=forward` |
 | `--observability-forward-headers` | — | OTLP forwarding headers as repeatable `key=value` pairs, e.g. `Authorization=Bearer …` (`telemetry.forwarding.otlp.headers`). Only applied when `--observability-mode=forward` |
 
+> Watchtower's Metrics tab reads pod usage from `metrics.k8s.io`, so the cluster needs metrics-server. Kind clusters created by wsm already have it; on your own cluster, install it if `kubectl top pods` fails.
+
 > These `--observability-otel-*` / `--observability-forward-*` flags configure the operator's telemetry Helm release, so they live on `wsm deploy-v2 operator` only. `--observability-mode` is shared (it also toggles per-service telemetry on the CR — see `wsm deploy-v2 wandb deploy`).
 
 > **Phase split:** by default the operator command installs only the operator stack; it does **not** create the W&B CR. Install the operator stack here, then run `wsm deploy-v2 wandb deploy`. Pass `--include-cr` to do both in one run.
@@ -69,7 +71,7 @@ wsm deploy-v2 operator --context my-cluster
 
 # Pin an operator chart version; an optional leading v is normalized for OCI
 wsm deploy-v2 operator --context my-cluster \
-  --operator-chart-version v2.0.0-beta.8
+  --operator-chart-version v2.0.0-beta.9
 
 # One shot: create a local Kind cluster, install the operator, and deploy the CR
 wsm deploy-v2 operator --context kind-wandb \
@@ -254,7 +256,7 @@ wsm deploy-v2 wandb deploy [flags]
 >   --cr-set spec.wandb.additionalHostnames='[wandb.corp.example.com]'
 > ```
 
-> **Observability.** `--observability-mode` is applied to the operator chart during `wsm deploy-v2 operator` (it enables the `victoria-metrics-operator` and, for `full`, the `grafana-operator` dependencies the chart requires, and opts the matching telemetry CRDs — VictoriaMetrics, plus Grafana for `full` — into the operator's crd-installer) and also toggles per-service telemetry on the CR. Enabling telemetry on an existing install is done in two steps — install the telemetry CRDs and wait for them to be established, then turn the stack on — so the operators don't race missing CRDs. `full` deploys Grafana and the Victoria Metrics/Logs/Traces stack as ClusterIP services in the W&B namespace — view Grafana with [`wsm telemetry grafana`](#wsm-telemetry) and VictoriaMetrics with [`wsm telemetry victoria`](#wsm-telemetry). `forward` ships OTLP data to `--observability-forward-endpoint` and does not run Grafana (VMUI is still available via `wsm telemetry victoria`).
+> **Observability.** `--observability-mode` is applied to the operator chart during `wsm deploy-v2 operator` (it enables the `victoria-metrics-operator` and, for `full`, the `grafana-operator` dependencies the chart requires, and opts the matching telemetry CRDs — VictoriaMetrics, plus Grafana for `full` — into the operator's crd-installer) and also toggles per-service telemetry on the CR. Enabling telemetry on an existing install is done in two steps — install the telemetry CRDs and wait for them to be established, then turn the stack on — so the operators don't race missing CRDs. `full` deploys Grafana and the Victoria Metrics/Logs/Traces stack as ClusterIP services in the W&B namespace — view Grafana with [`wsm telemetry grafana`](#wsm-telemetry) and VictoriaMetrics with [`wsm telemetry victoria`](#wsm-telemetry). `forward` ships OTLP data to `--observability-forward-endpoint` and does not run Grafana (VMUI is still available via `wsm telemetry victoria`). With `full` or `forward`, a log-agent DaemonSet also collects pod logs (in `forward` they go to the external endpoint too). It runs as root with hostPath mounts and leaves `/var/lib/victoria-log-agent/<namespace>` on each node after uninstall. It's disabled when the mode is `off`, and always disabled with `--openshift`.
 
 #### Examples
 
@@ -488,7 +490,7 @@ Scope: the operator OCI chart + binary image, and the cert-manager, nginx-gatewa
 | `--to` | — | **Required.** Hostname of your mirror, e.g. `harbor.example.com` or `localhost:5000`. |
 | `--insecure` | `false` | Skip TLS verification when pushing to the mirror. Use for plain-HTTP registries like a local `registry:2`. **Never** in production. |
 | `--dry-run` | `false` | Print the source → target mirroring plan without pushing. |
-| `--operator-chart-version` | `2.0.0-beta.8` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
+| `--operator-chart-version` | `2.0.0-beta.9` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
 | `--wandb-version` | — | W&B server version (e.g. `0.84.0`). When set, also mirror the server manifest and every application + managed data-plane image it references, rewriting them to point at the mirror. |
 | `--exclude-operators` | — | Comma-separated managed types (`clickhouse`, `mysql`, `redis`, `object-store`) whose **operator** images to skip — for when you run your own cluster-wide operator. The managed data-plane service is still mirrored. |
 | `--exclude-managed` | — | Comma-separated managed types to skip **entirely** — operator *and* data-plane images — for when you use an external service. |
@@ -516,7 +518,7 @@ wsm registry check --registry <host> --wandb-version <version> [flags]
 |------|---------|-------------|
 | `--registry` | — | **Required.** Hostname of your mirror to check against. |
 | `--wandb-version` | — | W&B server version that was mirrored; when set, also check the server manifest and every application image it references. |
-| `--operator-chart-version` | `2.0.0-beta.8` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
+| `--operator-chart-version` | `2.0.0-beta.9` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
 | `--exclude-operators` | — | Managed types whose operator images to skip checking (match `--exclude-operators` you mirrored with). |
 | `--exclude-managed` | — | Managed types to skip checking entirely (match `--exclude-managed` you mirrored with). |
 | `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store` (match the flag you mirrored with). |
@@ -638,7 +640,7 @@ This command port-forwards the `wandb-console` service on `localhost:8082` and o
 
 ### `wsm telemetry`
 
-View the in-cluster telemetry UIs deployed by the v2 operator. The telemetry stack is deployed when the operator is installed with `--observability-mode=full` (Grafana + Victoria stack) or `forward` (Victoria stack only). The services are ClusterIP-only, so each subcommand port-forwards to a service (natively, via client-go — **no `kubectl` binary required**) and opens it in your browser. It first reads the installed telemetry mode from the operator release and prints it; if telemetry is off (or Grafana is requested under `forward`) it exits with a clear message instead of a failed forward. Grafana opens straight to the W&B overview dashboard with anonymous admin — no login.
+View the in-cluster telemetry UIs deployed by the v2 operator. The telemetry stack is deployed when the operator is installed with `--observability-mode=full` (Grafana + Victoria stack) or `forward` (Victoria stack only). The services are ClusterIP-only, so each subcommand port-forwards to a service (natively, via client-go — **no `kubectl` binary required**) and opens it in your browser. It first reads the installed telemetry mode from the operator release and prints it; if telemetry is off (or Grafana is requested under `forward`) it exits with a clear message instead of a failed forward. Grafana opens straight to the W&B overview dashboard as an anonymous Viewer (dashboards can be edited but not saved) — no login.
 
 ```bash
 wsm telemetry grafana  --context <kubeconfig-context>   # Grafana dashboards (localhost:3000)

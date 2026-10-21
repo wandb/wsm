@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -87,20 +88,22 @@ func supportBundleCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Started support bundle %s in %s/%s\n", job.Name, cr.Namespace, cr.Name)
+			fmt.Printf("Started support bundle %s on namespace: %s instance: %s\n", job.Name, cr.Namespace, cr.Name)
 
+			flags := passedSupportBundleFlags(cmd)
 			if !waitForBundle && !retrieveBundle {
-				fmt.Printf("Follow it with:\n  kubectl -n %s get job %s\n  kubectl -n %s logs job/%s\n", job.Namespace, job.Name, job.Namespace, job.Name)
+				fmt.Printf("Follow it with:\n  wsm support-bundle status %s --watch%s\n", job.Name, flags)
+				fmt.Printf("Download it when it finishes:\n  wsm support-bundle retrieve %s%s\n", job.Name, flags)
 				return nil
 			}
 
 			ctxSig, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			fmt.Println("Streaming collector logs (Ctrl+C stops following; the collection keeps running)...")
+			fmt.Println("Streaming collector logs (Ctrl+C stops following, the collection keeps running)...")
 			result, err := followCollection(ctxSig, client, job)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					fmt.Printf("Stopped following; %s is still running. Check it with: kubectl -n %s get job %s\n", job.Name, job.Namespace, job.Name)
+					fmt.Printf("Stopped following - %s is still running. Check it with: wsm support-bundle status %s%s\n", job.Name, job.Name, flags)
 					return nil
 				}
 				return err
@@ -132,7 +135,7 @@ func supportBundleCancelCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:               "cancel <bundle-id>",
 		Short:             "Stop a running support-bundle collection",
-		Args:              cobra.ExactArgs(1),
+		Args:              bundleIDArg,
 		ValidArgsFunction: completeBundleIDs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
@@ -149,7 +152,7 @@ func supportBundleCancelCmd() *cobra.Command {
 				return err
 			}
 			if !cancelled {
-				fmt.Printf("Support bundle %s already finished; nothing to cancel\n", args[0])
+				fmt.Printf("Support bundle %s already finished - nothing to cancel\n", args[0])
 				return nil
 			}
 			fmt.Printf("Support bundle %s cancelled\n", args[0])
@@ -223,6 +226,28 @@ func supportBundleStatusCmd() *cobra.Command {
 	cmd.MarkFlagsMutuallyExclusive("watch", "json")
 
 	return cmd
+}
+
+// passedSupportBundleFlags repeats the instance flags the user set, so printed
+// follow-up commands target the same cluster and instance.
+func passedSupportBundleFlags(cmd *cobra.Command) string {
+	var flags string
+	for _, name := range []string{"context", "wandb-namespace", "wandb-name"} {
+		if cmd.Flags().Changed(name) {
+			value, _ := cmd.Flags().GetString(name)
+			flags += " --" + name + " " + shellQuote(value)
+		}
+	}
+	return flags
+}
+
+var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./:@=-]+$`)
+
+func shellQuote(value string) string {
+	if shellSafe.MatchString(value) {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 // bundleIDArg requires one bundle ID and points at `list` when it's missing.
@@ -652,7 +677,7 @@ func followCollection(ctx context.Context, client kubernetes.Interface, job *bat
 			fmt.Println("  " + supportbundle.FormatLogLine(line))
 		})
 		if err != nil && ctx.Err() == nil {
-			fmt.Printf("Lost the log stream (%v); waiting for the collection to finish\n", err)
+			fmt.Printf("Lost the log stream (%v) - waiting for the collection to finish\n", err)
 		}
 	}
 

@@ -39,11 +39,11 @@ func selectorLabels(cr *v2.WeightsAndBiases) map[string]string {
 // Template returns the operator's collector CronJob for a CR, or why it can't be used.
 func Template(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndBiases) (*batchv1.CronJob, error) {
 	if enabled := cr.Spec.SupportBundle.Enabled; enabled == nil || !*enabled {
-		return nil, fmt.Errorf("support bundles are disabled on namespace: %s and instance: %s; run `wsm support-bundle --enabled=true`", cr.Namespace, cr.Name)
+		return nil, fmt.Errorf("support bundles are disabled on namespace: %s and instance: %s - run `wsm support-bundle --enabled=true`", cr.Namespace, cr.Name)
 	}
 	status := cr.Status.SupportBundle
 	if status == nil {
-		return nil, fmt.Errorf("WeightsAndBiases namespace: %s and instance: %s reports no support-bundle status; the operator predates support bundles or hasn't reconciled yet", cr.Namespace, cr.Name)
+		return nil, fmt.Errorf("WeightsAndBiases namespace: %s and instance: %s reports no support-bundle status - the operator predates support bundles or hasn't reconciled yet", cr.Namespace, cr.Name)
 	}
 	if !status.Ready || status.CronJob == "" {
 		return nil, fmt.Errorf("the support-bundle template for namespace: %s and instance: %s is not ready yet", cr.Namespace, cr.Name)
@@ -138,7 +138,7 @@ func Create(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndB
 		return nil, err
 	}
 	if running != "" {
-		return nil, fmt.Errorf("support bundle %s is still collecting; wait for it to finish", running)
+		return nil, fmt.Errorf("support bundle %s is still collecting - wait for it to finish", running)
 	}
 	suffix, err := NewSuffix()
 	if err != nil {
@@ -162,9 +162,9 @@ func Create(ctx context.Context, client kubernetes.Interface, cr *v2.WeightsAndB
 	}
 	propagation := metav1.DeletePropagationBackground
 	if err := client.BatchV1().Jobs(cr.Namespace).Delete(ctx, created.Name, metav1.DeleteOptions{PropagationPolicy: &propagation}); err != nil && !apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("support bundle %s started at the same time and is still collecting, and the duplicate %s couldn't be removed; run `wsm support-bundle cancel %s`: %w", winner, created.Name, created.Name, err)
+		return nil, fmt.Errorf("support bundle %s started at the same time and is still collecting, and the duplicate %s couldn't be removed - run `wsm support-bundle cancel %s`: %w", winner, created.Name, created.Name, err)
 	}
-	return nil, fmt.Errorf("support bundle %s started at the same time and is still collecting; wait for it to finish", winner)
+	return nil, fmt.Errorf("support bundle %s started at the same time and is still collecting - wait for it to finish", winner)
 }
 
 // olderCollection returns another unfinished collection created before job, or "".

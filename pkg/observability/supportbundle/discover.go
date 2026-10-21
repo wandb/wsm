@@ -42,7 +42,7 @@ func Discover(ctx context.Context, namespace, name string) (*v2.WeightsAndBiases
 
 func discoveryError(err error) error {
 	if apierrors.IsForbidden(err) {
-		return fmt.Errorf("cannot list WeightsAndBiases to find the installation; pass --wandb-namespace and --wandb-name: %w", err)
+		return fmt.Errorf("cannot list WeightsAndBiases to find the installation - pass --wandb-namespace and --wandb-name: %w", err)
 	}
 	if apierrors.IsNotFound(err) {
 		return fmt.Errorf("the v2 WeightsAndBiases CRD is not installed in this cluster: %w", err)
@@ -75,7 +75,7 @@ func SelectInstallation(refs []operator.CRRef, namespace, name string) (operator
 		for i, m := range matches {
 			names[i] = m.Namespace + "/" + m.Name
 		}
-		return operator.CRRef{}, fmt.Errorf("found %d WeightsAndBiases %s (%s); select one with --wandb-namespace and --wandb-name",
+		return operator.CRRef{}, fmt.Errorf("found %d WeightsAndBiases %s (%s) - select one with --wandb-namespace and --wandb-name",
 			len(matches), scope, strings.Join(names, ", "))
 	}
 }

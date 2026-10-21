@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/wandb/operator/api/v2"
+	"github.com/wandb/wsm/pkg/observability/telemetry"
 	"github.com/wandb/wsm/pkg/operator"
-	"github.com/wandb/wsm/pkg/telemetry"
 )
 
 // The valid sets come from the operator API so a new value upstream lands here on

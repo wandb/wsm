@@ -604,6 +604,51 @@ wsm license set --context <ctx> (--license <jwt> | --license-file <path> | --cle
 
 ---
 
+## `wsm support-bundle`
+
+Collect Lumen support bundles from a v2 instance. The operator (`2.0.0-beta.9`+) installs a suspended collector CronJob per instance, and support bundles are enabled by default on new installs. wsm only reads that CronJob; each collection is a Job created from it, like `kubectl create job --from=cronjob/<name>-support-bundle-collector`.
+
+All subcommands share these flags:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | current context | Name of the kubeconfig context; falls back to in-cluster config |
+| `--wandb-name` | auto-discover | Name of the W&B instance; only needed when more than one matches |
+| `--wandb-namespace` | auto-discover | Namespace of the W&B instance; only needed when more than one matches |
+
+### `wsm support-bundle create`
+
+Starts a collection with the operator's `full` preset and prints the bundle ID, which is the Job name (`support-bundle-<hex>`). Only one collection runs at a time per instance; `create` refuses while one is still running, and if two `create`s race, the newer Job deletes itself. Fails if support bundles are disabled or the operator hasn't reported the template ready.
+
+```bash
+wsm support-bundle create [--wait]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--wait` | `false` | Stream the collector's logs, then print Lumen's result: bundle location, size, sha256, and each collector's outcome (`collected`, `partial`, `failed`). Ctrl+C stops following but leaves the collection running |
+
+The collection is an ordinary Job (labelled `weightsandbiases.apps.wandb.com/component=support-bundle`), so its logs are also visible with `kubectl logs job/<id>` and in Watchtower's Jobs tab. Lumen logs one line per step (plan, redaction, upload); per-collector outcomes only appear in the final result.
+
+### `wsm support-bundle cancel`
+
+Stops a running collection by deleting its Job and pod. Only Jobs labelled as this instance's support bundles are accepted. A finished collection is left alone. Bundles already uploaded to the bucket are never deleted; a collection cancelled before its upload step uploads nothing.
+
+```bash
+wsm support-bundle cancel <bundle-id>
+```
+
+### `wsm support-bundle --enabled=true|false`
+
+Sets `spec.supportBundle.enabled` on the CR. `--enabled` alone means `true`. When disabled, the operator waits for a running collection, then removes the collector CronJob, its RBAC, and collection Jobs. Bundles already uploaded to the bucket are kept.
+
+```bash
+wsm support-bundle --enabled=false
+wsm support-bundle --enabled=true
+```
+
+---
+
 ## Legacy Commands
 
 ### `wsm deploy` (Legacy v1 Operator)

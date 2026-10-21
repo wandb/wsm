@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/wandb/wsm/pkg/kubectl"
-	"github.com/wandb/wsm/pkg/telemetry"
+	"github.com/wandb/wsm/pkg/observability/telemetry"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/cli"
 	v1 "helm.sh/helm/v4/pkg/release/v1"

@@ -47,7 +47,7 @@ IAM permission ecr:CreateRepository.`,
 		Example: `  # Create every repo the mirror needs under an ECR path prefix.
   wsm registry create-repos \
     --to 770934259321.dkr.ecr.us-west-2.amazonaws.com/wandbench/collinol-test \
-    --operator-chart-version 2.0.0-beta.1 --wandb-version 0.83.0-pre.1
+    --operator-chart-version 2.0.0-beta.9 --wandb-version 0.85.1
 
   # Preview the repositories without creating them.
   wsm registry create-repos --to <acct>.dkr.ecr.us-west-2.amazonaws.com/wandb --dry-run`,
@@ -113,7 +113,7 @@ IAM permission ecr:CreateRepository.`,
 	}
 
 	cmd.Flags().StringVar(&targetRegistry, "to", "", "ECR registry (and optional path prefix), e.g. <acct>.dkr.ecr.us-west-2.amazonaws.com/wandbench/collinol-test (required)")
-	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.1", "Operator chart version; must match the value passed to 'wsm registry mirror'")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", defaultOperatorChartVersion, "Operator chart version; must match the value passed to 'wsm registry mirror'")
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version; when set, also create the server-manifest repo and every application-image repo the manifest references")
 	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Skip the managed-service operator + data-plane repos; match the flag you mirror with")
 	cmd.Flags().StringVar(&region, "region", "", "AWS region for create-repository (default: parsed from the ECR host)")

@@ -40,7 +40,7 @@ side can fetch everything from --mirror-registry instead of the public sources.
 Auth is read from your Docker config (~/.docker/config.json) by default. Use
 --insecure for a plain-HTTP / self-signed mirror (e.g. a local registry:2).
 
-Mirrors, across three tiers: (1) the operator OCI chart + binary image,
+Mirrors, across three tiers: (1) the operator OCI chart + its images,
 cert-manager and its 5 component images, and nginx-gateway-fabric with its 2
 images; (2) the managed-service operator images (moco/altinity/opstree/
 seaweedfs); (3) the managed data-plane images (ClickHouse/Kafka/MySQL/Redis/
@@ -227,6 +227,22 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 		for _, img := range imgs {
 			plan = append(plan, mirrorItem{src: img, dst: translate(img, target)})
 		}
+	}
+
+	// Telemetry images, with the managed operators left to buildManagedImagePlan.
+	var managedSubcharts []string
+	for _, t := range managedTypes {
+		managedSubcharts = append(managedSubcharts, t.subchart)
+	}
+	telemetryImages, err := operator.TelemetryChartImages(ctx, pick(operator.OperatorChartRepo, "oci://"+target+"/wandb/charts"), operatorChartVersion, managedSubcharts, insecure)
+	if err != nil {
+		return nil, fmt.Errorf("derive telemetry images: %w", err)
+	}
+	for _, img := range telemetryImages {
+		if strings.HasPrefix(img, wandbPublicPrefix) {
+			continue
+		}
+		plan = append(plan, mirrorItem{src: img, dst: translate(img, target)})
 	}
 
 	return plan, nil

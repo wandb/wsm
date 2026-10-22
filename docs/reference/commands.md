@@ -481,7 +481,7 @@ Pulls every chart and image required by `wsm deploy-v2 operator` from its upstre
 wsm registry mirror --to <host> [flags]
 ```
 
-Scope: the operator OCI chart + binary image, and the cert-manager, nginx-gateway-fabric, and kube-state-metrics OCI charts plus the component images each deploys. With `--wandb-version` it also mirrors the W&B server manifest and every image it references — the application images and the managed data-plane server images (ClickHouse/MySQL/Redis/Kafka/object-store) — and rewrites the manifest's image refs to point at your mirror. The managed-service **operator** images (moco/redis/seaweedfs/altinity) and their sidecars come with them. Nothing is hand-listed: the image sets are derived by rendering the charts and parsing the manifest, so they always match what an install actually pulls.
+Scope: the operator OCI chart + its images, and the cert-manager, nginx-gateway-fabric, and kube-state-metrics OCI charts plus the component images each deploys. With `--wandb-version` it also mirrors the W&B server manifest and every image it references — the application images and the managed data-plane server images (ClickHouse/MySQL/Redis/Kafka/object-store) — and rewrites the manifest's image refs to point at your mirror. The managed-service **operator** images (moco/redis/seaweedfs/altinity) and their sidecars come with them. Nothing is hand-listed: the image sets are derived by rendering the charts and parsing the manifest, so they always match what an install actually pulls.
 
 #### Flags
 
@@ -504,7 +504,7 @@ Auth is read from your Docker config (`~/.docker/config.json`). Run `docker logi
 
 ### `wsm registry check`
 
-Verifies that every artifact `wsm registry mirror` pushes is present in your mirror. It computes the **same destination set** as `mirror` (operator chart + image, cert-manager, nginx-gateway, the managed-service operator/data-plane images, and — with `--wandb-version` — the server manifest plus every application image it references), then does a manifest check for each.
+Verifies that every artifact `wsm registry mirror` pushes is present in your mirror. It computes the **same destination set** as `mirror` (operator chart + images, cert-manager, nginx-gateway, the managed-service operator/data-plane images, and — with `--wandb-version` — the server manifest plus every application image it references), then does a manifest check for each.
 
 Pass the **same** `--operator-chart-version` / `--wandb-version` / `--exclude-operators` / `--exclude-managed` / `--skip-managed-images` you mirrored with, or `check` and `mirror` won't agree on the expected set. The server manifest and its application images are read back out of the mirror itself — and the charts are rendered from their copies in the mirror — so `check` works from an air-gapped host with access only to the registry.
 
@@ -542,7 +542,7 @@ Shells out to the `aws` CLI using your AWS config (env / `~/.aws` / IRSA); the c
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--to` | — | **Required.** ECR registry host plus optional path prefix. Non-ECR hosts are rejected. |
-| `--operator-chart-version` | `2.0.0-beta.1` | Operator chart version (must match `wsm registry mirror`). |
+| `--operator-chart-version` | `2.0.0-beta.9` | Operator chart version (must match `wsm registry mirror`). |
 | `--wandb-version` | — | W&B server version; when set, also create the server-manifest repo and every application-image repo the manifest references. |
 | `--exclude-operators` | — | Managed types whose operator repos to skip (match `--exclude-operators` you mirror with). |
 | `--exclude-managed` | — | Managed types whose operator **and** data-plane repos to skip (match `--exclude-managed` you mirror with). |

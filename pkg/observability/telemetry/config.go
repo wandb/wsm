@@ -120,6 +120,27 @@ func logAgentOff() map[string]interface{} {
 	return map[string]interface{}{"enabled": false}
 }
 
+// ImageRenderValues renders every telemetry image as its upstream ref, for mirroring.
+func ImageRenderValues() map[string]any {
+	values := BuildValues(Config{Mode: ModeFull})
+	values["alerting"] = map[string]any{"enabled": true}
+	return map[string]any{
+		"telemetry":                 values,
+		"global":                    map[string]any{"image": map[string]any{"registry": "docker.io"}},
+		"victoria-metrics-operator": map[string]any{"enabled": true, "crds": kubectlHook("registry.k8s.io", "")},
+		"grafana-operator":          map[string]any{"enabled": true},
+	}
+}
+
+// kubectlHook sets the victoria-metrics CRD-upgrade hook's kubectl image.
+func kubectlHook(registry, tag string) map[string]any {
+	image := map[string]any{"registry": registry, "repository": "kubectl"}
+	if tag != "" {
+		image["tag"] = tag
+	}
+	return map[string]any{"upgrade": map[string]any{"kubectl": map[string]any{"image": image}}}
+}
+
 // PrepValues is the base values with telemetry off and its operators disabled
 // but the CRDs enabled — the CRD-preparation upgrade that runs before the stack
 // is turned on.

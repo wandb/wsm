@@ -70,6 +70,7 @@ Constants in `cmd/wsm/deploy_v2.go` need updating each W&B/operator release. The
 - `defaultWandbVersion` (currently `"0.85.1"`) — used when `--wandb-version` is unset.
 - `minWandbVersion` (currently `"0.80.0"`) — the oldest server wsm will deploy; a resolved version below it (via `--wandb-version`, `--cr-file`, or `--cr-set spec.wandb.version`) is rejected up front by `validateWandbVersion`. Raise it when dropping support for old servers.
 - The default of `--operator-chart-version` flag (currently `"2.0.0-beta.9"`).
+- `supportbundle.CollectorImage` in `pkg/observability/supportbundle/collection.go` (currently Lumen `0.4.10`) — must match the operator's internal `DefaultSupportBundleVersion` until the operator exports it.
 
 cert-manager (`v1.20.2`) and nginx-gateway-fabric (`2.5.1`) versions are pinned as constants in `pkg/operator/operator.go:53-64`. Gateway API CRDs come from a hardcoded URL at line 66.
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/wandb/wsm/pkg/observability/supportbundle"
 	"github.com/wandb/wsm/pkg/operator"
 	"go.podman.io/image/v5/copy"
 	"go.podman.io/image/v5/docker"
@@ -199,6 +200,8 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 			src: "ghcr.io/prometheus-community/charts/kube-state-metrics:" + ksmChartVersion,
 			dst: target + "/prometheus-community/charts/kube-state-metrics:" + ksmChartVersion,
 		},
+		// Pulled through the node's registry mirror, so it keeps the host-stripped path.
+		{src: supportbundle.CollectorImage, dst: translate(supportbundle.CollectorImage, target)},
 	}
 
 	// pick selects the upstream chart ref (mirror) or its pushed copy under target

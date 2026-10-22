@@ -481,7 +481,7 @@ Pulls every chart and image required by `wsm deploy-v2 operator` from its upstre
 wsm registry mirror --to <host> [flags]
 ```
 
-Scope: the operator OCI chart + its images, and the cert-manager, nginx-gateway-fabric, and kube-state-metrics OCI charts plus the component images each deploys. With `--wandb-version` it also mirrors the W&B server manifest and every image it references — the application images and the managed data-plane server images (ClickHouse/MySQL/Redis/Kafka/object-store) — and rewrites the manifest's image refs to point at your mirror. The managed-service **operator** images (moco/redis/seaweedfs/altinity) and their sidecars come with them. Nothing is hand-listed: the image sets are derived by rendering the charts and parsing the manifest, so they always match what an install actually pulls.
+Scope: the operator OCI chart + its images, and the cert-manager, nginx-gateway-fabric, and kube-state-metrics OCI charts plus the component images each deploys. With `--wandb-version` it also mirrors the W&B server manifest and every image it references — the application images and the managed data-plane server images (ClickHouse/MySQL/Redis/Kafka/object-store) — and rewrites the manifest's image refs to point at your mirror. The managed-service **operator** images (moco/redis/seaweedfs/altinity) and their sidecars come with them. The image sets are derived by rendering the charts and parsing the manifest, so they always match what an install actually pulls.
 
 #### Flags
 

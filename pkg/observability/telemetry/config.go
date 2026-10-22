@@ -132,6 +132,33 @@ func ImageRenderValues() map[string]any {
 	}
 }
 
+// ImageValues points a full or forward install's telemetry images at registry and adds the pull secrets.
+func ImageValues(mode, registry, kubectlTag string, pullSecrets []string) map[string]any {
+	values := map[string]any{}
+	global := map[string]any{}
+	grafanaOperator := map[string]any{}
+	if registry != "" {
+		global["image"] = map[string]any{"registry": registry}
+		values["victoria-metrics-operator"] = map[string]any{"crds": kubectlHook(registry, kubectlTag)}
+		grafanaOperator["global"] = map[string]any{"imageRegistry": registry}
+	}
+	if len(pullSecrets) > 0 {
+		secrets := make([]any, 0, len(pullSecrets))
+		for _, name := range pullSecrets {
+			secrets = append(secrets, map[string]any{"name": name})
+		}
+		global["imagePullSecrets"] = secrets
+		grafanaOperator["imagePullSecrets"] = secrets
+	}
+	if len(global) > 0 {
+		values["global"] = global
+	}
+	if mode == ModeFull && len(grafanaOperator) > 0 {
+		values["grafana-operator"] = grafanaOperator
+	}
+	return values
+}
+
 // kubectlHook sets the victoria-metrics CRD-upgrade hook's kubectl image.
 func kubectlHook(registry, tag string) map[string]any {
 	image := map[string]any{"registry": registry, "repository": "kubectl"}

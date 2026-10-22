@@ -593,6 +593,19 @@ func mergeValues(releaseValues map[string]interface{}, key string, add map[strin
 	}
 }
 
+// mergeDeep merges add into dst, recursing into maps both sides hold.
+func mergeDeep(dst, add map[string]any) {
+	for k, v := range add {
+		addMap, ok := v.(map[string]any)
+		dstMap, dstOK := dst[k].(map[string]any)
+		if ok && dstOK {
+			mergeDeep(dstMap, addMap)
+			continue
+		}
+		dst[k] = v
+	}
+}
+
 // applyOpenShiftValues mirrors the operator's profiles/openshift.yaml so the
 // operator and bundled managed-service pods deploy cleanly on OpenShift.
 func applyOpenShiftValues(releaseValues map[string]interface{}) {
@@ -746,6 +759,7 @@ func DeployOperator(
 	watchtowerEnableDBAdmin bool,
 	installTimeout time.Duration,
 	imagePullPolicy corev1.PullPolicy,
+	imagePullSecrets []string,
 ) error {
 	const chartName = "operator"
 	const releaseName = "wandb-operator"
@@ -885,6 +899,13 @@ func DeployOperator(
 		releaseValues["grafana-operator"] = map[string]interface{}{"enabled": true}
 	case telemetry.ModeForward:
 		releaseValues["victoria-metrics-operator"] = map[string]interface{}{"enabled": true}
+	}
+	if telemetryConfig.Mode == telemetry.ModeFull || telemetryConfig.Mode == telemetry.ModeForward {
+		registry := ""
+		if mirror != nil {
+			registry = mirror.Host
+		}
+		mergeDeep(releaseValues, telemetry.ImageValues(telemetryConfig.Mode, registry, renderKubeVersion, imagePullSecrets))
 	}
 
 	if openshift {

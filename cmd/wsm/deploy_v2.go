@@ -464,6 +464,7 @@ func operatorDeployCmd() *cobra.Command {
 				f.mirrorRegistry,
 				f.insecureRegistry,
 				f.registryCAFile,
+				f.imagePullSecrets,
 				gatewayCRDURL,
 				skipGatewayCRDs,
 				allowUnsupportedArch,
@@ -787,6 +788,7 @@ func performDeploy(
 	mirrorRegistry string,
 	insecureRegistry bool,
 	registryCAFile string,
+	imagePullSecrets []string,
 	gatewayCRDURL string,
 	skipGatewayCRDs bool,
 	allowUnsupportedArch bool,
@@ -996,7 +998,7 @@ func performDeploy(
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
 	start := time.Now()
 
-	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetryConfig, wandbNamespace, openshift, watchtowerEnableSecretWrites, watchtowerEnableDBAdmin, operatorInstallTimeout, operatorPullPolicy); err != nil {
+	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetryConfig, wandbNamespace, openshift, watchtowerEnableSecretWrites, watchtowerEnableDBAdmin, operatorInstallTimeout, operatorPullPolicy, imagePullSecrets); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}

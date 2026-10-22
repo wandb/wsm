@@ -282,7 +282,6 @@ Even with everything mirrored, a few things default to an online source. Each ha
 | Still online | When | What the air-gapped customer does |
 |--------------|------|------------------------------------|
 | **Gateway API CRDs** (a YAML on `github.com`) | Whenever nginx-gateway installs | Pre-apply the CRDs from a copy you carried in, then pass `--skip-gateway-api-crds`; **or** host the YAML internally and pass `--gateway-api-crd-url <internal-url>`. |
-| **Observability / telemetry images** (otel-collector, victoria-metrics-operator, grafana-operator + their data-plane pods) | Only if `--observability-mode=full\|forward` | These are **not yet mirrored by `wsm registry mirror`** (kube-state-metrics is the exception — its chart and image are mirrored). Either keep `--observability-mode=off` (default), or mirror those images into your registry by hand and ensure your node redirect covers them. |
 | **Node container-runtime registry mirror** (required for the data plane) | Always, for the managed DB images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) | The operator emits these with upstream refs, so each node must mirror `docker.io`/`quay.io`/`ghcr.io`/`us-docker.pkg.dev` → `$REG/<host-stripped>`. `wsm cluster create --insecure-registry-host $REG` sets this up for Kind; on a real cluster you configure `certs.d` per node. Platforms with no node access (GKE Autopilot, EKS Fargate) can't run the managed databases air-gapped. |
 | **Kind node image** | Only if `--setup-k8s-cluster` | Mirror `kindest/node` and pass `--kind-node-image <reg>/kindest/node:...`. N/A for an existing cluster. |
 
@@ -302,7 +301,7 @@ Even with everything mirrored, a few things default to an online source. Each ha
 - **License** — apply your W&B license (`--license` / `--license-file` at deploy, or `wsm license set` after). Inspect the active license with `wsm license info`. Without it the instance runs in a limited state.
 - **External DNS + TLS for the W&B endpoint** — point your hostname at the gateway/ingress and provide the *serving* cert (this is the user-facing W&B URL — separate from the registry CA). Set it via `--wandb-hostname` and the networking/TLS flags.
 - **Verify readiness** — `kubectl get wandb -n <ns>` should report the managed services and app ready; `kubectl get pods -n <ns>` should be all Running.
-- **(If observability enabled)** mirror the telemetry stack images by hand — `wsm registry mirror` does not yet include them.
+- **(If observability enabled)** with an authenticated registry, the `--image-pull-secret` Secret must also exist in the operator namespace.
 
 ---
 

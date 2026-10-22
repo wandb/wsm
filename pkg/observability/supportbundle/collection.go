@@ -2,6 +2,9 @@
 // install runs from the operator's suspended collector CronJob.
 package supportbundle
 
+// CollectorImage mirrors the operator's internal default; bump it each release until the operator exports it.
+const CollectorImage = "us-docker.pkg.dev/wandb-production/public/wandb/lumen:0.4.10"
+
 // CollectorName mirrors the collectors the operator can put in a preset.
 type CollectorName string
 

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/wandb/wsm/pkg/observability/telemetry"
 	yamlv3 "gopkg.in/yaml.v3"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/common"
@@ -102,6 +103,15 @@ func OperatorChartImages(ctx context.Context, chartRepo, chartVersion string, di
 	return RenderChartImages(ctx, chartRepo+"/operator", chartVersion, values, insecure)
 }
 
+// TelemetryChartImages returns the images the operator chart's telemetry stack deploys.
+func TelemetryChartImages(ctx context.Context, chartRepo, chartVersion string, disabledSubcharts []string, insecure bool) ([]string, error) {
+	values := telemetry.ImageRenderValues()
+	for _, sc := range disabledSubcharts {
+		values[sc] = map[string]any{"enabled": false}
+	}
+	return RenderChartImages(ctx, chartRepo+"/operator", chartVersion, values, insecure)
+}
+
 // CertManagerImages renders the cert-manager chart from chartRef with the same values
 // InstallCertManager uses (startupapicheck disabled), yielding controller/webhook/
 // cainjector plus the acmesolver passed via a controller arg.
@@ -158,6 +168,10 @@ func extractImages(manifests string) []string {
 			continue
 		}
 		walkImages(&node, add)
+		// The Grafana CR carries its image in spec.version.
+		if len(node.Content) > 0 && scalarChild(node.Content[0], "kind") == "Grafana" {
+			add(scalarChild(mappingChild(node.Content[0], "spec"), "version"))
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -178,7 +192,7 @@ func walkImages(n *yamlv3.Node, add func(string)) {
 			key := n.Content[i].Value
 			val := n.Content[i+1]
 			switch {
-			case key == "image" && val.Kind == yamlv3.ScalarNode:
+			case (key == "image" || key == "configReloaderImage") && val.Kind == yamlv3.ScalarNode:
 				add(val.Value)
 			case (key == "args" || key == "command") && val.Kind == yamlv3.SequenceNode:
 				addArgImages(val, add)
@@ -223,6 +237,18 @@ func scalarChild(n *yamlv3.Node, key string) string {
 		}
 	}
 	return ""
+}
+
+func mappingChild(n *yamlv3.Node, key string) *yamlv3.Node {
+	if n == nil || n.Kind != yamlv3.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return n.Content[i+1]
+		}
+	}
+	return nil
 }
 
 func joinImageRef(registry, repository, tag, digest string) string {

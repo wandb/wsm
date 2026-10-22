@@ -2,7 +2,7 @@
 
 A support bundle is a redacted `.tar.gz` of diagnostics (cluster resources, pod logs, and telemetry when it's enabled). [Lumen](https://github.com/wandb/lumen) collects it from a v2 W&B instance and uploads it to that **instance's own bucket**, under `agent/service-bundles/`. The bundle stays in the customer's storage unless someone downloads it.
 
-The operator installs a suspended CronJob, `<name>-support-bundle-collector`, for each `WeightsAndBiases`. It never runs on a schedule; wsm uses it as a template. Support bundles are on by default (`spec.supportBundle.enabled: true`).
+The operator installs a suspended CronJob, `<name>-support-bundle-collector`, for each `WeightsAndBiases`. It never runs on a schedule; wsm uses it as a template. Support bundles are on by default (`spec.supportBundle.enabled: true`). For air-gapped installs, `wsm registry mirror` includes the collector image.
 
 ```bash
 wsm support-bundle create --wait     # collect; the Job name is the bundle ID

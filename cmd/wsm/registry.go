@@ -14,7 +14,6 @@ import (
 	"github.com/wandb/wsm/pkg/operator"
 	"github.com/wandb/wsm/pkg/utils"
 	"gopkg.in/yaml.v3"
-	"oras.land/oras-go/v2/registry/remote"
 )
 
 var registryKeepCache bool
@@ -124,16 +123,13 @@ func registryCheckCmd() *cobra.Command {
 
   Auth is read from your Docker config (~/.docker/config.json) by default.
   Use --insecure to skip certificate verification for HTTPS registries, or
-  --plain-http for HTTP chart and image registries. OCI server manifests require HTTPS.`,
+  --plain-http to check an HTTP mirror, including its server manifest.`,
 		Example: `  wsm registry check --registry myreg.example.com --wandb-version 0.81.0
     wsm registry check --registry myreg.example.com --insecure
     wsm registry check --registry myreg.example.com --wandb-version 0.81.0 --fail-on-missing`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if registry == "" {
 				return fmt.Errorf("--registry is required")
-			}
-			if transport.PlainHTTP && wandbVersion != "" {
-				return fmt.Errorf("--plain-http cannot be used with --wandb-version: OCI server manifests require HTTPS")
 			}
 			registry = strings.TrimRight(registry, "/")
 			ctx := context.Background()
@@ -174,7 +170,7 @@ func registryCheckCmd() *cobra.Command {
 				manifestRepo := registry + "/wandb/server-manifest"
 				targets = append(targets, manifestRepo+":"+wandbVersion)
 
-				files, err := pullManifestYAMLFrom(ctx, manifestRepo, wandbVersion, transport.InsecureSkipTLSVerify)
+				files, err := pullManifestYAMLFrom(ctx, manifestRepo, wandbVersion, transport)
 				if err != nil {
 					manifestWarn = fmt.Sprintf("could not read server manifest %s:%s — application images not checked (%v)", manifestRepo, wandbVersion, err)
 				} else if refs, err := collectManifestImages(files, exclusions); err != nil {
@@ -229,7 +225,7 @@ func registryCheckCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&registry, "registry", "", "Target registry to check against, e.g. myreg.example.com (required)")
 	cmd.Flags().BoolVar(&transport.InsecureSkipTLSVerify, "insecure", false, "Skip TLS certificate verification; keep HTTPS")
-	cmd.Flags().BoolVar(&transport.PlainHTTP, "plain-http", false, "Use plain HTTP for chart and image registry requests (incompatible with --wandb-version)")
+	cmd.Flags().BoolVar(&transport.PlainHTTP, "plain-http", false, "Use plain HTTP for all requests to the mirror, including server manifests")
 	cmd.Flags().BoolVar(&failOnMissing, "fail-on-missing", false, "Exit non-zero if any artifact is missing")
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", defaultOperatorChartVersion, "Operator chart version that was mirrored (must match 'wsm registry mirror')")
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version that was mirrored; when set, also check the server manifest and every application image it references")
@@ -242,12 +238,10 @@ func registryCheckCmd() *cobra.Command {
 func checkOne(ctx context.Context, image string, transport operator.RegistryTransport) (status, errMsg string) {
 	// The image library's insecure option also permits an HTTP fallback. Use
 	// ORAS here so --insecure preserves HTTPS and --plain-http is explicit.
-	repo, err := remote.NewRepository(image)
+	repo, err := registryRepository(image, transport)
 	if err != nil {
 		return "error", err.Error()
 	}
-	repo.PlainHTTP = transport.PlainHTTP
-	repo.Client = dockerAuthClient(transport.InsecureSkipTLSVerify)
 	reference := repo.Reference.Reference
 	if reference == "" {
 		reference = "latest"

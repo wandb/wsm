@@ -30,7 +30,7 @@ func TestRegistryCheckChartTransportFlags(t *testing.T) {
 	}{
 		{name: "private HTTPS rejected by default", tls: true, wantError: "x509:"},
 		{name: "insecure preserves HTTPS", tls: true, flags: []string{"--insecure"}, wantError: "not found", contacted: true},
-		{name: "explicit HTTP", flags: []string{"--plain-http"}, wantError: "not found", contacted: true},
+		{name: "explicit HTTP", flags: []string{"--plain-http", "--wandb-version", "0.84.0"}, wantError: "not found", contacted: true},
 		{name: "HTTP and TLS skip are independent", flags: []string{"--plain-http", "--insecure"}, wantError: "not found", contacted: true},
 		{name: "insecure alone does not enable HTTP", flags: []string{"--insecure"}, wantError: "HTTP response to HTTPS client"},
 	}
@@ -60,17 +60,6 @@ func TestRegistryCheckChartTransportFlags(t *testing.T) {
 				t.Fatalf("registry contacted = %v, want %v", got, tc.contacted)
 			}
 		})
-	}
-}
-
-func TestRegistryCheckPlainHTTPRejectsServerManifest(t *testing.T) {
-	cmd := registryCheckCmd()
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"--registry", "unused.invalid", "--plain-http", "--wandb-version", "0.84.0"})
-	err := cmd.ExecuteContext(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "OCI server manifests require HTTPS") {
-		t.Fatalf("expected server-manifest HTTPS requirement, got %v", err)
 	}
 }
 

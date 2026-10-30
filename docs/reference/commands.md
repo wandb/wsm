@@ -410,7 +410,7 @@ wsm cluster create [flags]
 | `--http-port` | `8080` | Host port mapped to HTTP ingress |
 | `--https-port` | `8443` | Host port mapped to HTTPS ingress |
 | `--kind-node-image` | — | Override the Kind node image (e.g. point at a mirrored `kindest/node` for offline cluster bootstrap) |
-| `--insecure-registry-host` | — | Configure containerd to pull from this host over plain HTTP (e.g. `host.docker.internal:5000`). Pairs with `wsm registry mirror --insecure` for local-laptop testing against a plain-HTTP `registry:2`. See [On-Prem Deployment](../deployment/on-prem.md). |
+| `--insecure-registry-host` | — | Configure containerd to pull from this host over plain HTTP (e.g. `host.docker.internal:5000`). Pairs with `wsm registry mirror --plain-http` for local-laptop testing against a plain-HTTP `registry:2`. See [On-Prem Deployment](../deployment/on-prem.md). |
 
 #### Examples
 
@@ -488,7 +488,8 @@ Scope: the operator OCI chart + its images, and the cert-manager, nginx-gateway-
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--to` | — | **Required.** Hostname of your mirror, e.g. `harbor.example.com` or `localhost:5000`. |
-| `--insecure` | `false` | Skip TLS verification when pushing to the mirror. Use for plain-HTTP registries like a local `registry:2`. **Never** in production. |
+| `--insecure` | `false` | Skip the target mirror's TLS certificate verification while keeping HTTPS. Does not affect upstream downloads. |
+| `--plain-http` | `false` | Use HTTP for the target mirror, including chart, image, and server-manifest uploads. Upstream downloads stay on HTTPS. |
 | `--dry-run` | `false` | Print the source → target mirroring plan without pushing. |
 | `--operator-chart-version` | `2.0.0-beta.9` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
 | `--wandb-version` | — | W&B server version (e.g. `0.84.0`). When set, also mirror the server manifest and every application + managed data-plane image it references, rewriting them to point at the mirror. |
@@ -523,13 +524,19 @@ wsm registry check --registry <host> --wandb-version <version> [flags]
 | `--exclude-managed` | — | Managed types to skip checking entirely (match `--exclude-managed` you mirrored with). |
 | `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store` (match the flag you mirrored with). |
 | `--insecure` | `false` | Skip TLS certificate verification while keeping HTTPS. Does not enable HTTP or an HTTP fallback. |
-| `--plain-http` | `false` | Use plain HTTP for chart and image registry requests. Cannot be combined with `--wandb-version`, because OCI server manifests require HTTPS. |
+| `--plain-http` | `false` | Use HTTP for all requests to the mirror, including server-manifest readback with `--wandb-version`. |
 | `--fail-on-missing` | `false` | Exit non-zero if any artifact is missing. |
 
-For an HTTPS registry with a private certificate, use `registry check --insecure`.
-For an HTTP-only development registry, use `registry check --plain-http` instead;
-`--insecure` no longer selects HTTP. These settings are independent of the legacy
-`registry mirror --insecure` copy option, which still permits both registry types.
+For an HTTPS mirror with a private certificate, use `--insecure` with both
+`registry mirror` and `registry check`. For an HTTP mirror, use `--plain-http`
+with both commands. `--insecure` does not enable HTTP or an HTTP fallback.
+The mirror command applies these flags only to its destination; it continues
+to download published upstream artifacts over verified HTTPS.
+
+```bash
+wsm registry mirror --to localhost:5000 --plain-http --wandb-version 0.84.0
+wsm registry check --registry localhost:5000 --plain-http --wandb-version 0.84.0 --fail-on-missing
+```
 
 ### `wsm registry create-repos`
 

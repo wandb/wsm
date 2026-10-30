@@ -522,8 +522,14 @@ wsm registry check --registry <host> --wandb-version <version> [flags]
 | `--exclude-operators` | — | Managed types whose operator images to skip checking (match `--exclude-operators` you mirrored with). |
 | `--exclude-managed` | — | Managed types to skip checking entirely (match `--exclude-managed` you mirrored with). |
 | `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store` (match the flag you mirrored with). |
-| `--insecure` | `false` | Skip TLS verification when contacting the registry. |
+| `--insecure` | `false` | Skip TLS certificate verification while keeping HTTPS. Does not enable HTTP or an HTTP fallback. |
+| `--plain-http` | `false` | Use plain HTTP for chart and image registry requests. Cannot be combined with `--wandb-version`, because OCI server manifests require HTTPS. |
 | `--fail-on-missing` | `false` | Exit non-zero if any artifact is missing. |
+
+For an HTTPS registry with a private certificate, use `registry check --insecure`.
+For an HTTP-only development registry, use `registry check --plain-http` instead;
+`--insecure` no longer selects HTTP. These settings are independent of the legacy
+`registry mirror --insecure` copy option, which still permits both registry types.
 
 ### `wsm registry create-repos`
 

@@ -76,7 +76,7 @@ spec:
 // Network-dependent: renders the real operator chart. Skips if the registry is
 // unreachable so it never breaks offline/CI runs.
 func TestOperatorChartImages_Real(t *testing.T) {
-	imgs, err := OperatorChartImages(context.Background(), OperatorChartRepo, "2.0.0-beta.3", nil, false)
+	imgs, err := OperatorChartImages(context.Background(), OperatorChartRepo, "2.0.0-beta.3", nil, RegistryTransport{})
 	if err != nil {
 		t.Skipf("cannot reach operator chart registry: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestToolChartImages_Real(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
 		name string
-		fn   func(context.Context, string, bool) ([]string, error)
+		fn   func(context.Context, string, RegistryTransport) ([]string, error)
 		ref  string
 		want []string
 		// absent must not appear (cert-manager's startupapicheck is disabled).
@@ -152,7 +152,7 @@ func TestToolChartImages_Real(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		imgs, err := c.fn(ctx, c.ref, false)
+		imgs, err := c.fn(ctx, c.ref, RegistryTransport{})
 		if err != nil {
 			t.Skipf("%s: cannot reach registry: %v", c.name, err)
 		}

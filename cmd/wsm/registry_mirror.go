@@ -72,13 +72,13 @@ external databases).`,
 			ctx := context.Background()
 
 			// Charts render from upstream (verified TLS); false = not from the mirror.
-			items, err := buildMirrorPlan(ctx, targetRegistry, operatorChartVersion, false, false)
+			items, err := buildMirrorPlan(ctx, targetRegistry, operatorChartVersion, false, operator.RegistryTransport{})
 			if err != nil {
 				return err
 			}
 			// Managed-service operator + sidecar images (operator chart render) plus the
 			// data-plane server images (manifest below). Excluded types are dropped.
-			managed, err := buildManagedImagePlan(ctx, targetRegistry, operator.OperatorChartRepo, operatorChartVersion, exclusions, false)
+			managed, err := buildManagedImagePlan(ctx, targetRegistry, operator.OperatorChartRepo, operatorChartVersion, exclusions, operator.RegistryTransport{})
 			if err != nil {
 				return err
 			}
@@ -171,9 +171,9 @@ type mirrorItem struct {
 // with no hand-maintained list.
 //
 // fromMirror renders the tool charts from their pushed copies under target (for check,
-// which needs registry access only) instead of upstream (for mirror). insecure skips
-// TLS verification for a self-signed mirror source.
-func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, fromMirror, insecure bool) ([]mirrorItem, error) {
+// which needs registry access only) instead of upstream (for mirror). transport
+// controls the selected chart source independently of the copy destination.
+func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, fromMirror bool, transport operator.RegistryTransport) ([]mirrorItem, error) {
 	certManagerVersion := operator.CertManagerVersion
 	nginxGatewayVersion := operator.NginxGatewayVersion
 	ksmChartVersion := operator.KubeStateMetricsVersion
@@ -214,7 +214,7 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 		return upstream
 	}
 	toolCharts := []struct {
-		images   func(context.Context, string, bool) ([]string, error)
+		images   func(context.Context, string, operator.RegistryTransport) ([]string, error)
 		upstream string
 		mirrored string
 	}{
@@ -223,7 +223,7 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 		{operator.KubeStateMetricsImages, "oci://ghcr.io/prometheus-community/charts/kube-state-metrics", "oci://" + target + "/prometheus-community/charts/kube-state-metrics"},
 	}
 	for _, tc := range toolCharts {
-		imgs, err := tc.images(ctx, pick(tc.upstream, tc.mirrored), insecure)
+		imgs, err := tc.images(ctx, pick(tc.upstream, tc.mirrored), transport)
 		if err != nil {
 			return nil, err
 		}
@@ -237,7 +237,7 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 	for _, t := range managedTypes {
 		managedSubcharts = append(managedSubcharts, t.subchart)
 	}
-	telemetryImages, err := operator.TelemetryChartImages(ctx, pick(operator.OperatorChartRepo, "oci://"+target+"/wandb/charts"), operatorChartVersion, managedSubcharts, insecure)
+	telemetryImages, err := operator.TelemetryChartImages(ctx, pick(operator.OperatorChartRepo, "oci://"+target+"/wandb/charts"), operatorChartVersion, managedSubcharts, transport)
 	if err != nil {
 		return nil, fmt.Errorf("derive telemetry images: %w", err)
 	}
@@ -258,12 +258,12 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 // when checking an air-gapped registry. exclusions drops excluded types' operator
 // images (their subcharts are disabled in the render). The W&B operator-binary image
 // is skipped: buildMirrorPlan mirrors it under W&B's path convention, which
-// translate() wouldn't reproduce. insecure skips TLS for a self-signed source.
-func buildManagedImagePlan(ctx context.Context, target, chartRepo, operatorChartVersion string, exclusions managedExclusions, insecure bool) ([]mirrorItem, error) {
+// translate() wouldn't reproduce. transport controls access to the chart source.
+func buildManagedImagePlan(ctx context.Context, target, chartRepo, operatorChartVersion string, exclusions managedExclusions, transport operator.RegistryTransport) ([]mirrorItem, error) {
 	if exclusions.allOperatorsExcluded() {
 		return nil, nil
 	}
-	imgs, err := operator.OperatorChartImages(ctx, chartRepo, operatorChartVersion, exclusions.disabledSubcharts(), insecure)
+	imgs, err := operator.OperatorChartImages(ctx, chartRepo, operatorChartVersion, exclusions.disabledSubcharts(), transport)
 	if err != nil {
 		return nil, fmt.Errorf("derive operator chart images: %w", err)
 	}

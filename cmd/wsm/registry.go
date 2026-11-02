@@ -11,9 +11,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wandb/wsm/pkg/deployer"
 	"github.com/wandb/wsm/pkg/helm"
+	"github.com/wandb/wsm/pkg/operator"
 	"github.com/wandb/wsm/pkg/utils"
-	"go.podman.io/image/v5/docker"
-	"go.podman.io/image/v5/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -97,7 +96,7 @@ func translate(image, registry string) string {
 func registryCheckCmd() *cobra.Command {
 	var (
 		registry             string
-		insecure             bool
+		transport            operator.RegistryTransport
 		failOnMissing        bool
 		operatorChartVersion string
 		wandbVersion         string
@@ -123,7 +122,8 @@ func registryCheckCmd() *cobra.Command {
   itself, so this works from an air-gapped host with access only to the registry.
 
   Auth is read from your Docker config (~/.docker/config.json) by default.
-  Use --insecure for self-signed registries.`,
+  Use --insecure to skip certificate verification for HTTPS registries, or
+  --plain-http to check an HTTP mirror, including its server manifest.`,
 		Example: `  wsm registry check --registry myreg.example.com --wandb-version 0.81.0
     wsm registry check --registry myreg.example.com --insecure
     wsm registry check --registry myreg.example.com --wandb-version 0.81.0 --fail-on-missing`,
@@ -145,7 +145,7 @@ func registryCheckCmd() *cobra.Command {
 			// freshly-mirrored image as "missing".)
 			// Render the charts FROM THE MIRROR so check needs only registry access.
 			var targets []string
-			mirrorPlan, err := buildMirrorPlan(ctx, registry, operatorChartVersion, true, insecure)
+			mirrorPlan, err := buildMirrorPlan(ctx, registry, operatorChartVersion, true, transport)
 			if err != nil {
 				return err
 			}
@@ -153,7 +153,7 @@ func registryCheckCmd() *cobra.Command {
 				targets = append(targets, it.dst)
 			}
 			// Operator chart also rendered from the mirror's copy (its subcharts travel with it).
-			managed, err := buildManagedImagePlan(ctx, registry, "oci://"+registry+"/wandb/charts", operatorChartVersion, exclusions, insecure)
+			managed, err := buildManagedImagePlan(ctx, registry, "oci://"+registry+"/wandb/charts", operatorChartVersion, exclusions, transport)
 			if err != nil {
 				return err
 			}
@@ -170,7 +170,7 @@ func registryCheckCmd() *cobra.Command {
 				manifestRepo := registry + "/wandb/server-manifest"
 				targets = append(targets, manifestRepo+":"+wandbVersion)
 
-				files, err := pullManifestYAMLFrom(ctx, manifestRepo, wandbVersion, insecure)
+				files, err := pullManifestYAMLFrom(ctx, manifestRepo, wandbVersion, transport)
 				if err != nil {
 					manifestWarn = fmt.Sprintf("could not read server manifest %s:%s — application images not checked (%v)", manifestRepo, wandbVersion, err)
 				} else if refs, err := collectManifestImages(files, exclusions); err != nil {
@@ -190,7 +190,7 @@ func registryCheckCmd() *cobra.Command {
 
 			var present, missing, unauth, errs int
 			for _, tgt := range targets {
-				status, msg := checkOne(ctx, tgt, insecure)
+				status, msg := checkOne(ctx, tgt, transport)
 				switch status {
 				case "present":
 					present++
@@ -224,7 +224,8 @@ func registryCheckCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&registry, "registry", "", "Target registry to check against, e.g. myreg.example.com (required)")
-	cmd.Flags().BoolVar(&insecure, "insecure", false, "Skip TLS verification when contacting the registry")
+	cmd.Flags().BoolVar(&transport.InsecureSkipTLSVerify, "insecure", false, "Skip TLS certificate verification; keep HTTPS")
+	cmd.Flags().BoolVar(&transport.PlainHTTP, "plain-http", false, "Use plain HTTP for all requests to the mirror, including server manifests")
 	cmd.Flags().BoolVar(&failOnMissing, "fail-on-missing", false, "Exit non-zero if any artifact is missing")
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", defaultOperatorChartVersion, "Operator chart version that was mirrored (must match 'wsm registry mirror')")
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version that was mirrored; when set, also check the server manifest and every application image it references")
@@ -234,23 +235,18 @@ func registryCheckCmd() *cobra.Command {
 	return cmd
 }
 
-func checkOne(ctx context.Context, image string, insecure bool) (status, errMsg string) {
-	sysCtx := &types.SystemContext{}
-	if insecure {
-		sysCtx.DockerInsecureSkipTLSVerify = types.OptionalBoolTrue
-	}
-
-	ref, err := docker.ParseReference("//" + image)
+func checkOne(ctx context.Context, image string, transport operator.RegistryTransport) (status, errMsg string) {
+	// The image library's insecure option also permits an HTTP fallback. Use
+	// ORAS here so --insecure preserves HTTPS and --plain-http is explicit.
+	repo, err := registryRepository(image, transport)
 	if err != nil {
 		return "error", err.Error()
 	}
-	src, err := ref.NewImageSource(ctx, sysCtx)
-	if err != nil {
-		return classify(err)
+	reference := repo.Reference.Reference
+	if reference == "" {
+		reference = "latest"
 	}
-	defer func() { _ = src.Close() }()
-
-	if _, _, err := src.GetManifest(ctx, nil); err != nil {
+	if _, err := repo.Resolve(ctx, reference); err != nil {
 		return classify(err)
 	}
 	return "present", ""

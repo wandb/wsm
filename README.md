@@ -134,10 +134,12 @@ wsm registry mirror|check|values|push [flags]
 ```
 
 - `mirror`: pull every chart/image `deploy-v2 operator` needs and re-push to your
-  mirror. `--to <host>` (required), `--insecure`, `--dry-run`,
+  mirror. `--to <host>` (required), `--insecure` (skip target TLS verification),
+  `--plain-http` (HTTP target only), `--dry-run`,
   `--operator-chart-version` (default `2.0.0-beta.9`).
 - `check`: verify all required images exist in your mirror. `--registry <host>`
-  (required), `--fail-on-missing`, `--insecure`.
+  (required), `--fail-on-missing`, `--insecure`, `--plain-http`. Both `mirror`
+  and `check` accept `--wandb-version` with HTTP targets.
 - `values`: emit a `values.yaml` fragment that re-points images at your registry.
 - `push`: push images from a bundle directory into your mirror.
 

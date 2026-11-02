@@ -135,14 +135,14 @@ func collectMirrorRepos(ctx context.Context, target, operatorChartVersion, wandb
 		repos = append(repos, repo)
 	}
 
-	mirrorPlan, err := buildMirrorPlan(ctx, target, operatorChartVersion, false, false)
+	mirrorPlan, err := buildMirrorPlan(ctx, target, operatorChartVersion, false, operator.RegistryTransport{})
 	if err != nil {
 		return nil, err
 	}
 	for _, it := range mirrorPlan {
 		add(it.dst)
 	}
-	managed, err := buildManagedImagePlan(ctx, target, operator.OperatorChartRepo, operatorChartVersion, exclusions, false)
+	managed, err := buildManagedImagePlan(ctx, target, operator.OperatorChartRepo, operatorChartVersion, exclusions, operator.RegistryTransport{})
 	if err != nil {
 		return nil, err
 	}

@@ -47,7 +47,7 @@ IAM permission ecr:CreateRepository.`,
 		Example: `  # Create every repo the mirror needs under an ECR path prefix.
   wsm registry create-repos \
     --to 770934259321.dkr.ecr.us-west-2.amazonaws.com/wandbench/collinol-test \
-    --operator-chart-version 2.0.0-beta.9 --wandb-version 0.85.1
+    --operator-chart-version 2.0.0-beta.10 --wandb-version 0.86.0
 
   # Preview the repositories without creating them.
   wsm registry create-repos --to <acct>.dkr.ecr.us-west-2.amazonaws.com/wandb --dry-run`,

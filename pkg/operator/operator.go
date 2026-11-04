@@ -65,7 +65,7 @@ const (
 	// CertManagerVersion is the cert-manager chart and image tag wsm installs.
 	// Exported so `wsm registry mirror` can build a mirroring plan that matches
 	// exactly what `wsm deploy-v2 operator` will request.
-	CertManagerVersion = "v1.20.2"
+	CertManagerVersion = "v1.20.3"
 
 	nginxGatewayNamespace      = "nginx-gateway"
 	nginxGatewayDeploymentName = "nginx-gateway-nginx-gateway-fabric"

@@ -7,12 +7,12 @@ import (
 	"io"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
 	utilexec "k8s.io/client-go/util/exec"
+	"k8s.io/streaming/pkg/httpstream"
 )
 
 // ExecInPod runs command in a container without a TTY, so binary stdout stays byte-exact.

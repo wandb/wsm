@@ -11,12 +11,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
+	"k8s.io/streaming/pkg/httpstream"
 )
 
 // PortForwardSession is a live port-forward to a pod backing a Service. Close it to tear it down.
@@ -71,7 +71,7 @@ func PortForward(ctx context.Context, cfg *rest.Config, cs *kubernetes.Clientset
 
 	stopCh := make(chan struct{})
 	readyCh := make(chan struct{})
-	fw, err := portforward.New(dialer, []string{fmt.Sprintf("%d:%d", localPort, podPort)}, stopCh, readyCh, io.Discard, io.Discard)
+	fw, err := portforward.NewForStreaming(dialer, []string{fmt.Sprintf("%d:%d", localPort, podPort)}, stopCh, readyCh, io.Discard, io.Discard)
 	if err != nil {
 		return nil, err
 	}
@@ -103,12 +103,12 @@ func portForwardDialer(cfg *rest.Config, reqURL *url.URL) (httpstream.Dialer, er
 	if err != nil {
 		return nil, err
 	}
-	spdyDialer := spdy.NewDialer(upgrader, &http.Client{Transport: roundTripper}, http.MethodPost, reqURL)
-	wsDialer, err := portforward.NewSPDYOverWebsocketDialer(reqURL, cfg)
+	spdyDialer := spdy.NewDialerForStreaming(upgrader, &http.Client{Transport: roundTripper}, http.MethodPost, reqURL)
+	wsDialer, err := portforward.NewSPDYOverWebsocketDialerForStreaming(reqURL, cfg)
 	if err != nil {
 		return nil, err
 	}
-	return portforward.NewFallbackDialer(wsDialer, spdyDialer, func(err error) bool {
+	return portforward.NewFallbackDialerForStreaming(wsDialer, spdyDialer, func(err error) bool {
 		return httpstream.IsUpgradeFailure(err) || httpstream.IsHTTPSProxyError(err)
 	}), nil
 }

@@ -15,7 +15,7 @@ require (
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/pkg/errors v0.9.1
 	github.com/spf13/cobra v1.10.2
-	github.com/wandb/operator v1.22.1-0.20261020212958-81f766a20470
+	github.com/wandb/operator v1.22.1-0.20261104162742-4555b297d2fa
 	go.podman.io/image/v5 v5.42.0
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v3 v3.22.1

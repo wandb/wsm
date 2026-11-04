@@ -2,8 +2,13 @@
 // install runs from the operator's suspended collector CronJob.
 package supportbundle
 
-// CollectorImage mirrors the operator's internal default; bump it each release until the operator exports it.
-const CollectorImage = "us-docker.pkg.dev/wandb-production/public/wandb/lumen:0.4.10"
+import (
+	v2 "github.com/wandb/operator/api/v2"
+	opsupportbundle "github.com/wandb/operator/pkg/observability/supportbundle"
+)
+
+// CollectorImage is the operator's default Lumen collector image.
+var CollectorImage = opsupportbundle.Image(&v2.WeightsAndBiases{})
 
 // CollectorName mirrors the collectors the operator can put in a preset.
 type CollectorName string

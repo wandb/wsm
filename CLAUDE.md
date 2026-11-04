@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Recent PRs (#51, #58, #57) all extend the v2 surface; the v1 files have not been meaningfully edited in months. New work belongs on v2 unless explicitly maintaining airgapped v1 users.
 
-There is **no test suite** — CI runs lint, fmt, `go mod tidy`, and `go mod verify` only. There are no `*_test.go` files; do not assume a test layer exists.
+Unit tests (`*_test.go`) exist in `cmd/wsm` and several `pkg/` packages; run them with `go test ./...`. CI does **not** run them — it runs lint, fmt, `go mod tidy`, and `go mod verify` only.
 
 User-facing docs live under `docs/` (getting-started, deployment per cloud, configuration, operations, reference) and are the canonical source for flag semantics and CR field meanings.
 
@@ -20,7 +20,7 @@ User-facing docs live under `docs/` (getting-started, deployment per cloud, conf
 ```bash
 make build          # builds ./wsm from ./cmd/wsm
 make fmt            # gofmt; CI fails if `git diff --exit-code` is dirty after
-make lint           # installs golangci-lint v2.11.4 then runs `go vet` + golangci-lint
+make lint           # installs golangci-lint v2.14.0 then runs `go vet` + golangci-lint
 make lint-fix       # golangci-lint --fix
 make safe-update-deps  # go get -u ./... && go mod tidy
 ```

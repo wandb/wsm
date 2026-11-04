@@ -72,7 +72,7 @@ Constants in `cmd/wsm/deploy_v2.go` need updating each W&B/operator release. The
 - The default of `--operator-chart-version` flag (currently `"2.0.0-beta.9"`).
 - `supportbundle.CollectorImage` in `pkg/observability/supportbundle/collection.go` (currently Lumen `0.4.10`) — must match the operator's internal `DefaultSupportBundleVersion` until the operator exports it.
 
-cert-manager (`v1.20.2`) and nginx-gateway-fabric (`2.5.1`) versions are pinned as constants in `pkg/operator/operator.go:53-64`. Gateway API CRDs come from a hardcoded URL at line 66.
+cert-manager (`v1.20.3`) and nginx-gateway-fabric (`2.5.1`) versions are pinned as constants in `pkg/operator/operator.go:53-64`. Gateway API CRDs come from a hardcoded URL at line 66.
 
 ## v1 CLI surface (legacy, still present)
 

@@ -476,7 +476,6 @@ func operatorDeployCmd() *cobra.Command {
 				fmt.Printf("\n✗ Operator install failed: %v\n", err)
 				return err
 			}
-
 			totalTime := time.Since(deployStart).Round(time.Second)
 			fmt.Printf("\n✓ Deployment complete! (%s total)\n\n", totalTime)
 

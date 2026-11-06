@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 	appsv1 "github.com/wandb/operator/api/v1"
+	"github.com/wandb/wsm/pkg/kubectl"
 	"github.com/wandb/wsm/pkg/operator"
 	"github.com/wandb/wsm/pkg/preflight"
 	sigsyaml "sigs.k8s.io/yaml"
@@ -28,6 +29,7 @@ var roundTripAnnotations = []string{
 // side-by-side compare in an editor.
 func ConvertV2Cmd() *cobra.Command {
 	var (
+		kubeContext    string
 		wandbName      string
 		wandbNamespace string
 		outputPath     string
@@ -47,6 +49,9 @@ compiled in from the operator version wsm is built against, so the output matche
 what the in-cluster webhook would emit after upgrade.`,
 
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if kubeContext != "" {
+				kubectl.SetContext(kubeContext)
+			}
 
 			ctx := context.Background()
 
@@ -90,6 +95,7 @@ what the in-cluster webhook would emit after upgrade.`,
 		},
 	}
 
+	cmd.Flags().StringVar(&kubeContext, "context", "", "Kubeconfig context to read the v1 CR from (default: the current context)")
 	cmd.Flags().StringVar(&wandbName, "wandb-name", "wandb", "Name of the W&B CR to convert")
 	cmd.Flags().StringVar(&wandbNamespace, "wandb-namespace", "default", "Namespace of the W&B CR to convert")
 	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Output path: the diff file (unified) or the base path for the two files (split)")

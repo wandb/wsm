@@ -833,11 +833,12 @@ An example CR is at `hack/preflight-example.yaml`.
 Diffs the live v1 CR against the v2 CR the conversion webhook would produce, then runs [`wsm preflight`](#wsm-preflight)'s checks against the converted v2 CR.
 
 ```bash
-wsm convert-v2 --context <kubeconfig-context> [flags]
+wsm convert-v2 [--context <kubeconfig-context>] [flags]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--context` | current context | Kubeconfig context to read the v1 CR from |
 | `--wandb-name` | `wandb` | Name of the W&B CR to convert |
 | `--wandb-namespace` | `default` | Namespace of the W&B CR to convert |
 | `-o`, `--output` | — | Output path: the diff file (unified) or the base path for the two files (split) |

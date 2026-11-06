@@ -57,11 +57,11 @@ func SetVersionCmd() *cobra.Command {
 			}
 
 			currentCR, err := operator.GetCR(ctx, wandbName, wandbNamespace)
-			currentCR.ManagedFields = nil
-			currentCR.ResourceVersion = ""
 			if err != nil {
 				return fmt.Errorf("failed to read current CR: %w", err)
 			}
+			currentCR.ManagedFields = nil
+			currentCR.ResourceVersion = ""
 
 			currentVersion := currentCR.Spec.Wandb.Version
 			if currentVersion == wandbVersion {

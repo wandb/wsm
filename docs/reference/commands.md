@@ -799,6 +799,8 @@ The values are stamped in at build time (GoReleaser on tagged releases; `make bu
 
 ### `wsm preflight`
 
+> **Not available in this release.** The operator's preflight checks are not yet in a released operator version (wandb/operator#402), so `wsm preflight` is hidden from `wsm --help` and exits non-zero with `preflight checks are not available with this operator version`. The rest of this section describes the command once it is enabled.
+
 Runs the operator's preflight checks client-side against a v2 `WeightsAndBiases` CR file, before you apply it. Which checks run comes from the operator's preflight registry (`github.com/wandb/operator/pkg/preflight`): each registered CR field present in the file triggers its check, so new upstream checks arrive with a dependency bump. Today only `spec.mysql.<instance>.externalMysql` is checked — it connects and authenticates with the configured host, port, database, credentials and TLS settings. A CR with no matching field prints `No preflight checks apply to this CR.`
 
 ```bash
@@ -842,7 +844,7 @@ wsm convert-v2 --context <kubeconfig-context> [flags]
 | `--strip-roundtrip` | `false` | Drop the legacy v1-chart/v1-values round-trip annotations that bloat the output |
 | `--skip-preflight` | `false` | Don't run preflight checks against the converted v2 CR |
 
-Like `wsm preflight`, it exits non-zero when a preflight check fails or is unknown; pass `--skip-preflight` to only produce the conversion.
+Like `wsm preflight`, it exits non-zero when a preflight check fails or is unknown; pass `--skip-preflight` to only produce the conversion. While preflight is [not available](#wsm-preflight), `convert-v2` skips the checks, prints a note and exits zero after writing the conversion.
 
 ## Flag Precedence
 

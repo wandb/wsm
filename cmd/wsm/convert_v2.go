@@ -78,6 +78,10 @@ what the in-cluster webhook would emit after upgrade.`,
 			if skipPreflight {
 				return nil
 			}
+			if !preflight.Available {
+				fmt.Println("\nSkipping preflight checks: not available with this operator version.")
+				return nil
+			}
 
 			fmt.Println("\nRunning preflight checks against the converted v2 CR...")
 			runs := preflight.RunChecks(ctx, v2CR, nil)

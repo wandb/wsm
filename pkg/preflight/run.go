@@ -18,6 +18,9 @@ import (
 	sigsyaml "sigs.k8s.io/yaml"
 )
 
+// Available reports whether the operator's preflight checks are compiled in.
+const Available = true
+
 // CheckRun is one registered check run against one CR field it matched.
 type CheckRun struct {
 	FieldPath string

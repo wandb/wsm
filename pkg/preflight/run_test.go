@@ -2,6 +2,7 @@ package preflight
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -77,9 +78,15 @@ func TestRunChecksSkipAnnotation(t *testing.T) {
 		t.Fatal("resolver called for a skipped check")
 		return "", nil
 	}
-	runs := RunChecks(context.Background(), cr, resolve)
+	// Other registered checks (e.g. serverManifestCheck on "spec") match this CR too; only the skipped one matters.
+	var runs []CheckRun
+	for _, r := range RunChecks(context.Background(), cr, resolve) {
+		if r.Result.Check == operatorPreflight.ExternalMysqlCheck {
+			runs = append(runs, r)
+		}
+	}
 	if len(runs) != 1 {
-		t.Fatalf("got %d runs, want 1: %+v", len(runs), runs)
+		t.Fatalf("got %d externalMysqlCheck runs, want 1: %+v", len(runs), runs)
 	}
 	if runs[0].Result.Outcome != operatorPreflight.OutcomeSkipped {
 		t.Errorf("outcome = %q, want skipped", runs[0].Result.Outcome)
@@ -144,7 +151,7 @@ func fakeCheck(name string, typ operatorPreflight.CheckType, ran *[]string, reqs
 	}
 }
 
-func TestExecuteChecksOfflineRunsOnlyStatic(t *testing.T) {
+func TestExecuteChecksOfflineSkipsClusterChecks(t *testing.T) {
 	var ran []string
 	plan := []PlannedRun{
 		{Check: fakeCheck("static", operatorPreflight.TypeStatic, &ran, operatorPreflight.ReqReadOnly), FieldPath: "spec.a", value: map[string]any{}},
@@ -155,10 +162,10 @@ func TestExecuteChecksOfflineRunsOnlyStatic(t *testing.T) {
 
 	runs := ExecuteChecks(context.Background(), cr, plan, ExecOptions{Offline: true})
 
-	if len(ran) != 1 || ran[0] != "static" {
-		t.Fatalf("ran = %v, want only [static]", ran)
+	if len(ran) != 2 || ran[0] != "static" || ran[1] != "conn" {
+		t.Fatalf("ran = %v, want [static conn]", ran)
 	}
-	want := []operatorPreflight.Outcome{operatorPreflight.OutcomePass, operatorPreflight.OutcomeSkipped, operatorPreflight.OutcomeSkipped}
+	want := []operatorPreflight.Outcome{operatorPreflight.OutcomePass, operatorPreflight.OutcomeSkipped, operatorPreflight.OutcomePass}
 	for i, r := range runs {
 		if r.Result.Outcome != want[i] {
 			t.Errorf("%s outcome = %q, want %q", r.Result.Check, r.Result.Outcome, want[i])
@@ -180,9 +187,9 @@ func TestRequiringConfirmation(t *testing.T) {
 	if len(got) != 1 || got[0].Name != "createsPods" {
 		t.Errorf("online: got %v, want one createsPods", got)
 	}
-	// Offline never runs non-static checks, so there is nothing to confirm.
-	if got := RequiringConfirmation(cr, plan, ExecOptions{Offline: true}); len(got) != 0 {
-		t.Errorf("offline: got %v, want none", got)
+	// Offline still runs connection checks, so a resource-creating one still needs confirmation.
+	if got := RequiringConfirmation(cr, plan, ExecOptions{Offline: true}); len(got) != 1 {
+		t.Errorf("offline: got %v, want one createsPods", got)
 	}
 
 	// A skipped create check needs no confirmation, and the runnable check beside it still runs.
@@ -213,7 +220,7 @@ func TestOfflineResolverRejectsSecretRefs(t *testing.T) {
 		LocalObjectReference: corev1.LocalObjectReference{Name: "mysql"},
 		Key:                  "password",
 	}}}
-	if _, err := offlineResolver(context.Background(), ref); err == nil || !strings.Contains(err.Error(), "offline") {
-		t.Errorf("secret ref offline: err = %v, want an offline error", err)
+	if _, err := offlineResolver(context.Background(), ref); !errors.Is(err, operatorPreflight.ErrSecretUnavailable) {
+		t.Errorf("secret ref offline: err = %v, want ErrSecretUnavailable", err)
 	}
 }

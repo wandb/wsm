@@ -24,9 +24,10 @@ func init() {
 // checks land on `go get`.
 func PreflightCmd() *cobra.Command {
 	var (
-		kubeContext string
-		namespace   string
-		offline     bool
+		kubeContext     string
+		namespace       string
+		offline         bool
+		operatorVersion string
 	)
 
 	cmd := &cobra.Command{
@@ -40,8 +41,13 @@ func PreflightCmd() *cobra.Command {
 		  (static, cluster, connection) and the access they need before any of them runs.
 
 		  Checks that create resources (resourceCreate) ask for confirmation first; declining
-		  exits without running any check. With --offline only static checks run, so neither
-		  the cluster nor external services are contacted.
+		  exits without running any check. With --offline the cluster is never contacted:
+		  cluster checks are skipped and Secret-backed values aren't read (checks that need
+		  them report SKIPPED). Static checks and connection checks to external services and
+		  the manifest registry still run from this machine.
+
+		  The server manifest is pulled with your Docker credentials (docker login). Pass
+		  --operator-version to also check the manifest's required operator version.
 
 		  Checks run from the machine running wsm, not from inside the cluster. An endpoint
 		  reachable only from the cluster network (e.g. *.svc, private VPC hosts) may FAIL here
@@ -66,7 +72,11 @@ func PreflightCmd() *cobra.Command {
 			if namespace != "" {
 				cr.SetNamespace(namespace)
 			}
-			runs, err := runPreflight(cmd.Context(), cr, preflight.ExecOptions{Offline: offline})
+			runs, err := runPreflight(cmd.Context(), cr, preflight.ExecOptions{
+				Offline:         offline,
+				OperatorVersion: operatorVersion,
+				RegistryAuth:    preflight.DockerRegistryAuth(),
+			})
 			if err != nil {
 				return err
 			}
@@ -77,7 +87,8 @@ func PreflightCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&kubeContext, "context", "", "Kubeconfig context used to resolve Secret-backed values (valueFrom.secretKeyRef)")
 	cmd.Flags().StringVar(&namespace, "wandb-namespace", "", "Namespace the CR will be deployed to; overrides metadata.namespace and is where referenced Secrets are read (default: the CR's metadata.namespace)")
-	cmd.Flags().BoolVar(&offline, "offline", false, "Only run static checks that inspect the CR; skip checks that contact the cluster or external services")
+	cmd.Flags().BoolVar(&offline, "offline", false, "Don't contact the cluster: skip cluster checks and don't read Secrets; static and connection checks still run")
+	cmd.Flags().StringVar(&operatorVersion, "operator-version", "", "Operator version the CR will run under, checked against the server manifest's requiredOperatorVersion (default: not checked)")
 
 	return cmd
 }
@@ -110,7 +121,7 @@ func printPreflightPlan(plan []preflight.PlannedRun, opts preflight.ExecOptions)
 	}
 	header := "Preflight checks found:"
 	if opts.Offline {
-		header = "Preflight checks found (offline: only static checks run):"
+		header = "Preflight checks found (offline: cluster checks are skipped):"
 	}
 	fmt.Println(header)
 	for _, p := range plan {

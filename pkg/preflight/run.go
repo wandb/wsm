@@ -10,9 +10,12 @@ import (
 
 	v2 "github.com/wandb/operator/api/v2"
 	operatorPreflight "github.com/wandb/operator/pkg/preflight"
+	"github.com/wandb/operator/pkg/wandb/manifest"
 	"github.com/wandb/wsm/pkg/kubectl"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes"
+	"oras.land/oras-go/v2/registry/remote/credentials"
 	sigsyaml "sigs.k8s.io/yaml"
 )
 
@@ -49,9 +52,18 @@ type ExecOptions struct {
 	// metadata.namespace via wsm's kubectl client, or rejects Secret references
 	// when Offline is set.
 	Resolve operatorPreflight.ValueResolver
-	// Offline runs only TypeStatic checks and reports the rest as skipped, so no
-	// cluster or external service is contacted.
+	// Offline skips TypeCluster checks and never reads Secrets, so the cluster is
+	// never contacted. Static and connection checks still run from this machine.
 	Offline bool
+	// Mapper answers TypeCluster checks. Nil uses wsm's kubectl discovery when the
+	// plan has a cluster check to run.
+	Mapper meta.RESTMapper
+	// OperatorVersion is compared against the server manifest's
+	// requiredOperatorVersion; empty skips the comparison.
+	OperatorVersion string
+	// RegistryAuth pulls the server manifest from a private registry; nil pulls
+	// anonymously.
+	RegistryAuth *manifest.RegistryAuth
 }
 
 // PlanChecks lists every registered check whose CRField is present in cr without
@@ -96,7 +108,18 @@ func RequiringConfirmation(cr *unstructured.Unstructured, plan []PlannedRun, opt
 }
 
 func willRun(c operatorPreflight.Check, opts ExecOptions) bool {
-	return !opts.Offline || c.Type == operatorPreflight.TypeStatic
+	return !opts.Offline || c.Type != operatorPreflight.TypeCluster
+}
+
+// plansClusterCheck avoids discovery (and a cluster connection) when no cluster
+// check will run.
+func plansClusterCheck(plan []PlannedRun, opts ExecOptions) bool {
+	for _, p := range plan {
+		if p.Check.Type == operatorPreflight.TypeCluster && willRun(p.Check, opts) {
+			return true
+		}
+	}
+	return false
 }
 
 // ExecuteChecks runs a plan from PlanChecks. Confirmation is the caller's job:
@@ -109,6 +132,18 @@ func ExecuteChecks(ctx context.Context, cr *unstructured.Unstructured, plan []Pl
 		resolve = offlineResolver
 	default:
 		resolve = SecretResolver(cr.GetNamespace())
+	}
+	env := operatorPreflight.Env{
+		Resolve:         resolve,
+		Mapper:          opts.Mapper,
+		OperatorVersion: opts.OperatorVersion,
+		RegistryAuth:    opts.RegistryAuth,
+	}
+	if env.Mapper == nil && plansClusterCheck(plan, opts) {
+		// Left nil on error: cluster checks then report unknown instead of aborting the run.
+		if m, err := kubectl.RefreshRESTMapper(); err == nil {
+			env.Mapper = m
+		}
 	}
 	skip := skipList(cr)
 
@@ -124,7 +159,7 @@ func ExecuteChecks(ctx context.Context, cr *unstructured.Unstructured, plan []Pl
 		case decodeInto(p.value, spec) != nil:
 			run.Result = operatorPreflight.Result{Check: name, Outcome: operatorPreflight.OutcomeUnknown, Message: fmt.Sprintf("cannot decode %s", p.FieldPath)}
 		default:
-			run.Result = p.Check.Run(ctx, spec, operatorPreflight.Env{Resolve: resolve})
+			run.Result = p.Check.Run(ctx, spec, env)
 		}
 		runs = append(runs, run)
 	}
@@ -136,16 +171,27 @@ func RunChecks(ctx context.Context, cr *unstructured.Unstructured, resolve opera
 	return ExecuteChecks(ctx, cr, PlanChecks(cr), ExecOptions{Resolve: resolve})
 }
 
-// offlineResolver keeps static checks off the cluster: literals resolve, Secret
-// references are reported instead of read.
+// offlineResolver keeps checks off the cluster: literals resolve, and a Secret
+// reference returns ErrSecretUnavailable, which checks report as skipped.
 func offlineResolver(_ context.Context, v v2.ValueOrSecret) (string, error) {
 	if v.Value != "" {
 		return v.Value, nil
 	}
 	if ref := v.SecretKeyRef(); ref != nil {
-		return "", fmt.Errorf("secret %s is referenced but Secrets are not read offline", ref.Name)
+		return "", fmt.Errorf("secret %s is not read offline: %w", ref.Name, operatorPreflight.ErrSecretUnavailable)
 	}
 	return "", nil
+}
+
+// DockerRegistryAuth uses the credentials from `docker login`, so a manifest in
+// a private registry resolves the same way image pulls do on this machine. Nil
+// (anonymous) when no Docker config is readable.
+func DockerRegistryAuth() *manifest.RegistryAuth {
+	store, err := credentials.NewStoreFromDocker(credentials.StoreOptions{})
+	if err != nil {
+		return nil
+	}
+	return &manifest.RegistryAuth{Credential: credentials.Credential(store)}
 }
 
 // SecretResolver mirrors the operator's external.ResolveValue (internal, not

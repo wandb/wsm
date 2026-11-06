@@ -28,11 +28,13 @@ func RegistryCmd() *cobra.Command {
 		Short: "Check and describe how to mirror W&B images to a private registry",
 		Long: `Tools for working with a mirrored container registry.
 
-    wsm registry mirror  Push every chart and image a v2 install needs to your registry.
-    wsm registry check   Verify each artifact 'wsm registry mirror' pushes is present.
-    wsm registry push    Push a pre-downloaded bundle to your registry.
-    wsm registry values  Emit a values.yaml fragment that points the chart at
-                         your registry instead of the public sources.`,
+    wsm registry mirror        Push every chart and image a v2 install needs to your registry.
+    wsm registry check         Verify each artifact 'wsm registry mirror' pushes is present.
+    wsm registry create-repos  Pre-create the ECR repositories 'wsm registry mirror' pushes to
+                               (Amazon ECR only).
+    wsm registry push          Push a pre-downloaded bundle to your registry.
+    wsm registry values        Emit a values.yaml fragment that points the chart at
+                               your registry instead of the public sources.`,
 	}
 
 	cmd.PersistentFlags().BoolVar(

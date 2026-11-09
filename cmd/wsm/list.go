@@ -184,8 +184,6 @@ func getMostRecentTag(repository string) (string, error) {
 }
 
 func ListCmd() *cobra.Command {
-	var platform string
-
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List images required for deployment",
@@ -233,8 +231,6 @@ func ListCmd() *cobra.Command {
 			fmt.Println(footerStyle.Render("Here are the images required to deploy W&B. Please ensure these images are available in your internal container registry and update the values.yaml accordingly."))
 		},
 	}
-
-	cmd.Flags().StringVarP(&platform, "platform", "p", "linux/amd64", "Platform to list images for")
 
 	return cmd
 }

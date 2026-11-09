@@ -1053,7 +1053,7 @@ func destroyWandbCR(ctx context.Context, name string, namespace string) error {
 		return errors.New("no wsm deployment marker found - W&B instance may not be managed by wsm")
 	}
 
-	if err := kubectl.DeleteCR(ctx, name, namespace); err != nil {
+	if err := operator.DeleteCR(ctx, name, namespace); err != nil {
 		return fmt.Errorf("failed to delete W&B CR: %w", err)
 	}
 

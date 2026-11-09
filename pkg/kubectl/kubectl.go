@@ -306,45 +306,6 @@ func DeleteYAML(ctx context.Context, yamlContent []byte) error {
 	return nil
 }
 
-func DeleteCR(ctx context.Context, name, namespace string) error {
-	gvk := schema.GroupVersionKind{
-		Group:   "apps.wandb.com",
-		Version: "v2",
-		Kind:    "WeightsAndBiases",
-	}
-	_, dyn, err := GetDynamicClientset()
-	if err != nil {
-		return err
-	}
-
-	mapper, err := GetRESTMapper()
-	if err != nil {
-		return err
-	}
-
-	mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-	if err != nil {
-		return fmt.Errorf("failed to get mapping for %s: %w", gvk, err)
-	}
-
-	var dr dynamic.ResourceInterface
-	if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
-		if namespace == "" {
-			return fmt.Errorf("namespace is required for namespaced resource %s", gvk)
-		}
-		dr = dyn.Resource(mapping.Resource).Namespace(namespace)
-	} else {
-		dr = dyn.Resource(mapping.Resource)
-	}
-
-	err = dr.Delete(ctx, name, metav1.DeleteOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to delete object %s %s/%s: %w", gvk, namespace, name, err)
-	}
-
-	return nil
-}
-
 func ApplyUnstructured(ctx context.Context, obj *unstructured.Unstructured) error {
 	_, dyn, err := GetDynamicClientset()
 	if err != nil {

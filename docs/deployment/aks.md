@@ -71,6 +71,7 @@ Point your DNS `A` record for `wandb.example.com` to the external IP.
 
 ```bash
 wsm deploy-v2 wandb get-ca-cert \
+  --context aks-my-cluster \
   --wandb-name wandb \
   --wandb-namespace wandb \
   --output-dir ./certs

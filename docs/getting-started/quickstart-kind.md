@@ -83,7 +83,7 @@ The quick-start deployment uses these defaults:
 | **Namespace** | `wandb` |
 | **Operator Namespace** | `wandb-operators` |
 | **Size** | `dev` |
-| **Version** | `0.79.2` (latest stable) |
+| **Version** | `0.86.0` (wsm default; overridable with `--wandb-version`) |
 | **Gateway Class** | `nginx` |
 
 ## Next Steps

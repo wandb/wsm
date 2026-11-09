@@ -46,7 +46,7 @@ If a GitOps tool (Argo CD, Flux) manages the CR, set `spec.supportBundle.enabled
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `hostname` | string | `http://localhost:8080` | External URL for accessing W&B |
-| `version` | string | Built-in stable | Server manifest version (e.g., `0.79.2`) |
+| `version` | string | Built-in stable | Server manifest version (e.g., `0.86.0`; must be at least `0.80.0`) |
 | `license` | string | — | W&B license string |
 | `features` | map[string]bool | `{}` | Feature flags |
 | `internalServiceAuth.enabled` | bool | `false` | Enable internal service authentication |
@@ -90,8 +90,8 @@ If a GitOps tool (Argo CD, Flux) manages the CR, set `spec.supportBundle.enabled
 | Field | Type | Description |
 |-------|------|-------------|
 | `secretName` | string | Name of the Kubernetes Secret containing the TLS certificate |
-| `certManager.issuer` | string | Name of the cert-manager Issuer |
-| `certManager.kind` | string | Type of issuer: `Issuer` only (default: `Issuer`) |
+| `certManager.issuer` | string | Name of a namespaced cert-manager `Issuer` in the CR's namespace (`cert-manager.io/issuer` annotation) |
+| `certManager.clusterIssuer` | string | Name of a cert-manager `ClusterIssuer` (`cert-manager.io/cluster-issuer` annotation). Set this **or** `issuer`, not both |
 
 ---
 
@@ -102,7 +102,7 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `imageRegistry` | string | Retarget container images to this registry for air-gapped installs (`--image-registry`) |
+| `imageRegistry` | string | Prepend this registry to every container image path. Set it with `--cr-set spec.global.imageRegistry=<host>` (the `--image-registry` flag is deprecated). Not used by `--mirror-registry`; see [on-prem](../deployment/on-prem.md) |
 | `customCACerts` | []string | PEM-encoded CA certificates to trust in W&B workloads (`--custom-ca-cert-file`, repeatable) |
 | `caCertsConfigMap` | string | Name of a ConfigMap holding CA certificates to trust (`--custom-ca-configmap`) |
 | `imagePullSecrets` | []object | `dockerconfigjson` Secret references for private-registry image pulls (`--image-pull-secret`, repeatable) |
@@ -124,7 +124,7 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 |-------|------|-------------|
 | `managedMysql` | object | Configuration for operator-managed MySQL |
 | `managedMysql.telemetry.enabled` | bool | Enable MySQL telemetry (default `true`; `--observability-mode off` disables) |
-| `external` | object | (Alternative) External MySQL connection details |
+| `externalMysql` | object | (Alternative) External MySQL connection details |
 
 ---
 
@@ -134,7 +134,7 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 |-------|------|-------------|
 | `managedRedis` | object | Configuration for operator-managed Redis |
 | `managedRedis.telemetry.enabled` | bool | Enable Redis telemetry (default `true`; `--observability-mode off` disables) |
-| `external` | object | (Alternative) External Redis connection details |
+| `externalRedis` | object | (Alternative) External Redis connection details |
 
 ---
 
@@ -155,7 +155,7 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 | `managedObjectStore` | object | Configuration for operator-managed object storage |
 | `managedObjectStore.telemetry.enabled` | bool | Enable object store telemetry (default `true`; `--observability-mode off` disables) |
 | `managedObjectStore.copies` | int | Replica copies for managed object storage (`--objectstore-copies`); operator default when unset |
-| `external` | object | (Alternative) External S3/GCS/Azure Blob connection details |
+| `externalObjectStore` | object | (Alternative) External S3/GCS/Azure Blob connection details |
 
 ---
 
@@ -166,7 +166,7 @@ corresponding flag is provided; an empty `spec.global` is omitted from the CR.
 | `managedClickhouse` | object | Configuration for operator-managed ClickHouse |
 | `managedClickhouse.telemetry.enabled` | bool | Enable ClickHouse telemetry (default `true`; `--observability-mode off` disables) |
 | `managedClickhouse.serviceAccount` | object | ServiceAccount for the ClickHouse pods — `annotations` for IRSA / GKE Workload Identity, `serviceAccountName` / `create` to reuse an existing identity. Same authoring path as Kafka (see above) |
-| `external` | object | (Alternative) External ClickHouse connection details |
+| `externalClickhouse` | object | (Alternative) External ClickHouse connection details |
 
 ---
 
@@ -202,7 +202,6 @@ spec:
       secretName: wandb-tls-secret
       certManager:
         issuer: letsencrypt-prod
-        kind: Issuer
   mysql:
     default:
       managedMysql:

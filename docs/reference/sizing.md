@@ -17,19 +17,19 @@ The `--size` flag selects a resource profile that is applied across all componen
 
 ## Available Sizes
 
-The following size profiles are typically available. The exact set depends on the W&B server manifest version you deploy.
+`spec.size` is an enum in the CRD, so these are the only profile names accepted. What each profile allocates comes from the W&B server manifest for the `--wandb-version` you deploy.
 
 | Profile | Recommended For | Notes |
 |---------|----------------|-------|
-| `dev` | Local development, single user | All services may be consolidated; minimal resource footprint. Not for production. |
+| `dev` | Local development, single user | Default profile. All services may be consolidated; minimal resource footprint. Not for production. |
 | `micro` | Lightweight testing / CI | Smaller than `small`; reduced storage and resource footprint for short-lived or evaluation deployments. |
-| `small` | Small team, proof of concept | Default profile for new deployments. Sufficient for light usage and evaluation. |
+| `small` | Small team, proof of concept | Sufficient for light usage and evaluation. |
 | `medium` | Growing team | Increased resources and storage for more concurrent users and larger workloads. |
 | `large` | Multi-team organization | Dedicated resources per component; higher throughput and reliability. |
 | `xlarge` | Large organization | High availability with replicas; horizontal scaling for stateless services. |
-| `2xlarge` | Enterprise scale | Maximum throughput and replication across all data stores. |
+| `xxlarge` | Enterprise scale | Maximum throughput and replication across all data stores. |
 
-> Some server manifests may include additional profiles beyond those listed above. Check the manifest for your specific `--wandb-version` to see all available sizes.
+> `wsm` rejects any other `--size` (or `spec.size`) value before applying the CR.
 
 ## Selecting a Size
 
@@ -71,7 +71,7 @@ Because these values come from the server manifest, upgrading to a newer `--wand
 | medium | 3 | 8 vCPU, 32 GB RAM |
 | large | 3–5 | 16 vCPU, 64 GB RAM |
 | xlarge | 5–7 | 16–32 vCPU, 64–128 GB RAM |
-| 2xlarge | 7–10 | 32 vCPU, 128 GB RAM |
+| xxlarge | 7–10 | 32 vCPU, 128 GB RAM |
 
 > These are rough estimates for typical configurations. Actual requirements depend on the specific server manifest and workload characteristics.
 

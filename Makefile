@@ -29,6 +29,10 @@ install: build
 	install -d $(INSTALL_DIR)
 	install $(BINARY) $(INSTALL_DIR)/$(BINARY)
 
+# Same build flags as `build`, so tests need no gpgme / system libraries.
+test:
+	CGO_ENABLED=0 go test -tags containers_image_openpgp ./...
+
 # Modern linter installation
 install-lint:
 	@if ! [ -x "$$(command -v golangci-lint)" ]; then \

@@ -2036,8 +2036,8 @@ func clusterDestroyCmd() *cobra.Command {
 	var clusterName string
 	cmd := &cobra.Command{
 		Use:   "destroy",
-		Short: "Destroy Kind cluster and cleanup",
-		Long:  `Delete the Kind cluster and cleanup resources`,
+		Short: "Destroy a wsm-managed Kind cluster",
+		Long:  `Delete a Kind cluster created by wsm. Clusters without the wsm deployment marker are refused.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			kubectl.SetContext(fmt.Sprintf("kind-%s", clusterName))
@@ -2189,60 +2189,51 @@ func performCleanup() error {
 		}
 	}
 
-	// 3. Delete cert-manager
-	fmt.Println("→ Deleting cert-manager...")
-	if _, err := operator.DeleteCertManager(ctx); err != nil {
-		fmt.Printf("  ✗ Failed to delete cert-manager: %v\n", err)
-	}
-
-	cmNamespaces, err := kubectl.FindNamespacesWithMarker(ctx, "cert-manager")
-	if err == nil {
-		for _, ns := range cmNamespaces {
-			if err := kubectl.DeleteDeploymentMarker(ctx, ns, "cert-manager"); err != nil {
-				fmt.Printf("  ✗ Failed to remove cert-manager marker in %s: %v\n", ns, err)
-			}
-		}
-	}
-
-	// 4. Delete nginx-gateway
-	fmt.Println("→ Deleting nginx-gateway...")
-	if _, err := operator.DeleteNginxGateway(ctx); err != nil {
-		fmt.Printf("  ✗ Failed to delete nginx-gateway: %v\n", err)
-	}
-
-	ngNamespaces, err := kubectl.FindNamespacesWithMarker(ctx, "nginx-gateway")
-	if err == nil {
-		for _, ns := range ngNamespaces {
-			if err := kubectl.DeleteDeploymentMarker(ctx, ns, "nginx-gateway"); err != nil {
-				fmt.Printf("  ✗ Failed to remove nginx-gateway marker in %s: %v\n", ns, err)
-			}
-		}
-	}
-
-	// Delete kube-state-metrics only when a wsm marker claims it, and skip the delete for non-marked KSM.
-	ksmNamespaces, err := kubectl.FindNamespacesWithMarker(ctx, "kube-state-metrics")
-	if err == nil && len(ksmNamespaces) > 0 {
-		fmt.Println("→ Deleting kube-state-metrics...")
-		if _, err := operator.DeleteKubeStateMetrics(ctx); err != nil {
-			fmt.Printf("  ✗ Failed to delete kube-state-metrics: %v\n", err)
-		}
-		for _, ns := range ksmNamespaces {
-			if err := kubectl.DeleteDeploymentMarker(ctx, ns, "kube-state-metrics"); err != nil {
-				fmt.Printf("  ✗ Failed to remove kube-state-metrics marker in %s: %v\n", ns, err)
-			}
-		}
-	}
+	// 3. Delete shared infra only when a wsm marker claims it, so a cert-manager,
+	// nginx-gateway or kube-state-metrics that wsm didn't install is left in place.
+	deleteSharedIfMarked(ctx, "cert-manager", operator.DeleteCertManager)
+	deleteSharedIfMarked(ctx, "nginx-gateway", operator.DeleteNginxGateway)
+	deleteSharedIfMarked(ctx, "kube-state-metrics", operator.DeleteKubeStateMetrics)
 
 	return nil
 }
 
+// deleteSharedIfMarked uninstalls a shared component and drops its markers, but
+// only when some namespace's wsm marker lists it.
+func deleteSharedIfMarked(ctx context.Context, component string, uninstall func(context.Context) (bool, error)) {
+	namespaces, err := kubectl.FindNamespacesWithMarker(ctx, component)
+	if err != nil {
+		fmt.Printf("  ✗ Failed to look up %s markers, leaving it in place: %v\n", component, err)
+		return
+	}
+	if len(namespaces) == 0 {
+		fmt.Printf("! No wsm marker for %s; leaving it in place.\n", component)
+		return
+	}
+
+	fmt.Printf("→ Deleting %s...\n", component)
+	if _, err := uninstall(ctx); err != nil {
+		fmt.Printf("  ✗ Failed to delete %s: %v\n", component, err)
+	}
+	for _, ns := range namespaces {
+		if err := kubectl.DeleteDeploymentMarker(ctx, ns, component); err != nil {
+			fmt.Printf("  ✗ Failed to remove %s marker in %s: %v\n", component, ns, err)
+		}
+	}
+}
+
 func clusterCleanupCmd() *cobra.Command {
-	var kubeContext string
+	var (
+		kubeContext string
+		yes         bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "cleanup",
 		Short: "Cleanup wsm-managed resources",
-		Long:  `Delete all resources deployed by wsm, including operator and CR`,
+		Long: `Delete all resources deployed by wsm, including operator and CR.
+Shared infra (cert-manager, nginx-gateway, kube-state-metrics) is removed only
+when a wsm deployment marker claims it.`,
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if kubeContext == "" {
 				return errors.New("context is required")
@@ -2252,6 +2243,11 @@ func clusterCleanupCmd() *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			prompt := fmt.Sprintf("Delete every wsm-managed W&B CR, operator and shared component in context %q?", kubeContext)
+			if ok, err := confirm(cmd.Context(), yes, prompt); !ok || err != nil {
+				return err
+			}
+
 			if err := performCleanup(); err != nil {
 				fmt.Printf("✗ Cleanup failed: %v\n", err)
 				return err
@@ -2263,6 +2259,7 @@ func clusterCleanupCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&kubeContext, "context", "", "name of the kubeconfig context to use (Required)")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Don't ask for confirmation")
 
 	return cmd
 }

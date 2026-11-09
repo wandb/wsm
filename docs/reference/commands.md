@@ -455,15 +455,15 @@ wsm cluster cleanup [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--context` | — | **Required.** Name of the kubeconfig context to use |
+| `-y`, `--yes` | `false` | Don't ask for confirmation |
 
-This removes:
+It asks for confirmation first unless `--yes` is passed. This removes:
 - W&B CRs and their namespaces
 - W&B operator releases
-- cert-manager
-- nginx-gateway-fabric
+- cert-manager, nginx-gateway-fabric and kube-state-metrics, each only if a WSM deployment marker claims it
 - WSM deployment markers
 
-> Resources without WSM markers are not deleted.
+> Resources without WSM markers are not deleted. A shared component wsm didn't install (for example a cert-manager that was already on the cluster) is left in place.
 
 ---
 

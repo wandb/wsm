@@ -184,8 +184,6 @@ func getMostRecentTag(repository string) (string, error) {
 }
 
 func ListCmd() *cobra.Command {
-	var platform string
-
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List images required for deployment",
@@ -234,7 +232,10 @@ func ListCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&platform, "platform", "p", "linux/amd64", "Platform to list images for")
+	// Never read: list prints image names, which don't depend on the platform. Kept
+	// (deprecated, hidden) so scripts passing it for symmetry with download still run.
+	cmd.Flags().StringP("platform", "p", "linux/amd64", "Ignored; kept for compatibility")
+	_ = cmd.Flags().MarkDeprecated("platform", "it has no effect on the listed images")
 
 	return cmd
 }

@@ -178,7 +178,7 @@ wsm deploy [operator|chart-cm|wandb-cr] [flags]
 List the container images a fresh install would pull — useful for pre-pulling.
 
 ```bash
-wsm list [-p linux/amd64]
+wsm list
 ```
 
 ---

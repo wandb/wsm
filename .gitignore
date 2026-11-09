@@ -47,3 +47,7 @@ license.key
 *.tfvars
 !*.tfvars.example
 .terraform.lock.hcl
+
+# Server-manifest files extracted by the on-prem guides' `docker cp` steps.
+/manifest.yaml
+/sizing.yaml

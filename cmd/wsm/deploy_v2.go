@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -1053,8 +1054,25 @@ func destroyWandbCR(ctx context.Context, name string, namespace string) error {
 		return errors.New("no wsm deployment marker found - W&B instance may not be managed by wsm")
 	}
 
-	if err := kubectl.DeleteCR(ctx, name, namespace); err != nil {
+	// The marker is per namespace, not per CR, so check the named CR exists before
+	// touching it: a misspelled --wandb-name must not drop the marker that the real
+	// instance still needs.
+	crs, err := operator.ListCRs(ctx, namespace)
+	if err != nil {
+		return fmt.Errorf("failed to list W&B CRs in namespace %q: %w", namespace, err)
+	}
+	if !slices.Contains(crs, name) {
+		return fmt.Errorf("no W&B instance %q in namespace %q (found: %s)", name, namespace, strings.Join(crs, ", "))
+	}
+
+	if err := operator.DeleteCR(ctx, name, namespace); err != nil {
 		return fmt.Errorf("failed to delete W&B CR: %w", err)
+	}
+
+	// Keep the marker while other wsm-deployed instances remain in the namespace.
+	if remaining := slices.DeleteFunc(crs, func(n string) bool { return n == name }); len(remaining) > 0 {
+		fmt.Printf("Keeping the deployment marker in %q: other W&B instances remain (%s)\n", namespace, strings.Join(remaining, ", "))
+		return nil
 	}
 
 	if err := kubectl.DeleteDeploymentMarker(ctx, namespace, "wandb-cr"); err != nil {

@@ -1,7 +1,7 @@
 <!--
 PR TITLE must follow Conventional Commits + Graphite style, e.g.
-  feat(deploy-v2): add kind cluster picker
-  • format: type(scope)!: imperative, lowercase description (no trailing period, <= 72 chars)
+  feat(deploy-v2): Add kind cluster picker
+  • format: type(scope)!: imperative description starting with an uppercase letter (no trailing period, <= 72 chars)
   • types: feat fix build chore ci docs perf refactor revert style test
   • https://www.conventionalcommits.org/en/v1.0.0/
   • https://graphite.com/guides/best-pr-title-guidelines

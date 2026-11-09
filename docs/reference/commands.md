@@ -927,7 +927,7 @@ wsm list
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-p, --platform` | `linux/amd64` | Accepted for symmetry with `wsm download`, but currently ignored |
+| `-p, --platform` | `linux/amd64` | **Deprecated** and hidden from help. Still accepted so existing scripts keep working, but it has no effect: the image list doesn't depend on the platform |
 
 For a v2 install, list what will be mirrored with [`wsm registry mirror --dry-run`](#wsm-registry-mirror) instead.
 

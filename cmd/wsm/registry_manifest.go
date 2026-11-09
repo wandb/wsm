@@ -15,14 +15,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
-	v1remote "github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	wmanifest "github.com/wandb/operator/pkg/wandb/manifest"
-	"go.podman.io/image/v5/signature"
-	"go.podman.io/image/v5/types"
+	"github.com/wandb/wsm/pkg/operator"
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/content/memory"
@@ -57,9 +54,8 @@ func mirrorServerManifest(
 	ctx context.Context,
 	target, version, manifestSource string,
 	exclusions managedExclusions,
-	insecure, dryRun bool,
-	srcCtx, dstCtx *types.SystemContext,
-	policyCtx *signature.PolicyContext,
+	sourceTransport, targetTransport operator.RegistryTransport,
+	dryRun bool,
 ) error {
 	// manifestSource is a hidden dev/testing override (--manifest-source): pull
 	// the manifest from a non-upstream OCI repo (e.g. a local Tilt registry
@@ -74,7 +70,7 @@ func mirrorServerManifest(
 	var files map[string][]byte
 	var err error
 	if manifestSource != "" {
-		files, err = pullManifestYAMLFrom(ctx, manifestSource, version, insecure)
+		files, err = pullManifestYAMLFrom(ctx, manifestSource, version, sourceTransport)
 	} else {
 		files, err = pullManifestYAML(ctx, version)
 	}
@@ -127,7 +123,7 @@ func mirrorServerManifest(
 		src := ref.GetImage("")
 		dst := mirrorImageRef(target, ref)
 		fmt.Printf("→ %s\n  → %s ... ", src, dst)
-		skipped, err := copyImage(ctx, src, dst, insecure, srcCtx, dstCtx, policyCtx)
+		skipped, err := copyImage(ctx, src, dst, targetTransport)
 		if err != nil {
 			fmt.Printf("✗ %v\n", err)
 			failedImages = append(failedImages, src)
@@ -154,7 +150,7 @@ func mirrorServerManifest(
 	}
 
 	fmt.Printf("→ pushing rewritten manifest to %s ... ", manifestDst)
-	if err := pushManifestArtifact(ctx, target, version, rewritten, insecure); err != nil {
+	if err := pushManifestArtifact(ctx, target, version, rewritten, targetTransport); err != nil {
 		fmt.Println("✗")
 		return fmt.Errorf("push rewritten manifest: %w", err)
 	}
@@ -167,78 +163,35 @@ func mirrorServerManifest(
 	return nil
 }
 
-// copyImage mirrors one image, trying containers/image first and falling back to
-// go-containerregistry. containers/image rejects config blobs larger than 4 MiB
-// (W&B's megabinary exceeds this); go-containerregistry has no such limit.
-func copyImage(
-	ctx context.Context,
-	src, dst string,
-	dstInsecure bool,
-	srcCtx, dstCtx *types.SystemContext,
-	policyCtx *signature.PolicyContext,
-) (bool, error) {
-	if alreadyMirrored(ctx, src, dst, dstInsecure) {
+// copyImage copies the complete OCI/Docker artifact graph, including every
+// platform in an image index. ORAS handles large config blobs and keeps source
+// and destination transports independent, without an implicit HTTP fallback.
+func copyImage(ctx context.Context, src, dst string, targetTransport operator.RegistryTransport) (bool, error) {
+	source, err := upstreamImageRepository(src)
+	if err != nil {
+		return false, fmt.Errorf("parse source %q: %w", src, err)
+	}
+	target, err := registryRepository(dst, targetTransport)
+	if err != nil {
+		return false, fmt.Errorf("parse target %q: %w", dst, err)
+	}
+	sourceRef := source.Reference.Reference
+	if sourceRef == "" {
+		sourceRef = "latest"
+	}
+	targetRef := target.Reference.Reference
+	if targetRef == "" {
+		targetRef = "latest"
+	}
+	sourceDesc, err := source.Resolve(ctx, sourceRef)
+	if err != nil {
+		return false, fmt.Errorf("resolve source: %w", err)
+	}
+	if targetDesc, err := target.Resolve(ctx, targetRef); err == nil && sourceDesc.Digest == targetDesc.Digest {
 		return true, nil
 	}
-	err := mirrorOne(ctx, src, dst, srcCtx, dstCtx, policyCtx)
-	if err == nil {
-		return false, nil
-	}
-	if cerr := craneCopyImage(ctx, src, dst, dstInsecure); cerr != nil {
-		return false, fmt.Errorf("%w (crane fallback also failed: %v)", err, cerr)
-	}
-	return false, nil
-}
-
-// craneCopyImage copies an image (or multi-arch index) from src to dst using
-// go-containerregistry. The source is always pulled over verified TLS; the
-// destination honours dstInsecure, which (matching the containers/image path)
-// means "don't be strict about the mirror's TLS": it tolerates a plain-HTTP
-// registry AND an HTTPS registry with a self-signed / untrusted cert.
-func craneCopyImage(ctx context.Context, src, dst string, dstInsecure bool) error {
-	srcRef, err := name.ParseReference(src)
-	if err != nil {
-		return fmt.Errorf("parse source %q: %w", src, err)
-	}
-	var dstOpts []name.Option
-	if dstInsecure {
-		// Allows a plain-HTTP registry; HTTPS-with-untrusted-cert is covered by
-		// the skip-verify transport on pushOpts below.
-		dstOpts = append(dstOpts, name.Insecure)
-	}
-	dstRef, err := name.ParseReference(dst, dstOpts...)
-	if err != nil {
-		return fmt.Errorf("parse target %q: %w", dst, err)
-	}
-
-	pullOpts := []v1remote.Option{
-		v1remote.WithAuthFromKeychain(authn.DefaultKeychain),
-		v1remote.WithContext(ctx),
-	}
-	pushOpts := []v1remote.Option{
-		v1remote.WithAuthFromKeychain(authn.DefaultKeychain),
-		v1remote.WithContext(ctx),
-	}
-	if dstInsecure {
-		pushOpts = append(pushOpts, v1remote.WithTransport(insecureHTTPTransport()))
-	}
-
-	desc, err := v1remote.Get(srcRef, pullOpts...)
-	if err != nil {
-		return fmt.Errorf("get source: %w", err)
-	}
-	if desc.MediaType.IsIndex() {
-		idx, err := desc.ImageIndex()
-		if err != nil {
-			return fmt.Errorf("read index: %w", err)
-		}
-		return v1remote.WriteIndex(dstRef, idx, pushOpts...)
-	}
-	img, err := desc.Image()
-	if err != nil {
-		return fmt.Errorf("read image: %w", err)
-	}
-	return v1remote.Write(dstRef, img, pushOpts...)
+	_, err = oras.Copy(ctx, source, sourceDesc.Digest.String(), target, targetRef, oras.DefaultCopyOptions)
+	return false, err
 }
 
 // insecureHTTPTransport clones the default transport and disables TLS
@@ -257,22 +210,19 @@ func insecureHTTPTransport() *http.Transport {
 // operator would have read.
 func pullManifestYAML(ctx context.Context, version string) (map[string][]byte, error) {
 	// Upstream is real TLS — always verify.
-	return pullManifestYAMLFrom(ctx, serverManifestUpstream, version, false)
+	return pullManifestYAMLFrom(ctx, serverManifestUpstream, version, operator.RegistryTransport{})
 }
 
 // pullManifestYAMLFrom is pullManifestYAML against an arbitrary server-manifest
 // repository (e.g. a customer's mirror at <mirror>/wandb/server-manifest), so
 // `wsm registry check` can read the rewritten manifest back out of the mirror
-// and enumerate the application images it expects to be present. insecure skips
-// TLS verification for a self-signed mirror; like the push side it does not fall
-// back to plain HTTP, since the operator could never consume a plain-HTTP
-// manifest anyway.
-func pullManifestYAMLFrom(ctx context.Context, repoRef, version string, insecure bool) (map[string][]byte, error) {
-	src, err := remote.NewRepository(repoRef)
+// and enumerate the application images it expects to be present. The transport
+// applies to this repository only, including explicitly selected HTTP mirrors.
+func pullManifestYAMLFrom(ctx context.Context, repoRef, version string, transport operator.RegistryTransport) (map[string][]byte, error) {
+	src, err := registryRepository(repoRef, transport)
 	if err != nil {
 		return nil, fmt.Errorf("init source repo: %w", err)
 	}
-	src.Client = dockerAuthClient(insecure)
 
 	store := memory.New()
 	desc, err := oras.Copy(ctx, src, version, store, version, oras.DefaultCopyOptions)
@@ -666,7 +616,7 @@ func removeMappingKey(n *yamlv3.Node, key string) {
 // layer and pushes a fresh OCI image manifest to <target>/wandb/server-manifest
 // tagged with version. The layer uses MediaTypeImageLayerGzip so the operator's
 // extractor decompresses it.
-func pushManifestArtifact(ctx context.Context, target, version string, files map[string][]byte, insecure bool) error {
+func pushManifestArtifact(ctx context.Context, target, version string, files map[string][]byte, transport operator.RegistryTransport) error {
 	layerData, err := buildLayerTarGz(files)
 	if err != nil {
 		return fmt.Errorf("build layer: %w", err)
@@ -693,15 +643,10 @@ func pushManifestArtifact(ctx context.Context, target, version string, files map
 		return fmt.Errorf("tag manifest: %w", err)
 	}
 
-	dst, err := remote.NewRepository(strings.TrimRight(target, "/") + "/wandb/server-manifest")
+	dst, err := registryRepository(strings.TrimRight(target, "/")+"/wandb/server-manifest", transport)
 	if err != nil {
 		return fmt.Errorf("init target repo: %w", err)
 	}
-	// The server manifest must be served over HTTPS (the operator fetches it over
-	// HTTPS from inside the cluster). --insecure skips TLS verification for a
-	// self-signed cert; it does NOT fall back to plain HTTP, since a plain-HTTP
-	// manifest could never be consumed anyway.
-	dst.Client = dockerAuthClient(insecure)
 
 	if _, err := oras.Copy(ctx, store, version, dst, version, oras.DefaultCopyOptions); err != nil {
 		return fmt.Errorf("copy to mirror: %w", err)
@@ -737,6 +682,33 @@ func buildLayerTarGz(files map[string][]byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// upstreamImageRepository expands Docker shorthand before passing it to ORAS,
+// which requires an explicit registry/repository and does not add library/.
+func upstreamImageRepository(ref string) (*remote.Repository, error) {
+	parsed, err := name.ParseReference(ref)
+	if err != nil {
+		return nil, err
+	}
+	normalized := parsed.Name()
+	if parsed.Context().RegistryStr() == name.DefaultRegistry {
+		// ORAS maps docker.io to its API endpoint and Docker credential entry.
+		normalized = "docker.io/" + strings.TrimPrefix(normalized, name.DefaultRegistry+"/")
+	}
+	return registryRepository(normalized, operator.RegistryTransport{})
+}
+
+// registryRepository applies transport settings to one endpoint. Callers must
+// pass the zero value for published upstreams, independently of mirror settings.
+func registryRepository(ref string, transport operator.RegistryTransport) (*remote.Repository, error) {
+	repo, err := remote.NewRepository(ref)
+	if err != nil {
+		return nil, err
+	}
+	repo.PlainHTTP = transport.PlainHTTP
+	repo.Client = dockerAuthClient(transport.InsecureSkipTLSVerify)
+	return repo, nil
+}
+
 // dockerAuthClient returns an oras auth client backed by the user's Docker
 // config (~/.docker/config.json), falling back to anonymous access if no
 // config is present. When insecure, TLS verification is skipped (for a mirror
@@ -763,35 +735,4 @@ func sortedKeys(m map[string][]byte) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-func alreadyMirrored(ctx context.Context, src, dst string, dstInsecure bool) bool {
-	srcRef, err := name.ParseReference(src)
-	if err != nil {
-		return false
-	}
-	var dstNameOpts []name.Option
-	if dstInsecure {
-		dstNameOpts = append(dstNameOpts, name.Insecure)
-	}
-	dstRef, err := name.ParseReference(dst, dstNameOpts...)
-	if err != nil {
-		return false
-	}
-
-	srcOpts := []v1remote.Option{v1remote.WithAuthFromKeychain(authn.DefaultKeychain), v1remote.WithContext(ctx)}
-	dstOpts := []v1remote.Option{v1remote.WithAuthFromKeychain(authn.DefaultKeychain), v1remote.WithContext(ctx)}
-	if dstInsecure {
-		dstOpts = append(dstOpts, v1remote.WithTransport(insecureHTTPTransport()))
-	}
-
-	srcDesc, err := v1remote.Head(srcRef, srcOpts...)
-	if err != nil {
-		return false
-	}
-	dstDesc, err := v1remote.Head(dstRef, dstOpts...)
-	if err != nil {
-		return false
-	}
-	return srcDesc.Digest == dstDesc.Digest
 }

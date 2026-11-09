@@ -30,7 +30,7 @@ wsm deploy-v2 operator [flags]
 | `--setup-k8s-cluster` | `false` | Create a Kind cluster before deploying |
 | `--cluster-name` | `kind` | Name of the Kind cluster (used with `--setup-k8s-cluster`) |
 | `--workers` | `0` | Number of Kind worker nodes |
-| `--operator-chart-version` | `2.0.0-beta.9` | Operator Helm chart version (a leading `v` is accepted) |
+| `--operator-chart-version` | `2.0.0-beta.10` | Operator Helm chart version (a leading `v` is accepted) |
 | `--operator-install-timeout` | `0s` | Helm timeout in seconds, minutes, or hours, such as `30s`, `5m`, or `1h`. `0` uses Helm's default. |
 | `--operator-image-pull-policy` | `IfNotPresent` | Operator image pull policy: `Always`, `IfNotPresent`, or `Never` (case-insensitive). |
 | `--operator-version` | — | Operator image version (defaults to chart value) |
@@ -71,7 +71,7 @@ wsm deploy-v2 operator --context my-cluster
 
 # Pin an operator chart version; an optional leading v is normalized for OCI
 wsm deploy-v2 operator --context my-cluster \
-  --operator-chart-version v2.0.0-beta.9
+  --operator-chart-version v2.0.0-beta.10
 
 # One shot: create a local Kind cluster, install the operator, and deploy the CR
 wsm deploy-v2 operator --context kind-wandb \
@@ -197,7 +197,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--wandb-name` | `wandb` | Name of the W&B instance |
 | `--wandb-namespace` | `wandb` | Kubernetes namespace for the CR |
 | `--wandb-hostname` | `http://localhost:8080` | External URL for accessing W&B |
-| `--wandb-version` | — | Server manifest version (defaults to `0.85.1`; a leading `v` is accepted). Cross-checked against the published [`wandb/local`](https://hub.docker.com/r/wandb/local/tags) tags — see the note below. List valid values with [`wsm deploy-v2 wandb list-versions`](#wsm-deploy-v2-wandb-list-versions) |
+| `--wandb-version` | — | Server manifest version (defaults to `0.86.0`; a leading `v` is accepted). Cross-checked against the published [`wandb/local`](https://hub.docker.com/r/wandb/local/tags) tags — see the note below. List valid values with [`wsm deploy-v2 wandb list-versions`](#wsm-deploy-v2-wandb-list-versions) |
 | `--mirror-registry` | — | Install the W&B instance from this mirror. Defaults `--manifest-repository` to `oci://<mirror>/wandb/server-manifest` (charts, operator/infra images, and the rewritten app images come from the mirror). The managed data-plane images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) keep their upstream refs and reach the mirror via each node's container-runtime registry mirror — not `spec.global.imageRegistry`. Populate the mirror first with `wsm registry mirror`. |
 | `--manifest-repository` | — | Server manifest source. Accepts an OCI repository (`oci://…`, pulled over HTTPS) **or** a local `file://` path mounted onto the operator pod (the no-TLS option for plain-HTTP / insecure air-gap installs; a plain-HTTP `oci://` mirror is rejected). Auto-set to `oci://<mirror>/wandb/server-manifest` when `--mirror-registry` is provided and this is unset. |
 | `--size` | `dev` | Deployment size profile: `dev`, `micro`, `small`, `medium`, `large`, `xlarge`, `xxlarge` |
@@ -210,7 +210,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--oidc-session-length` | — | OIDC session length, e.g. `720h` (`spec.wandb.oidc.sessionLength`). Optional; `--cr-file` wins if it already set the value |
 | `--image-registry` | — | **Deprecated.** Retarget container images to this registry (`spec.global.imageRegistry`). Use `--mirror-registry`, or `--cr-set spec.global.imageRegistry=<host>` for a different data-plane registry. |
 | `--custom-ca-cert-file` | — | Path to a PEM CA certificate to trust in W&B workloads; repeatable, each file's contents is appended to `spec.global.customCACerts` |
-| `--image-pull-secret` | — | Name of a `dockerconfigjson` Secret for private-registry image pulls; repeatable, appended to `spec.global.imagePullSecrets` |
+| `--image-pull-secret` | — | Name of an image pull Secret for private-registry authentication; repeatable |
 | `--custom-ca-configmap` | — | Name of a ConfigMap holding CA certificates to trust in W&B workloads (`spec.global.caCertsConfigMap`) |
 | `--proxy-http-url` | — | Literal `HTTP_PROXY` URL, no credentials (`spec.global.proxy.httpProxy.value`). Mutually exclusive with `--proxy-http-secret` |
 | `--proxy-https-url` | — | Literal `HTTPS_PROXY` URL, no credentials (`spec.global.proxy.httpsProxy.value`). Mutually exclusive with `--proxy-https-secret` |
@@ -410,7 +410,7 @@ wsm cluster create [flags]
 | `--http-port` | `8080` | Host port mapped to HTTP ingress |
 | `--https-port` | `8443` | Host port mapped to HTTPS ingress |
 | `--kind-node-image` | — | Override the Kind node image (e.g. point at a mirrored `kindest/node` for offline cluster bootstrap) |
-| `--insecure-registry-host` | — | Configure containerd to pull from this host over plain HTTP (e.g. `host.docker.internal:5000`). Pairs with `wsm registry mirror --insecure` for local-laptop testing against a plain-HTTP `registry:2`. See [On-Prem Deployment](../deployment/on-prem.md). |
+| `--insecure-registry-host` | — | Configure containerd to pull from this host over plain HTTP (e.g. `host.docker.internal:5000`). Pairs with `wsm registry mirror --plain-http` for local-laptop testing against a plain-HTTP `registry:2`. See [On-Prem Deployment](../deployment/on-prem.md). |
 
 #### Examples
 
@@ -481,16 +481,17 @@ Pulls every chart and image required by `wsm deploy-v2 operator` from its upstre
 wsm registry mirror --to <host> [flags]
 ```
 
-Scope: the operator OCI chart + binary image, and the cert-manager, nginx-gateway-fabric, and kube-state-metrics OCI charts plus the component images each deploys. With `--wandb-version` it also mirrors the W&B server manifest and every image it references — the application images and the managed data-plane server images (ClickHouse/MySQL/Redis/Kafka/object-store) — and rewrites the manifest's image refs to point at your mirror. The managed-service **operator** images (moco/redis/seaweedfs/altinity) and their sidecars come with them. Nothing is hand-listed: the image sets are derived by rendering the charts and parsing the manifest, so they always match what an install actually pulls.
+Scope: the operator OCI chart + its images, and the cert-manager, nginx-gateway-fabric, and kube-state-metrics OCI charts plus the component images each deploys. With `--wandb-version` it also mirrors the W&B server manifest and every image it references — the application images and the managed data-plane server images (ClickHouse/MySQL/Redis/Kafka/object-store) — and rewrites the manifest's image refs to point at your mirror. The managed-service **operator** images (moco/redis/seaweedfs/altinity) and their sidecars come with them. The image sets are derived by rendering the charts and parsing the manifest, so they always match what an install actually pulls.
 
 #### Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--to` | — | **Required.** Hostname of your mirror, e.g. `harbor.example.com` or `localhost:5000`. |
-| `--insecure` | `false` | Skip TLS verification when pushing to the mirror. Use for plain-HTTP registries like a local `registry:2`. **Never** in production. |
+| `--insecure` | `false` | Skip the target mirror's TLS certificate verification while keeping HTTPS. Does not affect upstream downloads. |
+| `--plain-http` | `false` | Use HTTP for the target mirror, including chart, image, and server-manifest uploads. Upstream downloads stay on HTTPS. |
 | `--dry-run` | `false` | Print the source → target mirroring plan without pushing. |
-| `--operator-chart-version` | `2.0.0-beta.9` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
+| `--operator-chart-version` | `2.0.0-beta.10` | Operator chart version; also used as the tag for the operator binary image. Match this to the version you'll pass to `wsm deploy-v2 operator`. |
 | `--wandb-version` | — | W&B server version (e.g. `0.84.0`). When set, also mirror the server manifest and every application + managed data-plane image it references, rewriting them to point at the mirror. |
 | `--exclude-operators` | — | Comma-separated managed types (`clickhouse`, `mysql`, `redis`, `object-store`) whose **operator** images to skip — for when you run your own cluster-wide operator. The managed data-plane service is still mirrored. |
 | `--exclude-managed` | — | Comma-separated managed types to skip **entirely** — operator *and* data-plane images — for when you use an external service. |
@@ -504,7 +505,7 @@ Auth is read from your Docker config (`~/.docker/config.json`). Run `docker logi
 
 ### `wsm registry check`
 
-Verifies that every artifact `wsm registry mirror` pushes is present in your mirror. It computes the **same destination set** as `mirror` (operator chart + image, cert-manager, nginx-gateway, the managed-service operator/data-plane images, and — with `--wandb-version` — the server manifest plus every application image it references), then does a manifest check for each.
+Verifies that every artifact `wsm registry mirror` pushes is present in your mirror. It computes the **same destination set** as `mirror` (operator chart + images, cert-manager, nginx-gateway, the managed-service operator/data-plane images, and — with `--wandb-version` — the server manifest plus every application image it references), then does a manifest check for each.
 
 Pass the **same** `--operator-chart-version` / `--wandb-version` / `--exclude-operators` / `--exclude-managed` / `--skip-managed-images` you mirrored with, or `check` and `mirror` won't agree on the expected set. The server manifest and its application images are read back out of the mirror itself — and the charts are rendered from their copies in the mirror — so `check` works from an air-gapped host with access only to the registry.
 
@@ -518,12 +519,24 @@ wsm registry check --registry <host> --wandb-version <version> [flags]
 |------|---------|-------------|
 | `--registry` | — | **Required.** Hostname of your mirror to check against. |
 | `--wandb-version` | — | W&B server version that was mirrored; when set, also check the server manifest and every application image it references. |
-| `--operator-chart-version` | `2.0.0-beta.9` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
+| `--operator-chart-version` | `2.0.0-beta.10` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
 | `--exclude-operators` | — | Managed types whose operator images to skip checking (match `--exclude-operators` you mirrored with). |
 | `--exclude-managed` | — | Managed types to skip checking entirely (match `--exclude-managed` you mirrored with). |
 | `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store` (match the flag you mirrored with). |
-| `--insecure` | `false` | Skip TLS verification when contacting the registry. |
+| `--insecure` | `false` | Skip TLS certificate verification while keeping HTTPS. Does not enable HTTP or an HTTP fallback. |
+| `--plain-http` | `false` | Use HTTP for all requests to the mirror, including server-manifest readback with `--wandb-version`. |
 | `--fail-on-missing` | `false` | Exit non-zero if any artifact is missing. |
+
+For an HTTPS mirror with a private certificate, use `--insecure` with both
+`registry mirror` and `registry check`. For an HTTP mirror, use `--plain-http`
+with both commands. `--insecure` does not enable HTTP or an HTTP fallback.
+The mirror command applies these flags only to its destination; it continues
+to download published upstream artifacts over verified HTTPS.
+
+```bash
+wsm registry mirror --to localhost:5000 --plain-http --wandb-version 0.84.0
+wsm registry check --registry localhost:5000 --plain-http --wandb-version 0.84.0 --fail-on-missing
+```
 
 ### `wsm registry create-repos`
 
@@ -542,7 +555,7 @@ Shells out to the `aws` CLI using your AWS config (env / `~/.aws` / IRSA); the c
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--to` | — | **Required.** ECR registry host plus optional path prefix. Non-ECR hosts are rejected. |
-| `--operator-chart-version` | `2.0.0-beta.1` | Operator chart version (must match `wsm registry mirror`). |
+| `--operator-chart-version` | `2.0.0-beta.10` | Operator chart version (must match `wsm registry mirror`). |
 | `--wandb-version` | — | W&B server version; when set, also create the server-manifest repo and every application-image repo the manifest references. |
 | `--exclude-operators` | — | Managed types whose operator repos to skip (match `--exclude-operators` you mirror with). |
 | `--exclude-managed` | — | Managed types whose operator **and** data-plane repos to skip (match `--exclude-managed` you mirror with). |

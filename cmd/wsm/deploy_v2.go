@@ -51,9 +51,9 @@ func init() {
 // TODO once an official release publishes a manifest, we should switch to looking
 // up the most recent non-dev release and not have a default.
 const (
-	defaultWandbVersion         = "0.85.1"
+	defaultWandbVersion         = "0.86.0"
 	minWandbVersion             = "0.80.0"
-	defaultOperatorChartVersion = "2.0.0-beta.9"
+	defaultOperatorChartVersion = "2.0.0-beta.10"
 )
 
 // defaultWandbSize is stamped into spec.size when --size is unset.
@@ -464,6 +464,7 @@ func operatorDeployCmd() *cobra.Command {
 				f.mirrorRegistry,
 				f.insecureRegistry,
 				f.registryCAFile,
+				f.imagePullSecrets,
 				gatewayCRDURL,
 				skipGatewayCRDs,
 				allowUnsupportedArch,
@@ -500,7 +501,7 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().IntVar(&workers, "workers", 0, "Number of worker nodes (only used with --setup-k8s-cluster)")
 	cmd.Flags().StringVar(&kindNodeImage, "kind-node-image", "", "Kind node image to use, e.g. myreg.example.com/kindest/node:v1.35.1@sha256:... (defaults to the upstream pinned image; only used with --setup-k8s-cluster)")
 
-	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", defaultOperatorChartVersion, "Operator Chart version, e.g. 2.0.0-beta.9 (a leading v is accepted)")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", defaultOperatorChartVersion, "Operator Chart version, e.g. 2.0.0-beta.10 (a leading v is accepted)")
 	cmd.Flags().StringVar(&operatorNamespace, "operator-namespace", "wandb-operators", "Namespace for operator")
 	cmd.Flags().DurationVar(&operatorInstallTimeout, "operator-install-timeout", 0, "Helm timeout in seconds, minutes, or hours (for example 30s, 5m, or 1h; 0 uses Helm's default)")
 	cmd.Flags().StringVar(&operatorImagePullPolicy, "operator-image-pull-policy", string(corev1.PullIfNotPresent), "Operator image pull policy (Always, IfNotPresent, or Never; case-insensitive)")
@@ -787,6 +788,7 @@ func performDeploy(
 	mirrorRegistry string,
 	insecureRegistry bool,
 	registryCAFile string,
+	imagePullSecrets []string,
 	gatewayCRDURL string,
 	skipGatewayCRDs bool,
 	allowUnsupportedArch bool,
@@ -996,7 +998,7 @@ func performDeploy(
 	fmt.Printf("[%d/%d] Deploying Required operators...", currentStep, totalSteps)
 	start := time.Now()
 
-	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetryConfig, wandbNamespace, openshift, watchtowerEnableSecretWrites, watchtowerEnableDBAdmin, operatorInstallTimeout, operatorPullPolicy); err != nil {
+	if err := operator.DeployOperator(ctx, operatorNamespace, operatorChartVersion, mirror, telemetryConfig, wandbNamespace, openshift, watchtowerEnableSecretWrites, watchtowerEnableDBAdmin, operatorInstallTimeout, operatorPullPolicy, imagePullSecrets); err != nil {
 		fmt.Println(" ✗")
 		return err
 	}
@@ -2026,7 +2028,7 @@ func clusterCreateCmd() *cobra.Command {
 	cmd.Flags().Int32Var(&httpPort, "http-port", 8080, "HTTP port for Kind cluster ingress")
 	cmd.Flags().Int32Var(&httpsPort, "https-port", 8443, "HTTPS port for Kind cluster ingress")
 	cmd.Flags().StringVar(&kindNodeImage, "kind-node-image", "", "Kind node image to use, e.g. myreg.example.com/kindest/node:v1.35.1@sha256:... (defaults to the upstream pinned image)")
-	cmd.Flags().StringVar(&insecureRegistryHost, "insecure-registry-host", "", "Configure containerd to pull from this host over plain HTTP (e.g. host.docker.internal:5000). Pairs with 'wsm registry mirror --insecure' for local-laptop testing against a plain-HTTP registry:2.")
+	cmd.Flags().StringVar(&insecureRegistryHost, "insecure-registry-host", "", "Configure containerd to pull from this host over plain HTTP (e.g. host.docker.internal:5000). Pairs with 'wsm registry mirror --plain-http' for local-laptop testing against a plain-HTTP registry:2.")
 
 	return cmd
 }

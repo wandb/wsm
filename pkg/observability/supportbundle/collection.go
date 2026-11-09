@@ -2,6 +2,14 @@
 // install runs from the operator's suspended collector CronJob.
 package supportbundle
 
+import (
+	v2 "github.com/wandb/operator/api/v2"
+	opsupportbundle "github.com/wandb/operator/pkg/observability/supportbundle"
+)
+
+// CollectorImage is the operator's default Lumen collector image.
+var CollectorImage = opsupportbundle.Image(&v2.WeightsAndBiases{})
+
 // CollectorName mirrors the collectors the operator can put in a preset.
 type CollectorName string
 

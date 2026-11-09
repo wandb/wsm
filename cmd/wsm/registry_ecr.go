@@ -47,7 +47,7 @@ IAM permission ecr:CreateRepository.`,
 		Example: `  # Create every repo the mirror needs under an ECR path prefix.
   wsm registry create-repos \
     --to 770934259321.dkr.ecr.us-west-2.amazonaws.com/wandbench/collinol-test \
-    --operator-chart-version 2.0.0-beta.1 --wandb-version 0.83.0-pre.1
+    --operator-chart-version 2.0.0-beta.10 --wandb-version 0.86.0
 
   # Preview the repositories without creating them.
   wsm registry create-repos --to <acct>.dkr.ecr.us-west-2.amazonaws.com/wandb --dry-run`,
@@ -113,7 +113,7 @@ IAM permission ecr:CreateRepository.`,
 	}
 
 	cmd.Flags().StringVar(&targetRegistry, "to", "", "ECR registry (and optional path prefix), e.g. <acct>.dkr.ecr.us-west-2.amazonaws.com/wandbench/collinol-test (required)")
-	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", "2.0.0-beta.1", "Operator chart version; must match the value passed to 'wsm registry mirror'")
+	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", defaultOperatorChartVersion, "Operator chart version; must match the value passed to 'wsm registry mirror'")
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version; when set, also create the server-manifest repo and every application-image repo the manifest references")
 	cmd.Flags().BoolVar(&skipManaged, "skip-managed-images", false, "Skip the managed-service operator + data-plane repos; match the flag you mirror with")
 	cmd.Flags().StringVar(&region, "region", "", "AWS region for create-repository (default: parsed from the ECR host)")
@@ -135,14 +135,14 @@ func collectMirrorRepos(ctx context.Context, target, operatorChartVersion, wandb
 		repos = append(repos, repo)
 	}
 
-	mirrorPlan, err := buildMirrorPlan(ctx, target, operatorChartVersion, false, false)
+	mirrorPlan, err := buildMirrorPlan(ctx, target, operatorChartVersion, false, operator.RegistryTransport{})
 	if err != nil {
 		return nil, err
 	}
 	for _, it := range mirrorPlan {
 		add(it.dst)
 	}
-	managed, err := buildManagedImagePlan(ctx, target, operator.OperatorChartRepo, operatorChartVersion, exclusions, false)
+	managed, err := buildManagedImagePlan(ctx, target, operator.OperatorChartRepo, operatorChartVersion, exclusions, operator.RegistryTransport{})
 	if err != nil {
 		return nil, err
 	}

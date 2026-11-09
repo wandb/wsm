@@ -100,7 +100,7 @@ all). The charts, operator, and images never need TLS; only the `oci://` manifes
 | Registry | a throwaway `registry:2` (plain HTTP)                                                                                                                                                                                                                                                                                                                                                                                               | your Harbor / ECR / Artifactory / internal registry (HTTPS) |
 | Brings up | **everything** — databases, app, weave                                                                                                                                                                                                                                                                                                                                                                                              | **everything** |
 | Manifest delivery | `file://`, mounted into the operator pod (no registry TLS)                                                                                                                                                                                                                                                                                                                                                                          | `oci://`, pulled from the registry (needs a valid / trusted cert) |
-| **1. Set up + mirror** (online) | `docker run -d -p 5000:5000 --name local-registry registry:2`<br>`REG=host.docker.internal:5000`<br>`wsm registry mirror --to $REG --insecure --operator-chart-version <ver> --wandb-version <v>`<br> pushes charts + operator + managed + **app** images; the final manifest-push step fails on plain HTTP — expected. <br> **see ‡ below for steps to mirror manifest without TLS then continue to step 2**                       | `REG=<registry reachable from host, nodes, and pods>`<br>`wsm registry mirror --to $REG --operator-chart-version <ver> --wandb-version <v>`<br>_add `--insecure` only to skip verifying a self-signed push cert_<br>`wsm registry check --registry $REG --wandb-version <v> --fail-on-missing`<br>_**Amazon ECR:** run `wsm registry create-repos` first — ECR doesn't auto-create repos (see [Phase 1](#phase-1--mirror-everything-online))_ |
+| **1. Set up + mirror** (online) | `docker run -d -p 5000:5000 --name local-registry registry:2`<br>`REG=host.docker.internal:5000`<br>`wsm registry mirror --to $REG --plain-http --operator-chart-version <ver> --wandb-version <v>`<br> pushes charts, images, and the rewritten server manifest over HTTP. <br> **See ‡ below for the operator's file-based manifest handoff, then continue to step 2.**                       | `REG=<registry reachable from host, nodes, and pods>`<br>`wsm registry mirror --to $REG --operator-chart-version <ver> --wandb-version <v>`<br>_add `--insecure` only to skip verifying a self-signed push cert_<br>`wsm registry check --registry $REG --wandb-version <v> --fail-on-missing`<br>_**Amazon ECR:** run `wsm registry create-repos` first — ECR doesn't auto-create repos (see [Phase 1](#phase-1--mirror-everything-online))_ |
 | **2. Install** (offline) | `wsm cluster create --cluster-name airgap --insecure-registry-host $REG`<br>`wsm deploy-v2 operator --context kind-airgap --mirror-registry $REG --insecure-registry --operator-chart-version <ver> --skip-gateway-api-crds`<br>_mount the manifest onto the operator pod — see ‡ below_<br>`wsm deploy-v2 wandb deploy --context kind-airgap --manifest-repository file:///manifests --wandb-version <v>`<br>_no `--mirror-registry` on this path: the node's containerd mirrors (from `--insecure-registry-host`) retarget the managed DB images, and the mounted `file://` manifest carries the app refs. `--mirror-registry` on `wandb deploy` only defaults `--manifest-repository` to the mirror — it does **not** retarget the DB images_ | _if the registry CA is self-signed, first [make the nodes trust it](#make-the-nodes-trust-the-ca)_<br>`wsm deploy-v2 operator --context <ctx> --mirror-registry $REG --operator-chart-version <ver> --registry-ca-file ./ca.crt --skip-gateway-api-crds`<br>`wsm deploy-v2 wandb deploy --context <ctx> --mirror-registry $REG --wandb-version <v>`<br>_drop `--registry-ca-file` if the CA is already trusted by host + cluster._<br>_the managed DB images reach `$REG` via your nodes' container-runtime registry mirror (configure per node); `--mirror-registry` covers charts/operator/app images only_ |
 
 **‡ Deliver the manifest via `file://` (no registry TLS).** The published server manifest is an
@@ -148,7 +148,7 @@ they do:
         └────────────────────────┬───────────────────────────┘
                                  │ pull
                                  ▼
-      wsm registry mirror --to $REG [--insecure] --wandb-version <v>
+      wsm registry mirror --to $REG [--insecure | --plain-http] --wandb-version <v>
                                  │ push: charts, operator, cert-manager, nginx-gateway,
                                  │       managed-service images, app images (weave, …)
                                  ▼
@@ -159,9 +159,9 @@ they do:
    the server MANIFEST is handled differently per setup:
    • TLS registry     → wsm re-pushes it (image refs rewritten) over HTTPS to
                         oci://$REG/wandb/server-manifest   ← operator pulls it here in Phase 2
-   • insecure / local → that push can't reach a plain-HTTP registry (it's HTTPS-only, so the
-                        mirror run ends with an "expected" manifest-push error). Instead extract
-                        it locally and rewrite its app refs to $REG:
+   • HTTP / local     → --plain-http uploads the rewritten manifest to the mirror over HTTP.
+                        The operator still requires HTTPS for OCI manifest reads. For its
+                        file-based handoff, extract the manifest and rewrite its app refs to $REG:
                           docker pull …/server-manifest:<v>  →  manifest.yaml (+ sizing.yaml)
                         ← mounted onto the operator pod in Phase 2 and read via file://
 ```
@@ -282,7 +282,6 @@ Even with everything mirrored, a few things default to an online source. Each ha
 | Still online | When | What the air-gapped customer does |
 |--------------|------|------------------------------------|
 | **Gateway API CRDs** (a YAML on `github.com`) | Whenever nginx-gateway installs | Pre-apply the CRDs from a copy you carried in, then pass `--skip-gateway-api-crds`; **or** host the YAML internally and pass `--gateway-api-crd-url <internal-url>`. |
-| **Observability / telemetry images** (otel-collector, victoria-metrics-operator, grafana-operator + their data-plane pods) | Only if `--observability-mode=full\|forward` | These are **not yet mirrored by `wsm registry mirror`** (kube-state-metrics is the exception — its chart and image are mirrored). Either keep `--observability-mode=off` (default), or mirror those images into your registry by hand and ensure your node redirect covers them. |
 | **Node container-runtime registry mirror** (required for the data plane) | Always, for the managed DB images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) | The operator emits these with upstream refs, so each node must mirror `docker.io`/`quay.io`/`ghcr.io`/`us-docker.pkg.dev` → `$REG/<host-stripped>`. `wsm cluster create --insecure-registry-host $REG` sets this up for Kind; on a real cluster you configure `certs.d` per node. Platforms with no node access (GKE Autopilot, EKS Fargate) can't run the managed databases air-gapped. |
 | **Kind node image** | Only if `--setup-k8s-cluster` | Mirror `kindest/node` and pass `--kind-node-image <reg>/kindest/node:...`. N/A for an existing cluster. |
 
@@ -302,7 +301,7 @@ Even with everything mirrored, a few things default to an online source. Each ha
 - **License** — apply your W&B license (`--license` / `--license-file` at deploy, or `wsm license set` after). Inspect the active license with `wsm license info`. Without it the instance runs in a limited state.
 - **External DNS + TLS for the W&B endpoint** — point your hostname at the gateway/ingress and provide the *serving* cert (this is the user-facing W&B URL — separate from the registry CA). Set it via `--wandb-hostname` and the networking/TLS flags.
 - **Verify readiness** — `kubectl get wandb -n <ns>` should report the managed services and app ready; `kubectl get pods -n <ns>` should be all Running.
-- **(If observability enabled)** mirror the telemetry stack images by hand — `wsm registry mirror` does not yet include them.
+- **(If observability enabled)** with an authenticated registry, the `--image-pull-secret` Secret must also exist in the operator namespace.
 
 ---
 

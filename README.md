@@ -18,7 +18,7 @@ New deployments should use **v2**.
 
 ## Install
 
-Requires **Go 1.27.2+**. Build from source:
+Requires **Go 1.27.3+**. Build from source:
 
 ```bash
 git clone https://github.com/wandb/wsm
@@ -75,7 +75,7 @@ wsm deploy-v2 wandb deploy|destroy|get-ca-cert --context <ctx> [flags]
 
 **`operator` — key flags:**
 - `--operator-chart-version string`: operator chart version, which selects the
-  operator image tag (default `2.0.0-beta.9`).
+  operator image tag (default `2.0.0-beta.10`).
 - `--operator-namespace string`: operator namespace (default `wandb-operators`).
 - `--install-cert-manager string`: `auto` (detect & reuse), `true` (force
   install), `false` (skip) (default `auto`).
@@ -134,10 +134,12 @@ wsm registry mirror|check|values|push [flags]
 ```
 
 - `mirror`: pull every chart/image `deploy-v2 operator` needs and re-push to your
-  mirror. `--to <host>` (required), `--insecure`, `--dry-run`,
-  `--operator-chart-version` (default `2.0.0-beta.9`).
+  mirror. `--to <host>` (required), `--insecure` (skip target TLS verification),
+  `--plain-http` (HTTP target only), `--dry-run`,
+  `--operator-chart-version` (default `2.0.0-beta.10`).
 - `check`: verify all required images exist in your mirror. `--registry <host>`
-  (required), `--fail-on-missing`, `--insecure`.
+  (required), `--fail-on-missing`, `--insecure`, `--plain-http`. Both `mirror`
+  and `check` accept `--wandb-version` with HTTP targets.
 - `values`: emit a `values.yaml` fragment that re-points images at your registry.
 - `push`: push images from a bundle directory into your mirror.
 
@@ -207,13 +209,13 @@ walkthrough (including a laptop test against a local `registry:2`) is in
 [`docs/deployment/on-prem.md`](./docs/deployment/on-prem.md). TL;DR:
 ```bash
 # 1. Mirror artifacts upstream -> your registry
-wsm registry mirror --to harbor.corp.internal --operator-chart-version 2.0.0-beta.9
+wsm registry mirror --to harbor.corp.internal --operator-chart-version 2.0.0-beta.10
 
 # 2. Install pulling only from the mirror
 wsm deploy-v2 operator \
   --context <cluster> \
   --mirror-registry harbor.corp.internal \
-  --operator-chart-version 2.0.0-beta.9
+  --operator-chart-version 2.0.0-beta.10
 ```
 
 **Air-gapped bundle prep (v1, legacy):**

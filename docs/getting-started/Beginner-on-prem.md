@@ -41,15 +41,16 @@ export VER=0.85.1                       # the W&B server version to install
 ### 2. Mirror every W&B chart + image into it
 
 ```bash
-wsm registry mirror --to $REG --insecure --wandb-version $VER
+wsm registry mirror --to $REG --plain-http --wandb-version $VER
+wsm registry check --registry $REG --plain-http --wandb-version $VER --fail-on-missing
 ```
 
 This copies the operator, cert-manager, NGINX Gateway, the managed databases, and every W&B
 application image into your registry.
 
-> The `manifest push failed` line at the very end is **expected** on a plain-HTTP registry —
-> the server manifest is served over HTTPS only, so you'll hand it to the operator directly in
-> step 4. (On a real HTTPS registry this step just works and step 4 disappears.)
+> WSM uploads and checks the server manifest over HTTP too. The operator's OCI manifest
+> reader still uses HTTPS, so step 4 hands the manifest to it as a local file. With an HTTPS
+> registry, the operator can read the mirrored manifest directly and step 4 disappears.
 
 ### 3. Create a local cluster and install the operator — from your registry
 

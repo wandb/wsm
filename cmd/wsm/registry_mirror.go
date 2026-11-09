@@ -6,11 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/wandb/wsm/pkg/observability/supportbundle"
 	"github.com/wandb/wsm/pkg/operator"
-	"go.podman.io/image/v5/copy"
-	"go.podman.io/image/v5/docker"
-	"go.podman.io/image/v5/signature"
-	"go.podman.io/image/v5/types"
 )
 
 // registryMirrorCmd pulls every artifact wsm needs for a v2 install from its
@@ -19,15 +16,16 @@ import (
 // from the mirror.
 func registryMirrorCmd() *cobra.Command {
 	var (
-		targetRegistry       string
-		insecure             bool
-		dryRun               bool
-		operatorChartVersion string
-		wandbVersion         string
-		skipManaged          bool
-		excludeOperators     []string
-		excludeManaged       []string
-		manifestSource       string
+		targetRegistry         string
+		targetTransport        operator.RegistryTransport
+		manifestSourceInsecure bool
+		dryRun                 bool
+		operatorChartVersion   string
+		wandbVersion           string
+		skipManaged            bool
+		excludeOperators       []string
+		excludeManaged         []string
+		manifestSource         string
 	)
 
 	cmd := &cobra.Command{
@@ -38,9 +36,11 @@ its upstream source and push a copy to your mirror. After this runs, the install
 side can fetch everything from --mirror-registry instead of the public sources.
 
 Auth is read from your Docker config (~/.docker/config.json) by default. Use
---insecure for a plain-HTTP / self-signed mirror (e.g. a local registry:2).
+--insecure to skip verification of the mirror's TLS certificate, or --plain-http
+for an HTTP mirror (e.g. a local registry:2). These options apply only to the
+target; upstream charts, images, and server manifests are fetched over HTTPS.
 
-Mirrors, across three tiers: (1) the operator OCI chart + binary image,
+Mirrors, across three tiers: (1) the operator OCI chart + its images,
 cert-manager and its 5 component images, and nginx-gateway-fabric with its 2
 images; (2) the managed-service operator images (moco/altinity/opstree/
 seaweedfs); (3) the managed data-plane images (ClickHouse/Kafka/MySQL/Redis/
@@ -50,7 +50,7 @@ rewriting the manifest's image refs to point at the mirror. Pass
 --skip-managed-images to omit tiers 2 and 3 (e.g. when running W&B against
 external databases).`,
 		Example: `  # Mirror everything to a local registry:2 on localhost:5000.
-  wsm registry mirror --to localhost:5000 --insecure
+  wsm registry mirror --to localhost:5000 --plain-http --wandb-version 0.84.0
 
   # Mirror to a private Harbor.
   wsm registry mirror --to harbor.mycorp.internal
@@ -71,32 +71,19 @@ external databases).`,
 			ctx := context.Background()
 
 			// Charts render from upstream (verified TLS); false = not from the mirror.
-			items, err := buildMirrorPlan(ctx, targetRegistry, operatorChartVersion, false, false)
+			items, err := buildMirrorPlan(ctx, targetRegistry, operatorChartVersion, false, operator.RegistryTransport{})
 			if err != nil {
 				return err
 			}
 			// Managed-service operator + sidecar images (operator chart render) plus the
 			// data-plane server images (manifest below). Excluded types are dropped.
-			managed, err := buildManagedImagePlan(ctx, targetRegistry, operator.OperatorChartRepo, operatorChartVersion, exclusions, false)
+			managed, err := buildManagedImagePlan(ctx, targetRegistry, operator.OperatorChartRepo, operatorChartVersion, exclusions, operator.RegistryTransport{})
 			if err != nil {
 				return err
 			}
 			items = append(items, managed...)
 
 			fmt.Printf("Mirroring %d artifacts to %s\n\n", len(items), targetRegistry)
-
-			policyCtx, err := newAcceptAllPolicy()
-			if err != nil {
-				return fmt.Errorf("failed to init signature policy: %w", err)
-			}
-			defer func() { _ = policyCtx.Destroy() }()
-
-			srcCtx := &types.SystemContext{}
-			dstCtx := &types.SystemContext{}
-			if insecure {
-				dstCtx.DockerInsecureSkipTLSVerify = types.OptionalBoolTrue
-				dstCtx.OCIInsecureSkipTLSVerify = true
-			}
 
 			var pushed, failed, skips int
 			for _, item := range items {
@@ -105,7 +92,7 @@ external databases).`,
 					continue
 				}
 				fmt.Printf("→ %s\n  → %s ... ", item.src, item.dst)
-				skipped, err := copyImage(ctx, item.src, item.dst, insecure, srcCtx, dstCtx, policyCtx)
+				skipped, err := copyImage(ctx, item.src, item.dst, targetTransport)
 				if err != nil {
 					fmt.Printf("✗ %v\n", err)
 					failed++
@@ -131,7 +118,8 @@ external databases).`,
 			// (weave-trace, weave-python, local, console, migrations, …) are only
 			// mirrored when a version is given, since they're version-specific.
 			if wandbVersion != "" {
-				if err := mirrorServerManifest(ctx, targetRegistry, wandbVersion, manifestSource, exclusions, insecure, dryRun, srcCtx, dstCtx, policyCtx); err != nil {
+				if err := mirrorServerManifest(ctx, targetRegistry, wandbVersion, manifestSource, exclusions,
+					operator.RegistryTransport{InsecureSkipTLSVerify: manifestSourceInsecure}, targetTransport, dryRun); err != nil {
 					return err
 				}
 			} else {
@@ -143,7 +131,8 @@ external databases).`,
 	}
 
 	cmd.Flags().StringVar(&targetRegistry, "to", "", "Hostname of your mirror, e.g. harbor.example.com (required)")
-	cmd.Flags().BoolVar(&insecure, "insecure", false, "Skip TLS verification when pushing to the mirror (use for plain-HTTP registries like local registry:2)")
+	cmd.Flags().BoolVar(&targetTransport.InsecureSkipTLSVerify, "insecure", false, "Skip the mirror's TLS certificate verification; keep HTTPS")
+	cmd.Flags().BoolVar(&targetTransport.PlainHTTP, "plain-http", false, "Use plain HTTP for the target mirror only, including server-manifest uploads")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print the source → target mirroring plan without pushing")
 	cmd.Flags().StringVar(&operatorChartVersion, "operator-chart-version", defaultOperatorChartVersion, "Operator chart version; also used as the tag for the operator binary image")
 	cmd.Flags().StringVar(&wandbVersion, "wandb-version", "", "W&B server version (e.g. 0.81.0); when set, also mirror the server manifest and every application image it references, rewriting them to point at the mirror")
@@ -153,8 +142,10 @@ external databases).`,
 	// TESTING ONLY, hidden from --help: pull the server manifest from a non-upstream
 	// OCI repo (e.g. a local Tilt registry serving unreleased wandb/core manifest
 	// changes) instead of us-docker.pkg.dev. Not a supported customer workflow.
-	cmd.Flags().StringVar(&manifestSource, "manifest-source", "", "TESTING ONLY: pull the server manifest from this OCI repo (host/path, no tag) instead of the public upstream; --wandb-version supplies the tag. Reuses --insecure for TLS skip.")
+	cmd.Flags().StringVar(&manifestSource, "manifest-source", "", "TESTING ONLY: pull the server manifest from this OCI repo (host/path, no tag) instead of the public upstream; --wandb-version supplies the tag. Use --manifest-source-insecure for a private source certificate.")
 	_ = cmd.Flags().MarkHidden("manifest-source")
+	cmd.Flags().BoolVar(&manifestSourceInsecure, "manifest-source-insecure", false, "TESTING ONLY: skip TLS verification for --manifest-source independently of the target mirror")
+	_ = cmd.Flags().MarkHidden("manifest-source-insecure")
 	return cmd
 }
 
@@ -170,9 +161,9 @@ type mirrorItem struct {
 // with no hand-maintained list.
 //
 // fromMirror renders the tool charts from their pushed copies under target (for check,
-// which needs registry access only) instead of upstream (for mirror). insecure skips
-// TLS verification for a self-signed mirror source.
-func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, fromMirror, insecure bool) ([]mirrorItem, error) {
+// which needs registry access only) instead of upstream (for mirror). transport
+// controls the selected chart source independently of the copy destination.
+func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, fromMirror bool, transport operator.RegistryTransport) ([]mirrorItem, error) {
 	certManagerVersion := operator.CertManagerVersion
 	nginxGatewayVersion := operator.NginxGatewayVersion
 	ksmChartVersion := operator.KubeStateMetricsVersion
@@ -199,6 +190,8 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 			src: "ghcr.io/prometheus-community/charts/kube-state-metrics:" + ksmChartVersion,
 			dst: target + "/prometheus-community/charts/kube-state-metrics:" + ksmChartVersion,
 		},
+		// Pulled through the node's registry mirror, so it keeps the host-stripped path.
+		{src: supportbundle.CollectorImage, dst: translate(supportbundle.CollectorImage, target)},
 	}
 
 	// pick selects the upstream chart ref (mirror) or its pushed copy under target
@@ -211,7 +204,7 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 		return upstream
 	}
 	toolCharts := []struct {
-		images   func(context.Context, string, bool) ([]string, error)
+		images   func(context.Context, string, operator.RegistryTransport) ([]string, error)
 		upstream string
 		mirrored string
 	}{
@@ -220,13 +213,29 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 		{operator.KubeStateMetricsImages, "oci://ghcr.io/prometheus-community/charts/kube-state-metrics", "oci://" + target + "/prometheus-community/charts/kube-state-metrics"},
 	}
 	for _, tc := range toolCharts {
-		imgs, err := tc.images(ctx, pick(tc.upstream, tc.mirrored), insecure)
+		imgs, err := tc.images(ctx, pick(tc.upstream, tc.mirrored), transport)
 		if err != nil {
 			return nil, err
 		}
 		for _, img := range imgs {
 			plan = append(plan, mirrorItem{src: img, dst: translate(img, target)})
 		}
+	}
+
+	// Telemetry images, with the managed operators left to buildManagedImagePlan.
+	var managedSubcharts []string
+	for _, t := range managedTypes {
+		managedSubcharts = append(managedSubcharts, t.subchart)
+	}
+	telemetryImages, err := operator.TelemetryChartImages(ctx, pick(operator.OperatorChartRepo, "oci://"+target+"/wandb/charts"), operatorChartVersion, managedSubcharts, transport)
+	if err != nil {
+		return nil, fmt.Errorf("derive telemetry images: %w", err)
+	}
+	for _, img := range telemetryImages {
+		if strings.HasPrefix(img, wandbPublicPrefix) {
+			continue
+		}
+		plan = append(plan, mirrorItem{src: img, dst: translate(img, target)})
 	}
 
 	return plan, nil
@@ -239,12 +248,12 @@ func buildMirrorPlan(ctx context.Context, target, operatorChartVersion string, f
 // when checking an air-gapped registry. exclusions drops excluded types' operator
 // images (their subcharts are disabled in the render). The W&B operator-binary image
 // is skipped: buildMirrorPlan mirrors it under W&B's path convention, which
-// translate() wouldn't reproduce. insecure skips TLS for a self-signed source.
-func buildManagedImagePlan(ctx context.Context, target, chartRepo, operatorChartVersion string, exclusions managedExclusions, insecure bool) ([]mirrorItem, error) {
+// translate() wouldn't reproduce. transport controls access to the chart source.
+func buildManagedImagePlan(ctx context.Context, target, chartRepo, operatorChartVersion string, exclusions managedExclusions, transport operator.RegistryTransport) ([]mirrorItem, error) {
 	if exclusions.allOperatorsExcluded() {
 		return nil, nil
 	}
-	imgs, err := operator.OperatorChartImages(ctx, chartRepo, operatorChartVersion, exclusions.disabledSubcharts(), insecure)
+	imgs, err := operator.OperatorChartImages(ctx, chartRepo, operatorChartVersion, exclusions.disabledSubcharts(), transport)
 	if err != nil {
 		return nil, fmt.Errorf("derive operator chart images: %w", err)
 	}
@@ -257,28 +266,4 @@ func buildManagedImagePlan(ctx context.Context, target, chartRepo, operatorChart
 		plan = append(plan, mirrorItem{src: img, dst: translate(img, target)})
 	}
 	return plan, nil
-}
-
-func mirrorOne(
-	ctx context.Context,
-	source, target string,
-	srcCtx, dstCtx *types.SystemContext,
-	policyCtx *signature.PolicyContext,
-) error {
-	srcRef, err := docker.ParseReference("//" + source)
-	if err != nil {
-		return fmt.Errorf("parse source %q: %w", source, err)
-	}
-	dstRef, err := docker.ParseReference("//" + target)
-	if err != nil {
-		return fmt.Errorf("parse target %q: %w", target, err)
-	}
-	if _, err := copy.Image(ctx, policyCtx, dstRef, srcRef, &copy.Options{
-		SourceCtx:          srcCtx,
-		DestinationCtx:     dstCtx,
-		ImageListSelection: copy.CopyAllImages,
-	}); err != nil {
-		return err
-	}
-	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/wandb/wsm/pkg/observability/telemetry"
 	yamlv3 "gopkg.in/yaml.v3"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/common"
@@ -22,20 +23,27 @@ const renderKubeVersion = "v1.33.0"
 // DeployOperator. The mirror renders from here; check renders the mirror's copy.
 const OperatorChartRepo = "oci://us-docker.pkg.dev/wandb-production/public/wandb/charts"
 
+// RegistryTransport controls access to a chart or image registry. The zero value
+// uses HTTPS with certificate verification. PlainHTTP does not affect TLS trust.
+type RegistryTransport struct {
+	InsecureSkipTLSVerify bool
+	PlainHTTP             bool
+}
+
 // RenderChartImages renders chartRef@version client-side (no cluster) and returns the
 // sorted, de-duplicated container images it would create. Beyond plain container images
 // it captures init containers, images passed via --…-image args (moco sidecars,
 // cert-manager acmesolver), image refs on custom resources (e.g. NginxProxy), and hook
-// images. values should match the install (minus mirror retargeting); insecure allows a
-// self-signed / plain-HTTP chart source.
-func RenderChartImages(ctx context.Context, chartRef, version string, values map[string]any, insecure bool) ([]string, error) {
+// images. values should match the install (minus mirror retargeting). transport
+// independently controls certificate verification and HTTP versus HTTPS.
+func RenderChartImages(ctx context.Context, chartRef, version string, values map[string]any, transport RegistryTransport) ([]string, error) {
 	settings := cli.New()
 
 	actionConfig, err := initActionConfig(settings)
 	if err != nil {
 		return nil, fmt.Errorf("init helm action config: %w", err)
 	}
-	registryClient, err := newRegistryClient(settings, "", "", "", insecure, insecure)
+	registryClient, err := newRegistryClient(settings, "", "", "", transport.InsecureSkipTLSVerify, transport.PlainHTTP)
 	if err != nil {
 		return nil, fmt.Errorf("create registry client: %w", err)
 	}
@@ -91,7 +99,7 @@ func RenderChartImages(ctx context.Context, chartRef, version string, values map
 // seaweedfs/altinity operators, and the moco sidecars). disabledSubcharts turns off
 // subcharts (<name>.enabled=false) for excluded managed types so their images aren't
 // derived. Values match DeployOperator's non-mirror install.
-func OperatorChartImages(ctx context.Context, chartRepo, chartVersion string, disabledSubcharts []string, insecure bool) ([]string, error) {
+func OperatorChartImages(ctx context.Context, chartRepo, chartVersion string, disabledSubcharts []string, transport RegistryTransport) ([]string, error) {
 	values := map[string]any{
 		"wandb":          map[string]any{"install": false},
 		"wandb-operator": map[string]any{"image": map[string]any{"pullPolicy": "Always"}},
@@ -99,34 +107,43 @@ func OperatorChartImages(ctx context.Context, chartRepo, chartVersion string, di
 	for _, sc := range disabledSubcharts {
 		values[sc] = map[string]any{"enabled": false}
 	}
-	return RenderChartImages(ctx, chartRepo+"/operator", chartVersion, values, insecure)
+	return RenderChartImages(ctx, chartRepo+"/operator", chartVersion, values, transport)
+}
+
+// TelemetryChartImages returns the images the operator chart's telemetry stack deploys.
+func TelemetryChartImages(ctx context.Context, chartRepo, chartVersion string, disabledSubcharts []string, transport RegistryTransport) ([]string, error) {
+	values := telemetry.ImageRenderValues()
+	for _, sc := range disabledSubcharts {
+		values[sc] = map[string]any{"enabled": false}
+	}
+	return RenderChartImages(ctx, chartRepo+"/operator", chartVersion, values, transport)
 }
 
 // CertManagerImages renders the cert-manager chart from chartRef with the same values
 // InstallCertManager uses (startupapicheck disabled), yielding controller/webhook/
 // cainjector plus the acmesolver passed via a controller arg.
-func CertManagerImages(ctx context.Context, chartRef string, insecure bool) ([]string, error) {
+func CertManagerImages(ctx context.Context, chartRef string, transport RegistryTransport) ([]string, error) {
 	values := map[string]any{
 		"crds":            map[string]any{"enabled": true},
 		"startupapicheck": map[string]any{"enabled": false},
 	}
-	return RenderChartImages(ctx, chartRef, CertManagerVersion, values, insecure)
+	return RenderChartImages(ctx, chartRef, CertManagerVersion, values, transport)
 }
 
 // NginxGatewayImages renders the nginx-gateway-fabric chart (at NginxGatewayVersion)
 // from chartRef and returns its images: the control-plane image and the data-plane
 // nginx image carried on the NginxProxy custom resource.
-func NginxGatewayImages(ctx context.Context, chartRef string, insecure bool) ([]string, error) {
-	return RenderChartImages(ctx, chartRef, NginxGatewayVersion, map[string]any{}, insecure)
+func NginxGatewayImages(ctx context.Context, chartRef string, transport RegistryTransport) ([]string, error) {
+	return RenderChartImages(ctx, chartRef, NginxGatewayVersion, map[string]any{}, transport)
 }
 
 // KubeStateMetricsImages renders the kube-state-metrics chart from chartRef. The tag
 // is pinned to match InstallKubeStateMetrics rather than the chart default.
-func KubeStateMetricsImages(ctx context.Context, chartRef string, insecure bool) ([]string, error) {
+func KubeStateMetricsImages(ctx context.Context, chartRef string, transport RegistryTransport) ([]string, error) {
 	values := map[string]any{
 		"image": map[string]any{"tag": KubeStateMetricsImageTag},
 	}
-	return RenderChartImages(ctx, chartRef, KubeStateMetricsVersion, values, insecure)
+	return RenderChartImages(ctx, chartRef, KubeStateMetricsVersion, values, transport)
 }
 
 // extractImages parses a multi-document manifest string and returns the sorted,
@@ -158,6 +175,10 @@ func extractImages(manifests string) []string {
 			continue
 		}
 		walkImages(&node, add)
+		// The Grafana CR carries its image in spec.version.
+		if len(node.Content) > 0 && scalarChild(node.Content[0], "kind") == "Grafana" {
+			add(scalarChild(mappingChild(node.Content[0], "spec"), "version"))
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -178,7 +199,7 @@ func walkImages(n *yamlv3.Node, add func(string)) {
 			key := n.Content[i].Value
 			val := n.Content[i+1]
 			switch {
-			case key == "image" && val.Kind == yamlv3.ScalarNode:
+			case (key == "image" || key == "configReloaderImage") && val.Kind == yamlv3.ScalarNode:
 				add(val.Value)
 			case (key == "args" || key == "command") && val.Kind == yamlv3.SequenceNode:
 				addArgImages(val, add)
@@ -223,6 +244,18 @@ func scalarChild(n *yamlv3.Node, key string) string {
 		}
 	}
 	return ""
+}
+
+func mappingChild(n *yamlv3.Node, key string) *yamlv3.Node {
+	if n == nil || n.Kind != yamlv3.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return n.Content[i+1]
+		}
+	}
+	return nil
 }
 
 func joinImageRef(registry, repository, tag, digest string) string {

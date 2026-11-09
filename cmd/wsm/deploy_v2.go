@@ -1007,16 +1007,21 @@ func performDeploy(
 		return err
 	}
 
-	markers := "cert-manager,operator"
+	// Add to the marker rather than overwrite it: a re-run that skips a component
+	// (e.g. --install-nginx-gateway=false) leaves an earlier install in place, so
+	// wsm must keep owning it or cluster cleanup would strand it.
+	markers := []string{"cert-manager", "operator"}
 	if installNginxGatewayMode != nginxGatewayInstallModeFalse {
-		markers += ",nginx-gateway"
+		markers = append(markers, "nginx-gateway")
 	}
 	if ksmOwned {
-		markers += ",kube-state-metrics"
+		markers = append(markers, "kube-state-metrics")
 	}
-	if err := kubectl.CreateDeploymentMarker(ctx, "", operatorNamespace, markers); err != nil {
-		fmt.Println(" ✗")
-		return err
+	for _, component := range markers {
+		if err := kubectl.AddDeploymentMarker(ctx, operatorNamespace, component); err != nil {
+			fmt.Println(" ✗")
+			return err
+		}
 	}
 
 	fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
@@ -2163,35 +2168,44 @@ func performCleanup() error {
 
 	// 3. Delete shared infra only when a wsm marker claims it, so a cert-manager,
 	// nginx-gateway or kube-state-metrics that wsm didn't install is left in place.
-	deleteSharedIfMarked(ctx, "cert-manager", operator.DeleteCertManager)
-	deleteSharedIfMarked(ctx, "nginx-gateway", operator.DeleteNginxGateway)
-	deleteSharedIfMarked(ctx, "kube-state-metrics", operator.DeleteKubeStateMetrics)
-
-	return nil
+	// Each one is attempted even if an earlier one fails; cleanup then exits non-zero.
+	return errors.Join(
+		deleteSharedIfMarked(ctx, "cert-manager", operator.DeleteCertManager),
+		deleteSharedIfMarked(ctx, "nginx-gateway", operator.DeleteNginxGateway),
+		deleteSharedIfMarked(ctx, "kube-state-metrics", operator.DeleteKubeStateMetrics),
+	)
 }
 
 // deleteSharedIfMarked uninstalls a shared component and drops its markers, but
-// only when some namespace's wsm marker lists it.
-func deleteSharedIfMarked(ctx context.Context, component string, uninstall func(context.Context) (bool, error)) {
+// only when some namespace's wsm marker lists it. The markers are kept when the
+// uninstall fails, so a later cleanup still owns the release and retries it.
+func deleteSharedIfMarked(ctx context.Context, component string, uninstall func(context.Context) (bool, error)) error {
 	namespaces, err := kubectl.FindNamespacesWithMarker(ctx, component)
 	if err != nil {
 		fmt.Printf("  ✗ Failed to look up %s markers, leaving it in place: %v\n", component, err)
-		return
+		return fmt.Errorf("look up %s markers: %w", component, err)
 	}
 	if len(namespaces) == 0 {
 		fmt.Printf("! No wsm marker for %s; leaving it in place.\n", component)
-		return
+		return nil
 	}
 
 	fmt.Printf("→ Deleting %s...\n", component)
+	// uninstall reports a release that is already gone as success, so its marker
+	// is dropped in that case too.
 	if _, err := uninstall(ctx); err != nil {
-		fmt.Printf("  ✗ Failed to delete %s: %v\n", component, err)
+		fmt.Printf("  ✗ Failed to delete %s, keeping its marker: %v\n", component, err)
+		return fmt.Errorf("delete %s: %w", component, err)
 	}
+
+	var errs []error
 	for _, ns := range namespaces {
 		if err := kubectl.DeleteDeploymentMarker(ctx, ns, component); err != nil {
 			fmt.Printf("  ✗ Failed to remove %s marker in %s: %v\n", component, ns, err)
+			errs = append(errs, fmt.Errorf("remove %s marker in %s: %w", component, ns, err))
 		}
 	}
+	return errors.Join(errs...)
 }
 
 func clusterCleanupCmd() *cobra.Command {

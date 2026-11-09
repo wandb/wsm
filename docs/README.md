@@ -20,6 +20,7 @@ WSM is a command-line tool that automates the deployment, upgrade, and managemen
 | [Operations](./operations/) | Managing, monitoring, and troubleshooting deployments |
 | [Reference](./reference/) | Command flags, CR fields, and sizing details |
 
+
 ## Recommended Reading Order
 
 1. [Install WSM](./getting-started/installation.md)

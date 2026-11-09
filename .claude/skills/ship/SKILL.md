@@ -253,9 +253,10 @@ zero or multiple).
   `Sentences` / `Mixed`). Whichever it is, keep it **concise**: lead with what
   changed and *why*, explain non-obvious decisions in a sentence, and never
   narrate every file. Scannable, not terse enough to lose the overview.
-- **Test Plan** — the actual commands/steps used (`make build`, `make lint`,
-  `make fmt`, `./wsm list`, or a Kind smoke test for v2). wsm has **no unit-test
-  suite** — never invent tests; if you didn't run something, say so.
+- **Test Plan** — the actual commands/steps used (`make build`, `make test`,
+  `make lint`, `make fmt`, `./wsm list`, or a Kind smoke test for v2). CI runs
+  `make test`, so include it whenever Go code changed. Never invent tests; if you
+  didn't run something, say so.
 - **Requirements checkboxes** — check only the boxes that are *genuinely* true.
   The merge gate needs all boxes checked, so if one can't be truthfully checked,
   leave it unchecked and tell the user which and why — don't silently tick it.

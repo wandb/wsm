@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Recent PRs (#51, #58, #57) all extend the v2 surface; the v1 files have not been meaningfully edited in months. New work belongs on v2 unless explicitly maintaining airgapped v1 users.
 
-Unit tests (`*_test.go`) exist in `cmd/wsm` and several `pkg/` packages; run them with `go test ./...`. CI does **not** run them — it runs lint, fmt, `go mod tidy`, and `go mod verify` only.
+Unit tests (`*_test.go`) exist in `cmd/wsm` and several `pkg/` packages; run them with `make test` (same build tags as `make build`). CI runs them in the `Test` job alongside build, lint, fmt, `go mod tidy`, and `go mod verify`.
 
 User-facing docs live under `docs/` (getting-started, deployment per cloud, configuration, operations, reference) and are the canonical source for flag semantics and CR field meanings.
 

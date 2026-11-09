@@ -232,6 +232,11 @@ func ListCmd() *cobra.Command {
 		},
 	}
 
+	// Never read: list prints image names, which don't depend on the platform. Kept
+	// (deprecated, hidden) so scripts passing it for symmetry with download still run.
+	cmd.Flags().StringP("platform", "p", "linux/amd64", "Ignored; kept for compatibility")
+	_ = cmd.Flags().MarkDeprecated("platform", "it has no effect on the listed images")
+
 	return cmd
 }
 

@@ -244,7 +244,6 @@ wsm deploy-v2 wandb deploy [flags]
 | `--add-ingress-annotations` | `false` | Add AWS load-balancer annotations to the managed Gateway (**Gateway API mode only**; ignored in Ingress mode) |
 | `--observability-mode` | `off` | Telemetry mode: `off`, `full` (in-cluster Victoria Metrics stack **+ local Grafana**), or `forward` (Victoria stack + forward OTLP externally). On this command it toggles per-service telemetry on the CR (unset keeps the operator default, enabled; `off` disables it); the chart-level `--observability-otel-*` / `--observability-forward-*` knobs live on [`wsm deploy-v2 operator`](#wsm-deploy-v2-operator). |
 | `--retention-policy` | `detach` | Behavior on CR deletion: `detach` (leave infrastructure running) or `purge` (delete all managed resources and PVCs) |
-| `--wait` | `false` | Wait for the W&B instance to report Ready |
 
 > **Default managed instance.** Managed `mysql`, `redis`, `objectStore`, and `clickhouse` are keyed by instance name; `wsm` builds a single instance under the reserved key `default`. Flags that tune managed infra — `--observability-mode` (per-service telemetry) and `--objectstore-copies` — only affect that `default` instance. To run multiple instances or tune a differently-keyed one, supply the full shape via `--cr-file`.
 >

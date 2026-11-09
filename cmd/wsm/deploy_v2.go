@@ -291,7 +291,6 @@ func wandbCreateCmd() *cobra.Command {
 			f := wandbCRFlagsFrom(cmd)
 			createAwsIngressClass, _ := cmd.Flags().GetBool("create-aws-ingress-class")
 			createAwsStorageClass, _ := cmd.Flags().GetBool("create-aws-storage-class")
-			wait, _ := cmd.Flags().GetBool("wait")
 
 			if err := validateObservabilityMode(f.telemetryMode); err != nil {
 				return err
@@ -331,16 +330,6 @@ func wandbCreateCmd() *cobra.Command {
 			err = deployWandbCR(ctx, f.createCA, createAwsStorageClass, createAwsIngressClass, f.ingressClass, crOverrides)
 			if err != nil {
 				return err
-			}
-
-			// Step 6: Wait for CR to be ready (if requested)
-			if wait {
-				fmt.Println("Waiting for W&B instance to be ready...")
-
-				if err := operator.WaitForCRReady(ctx, wandbCR.Namespace, wandbCR.Name, 30*time.Minute); err != nil {
-					fmt.Println(" ✗")
-					return err
-				}
 			}
 
 			return nil
@@ -385,7 +374,6 @@ func operatorDeployCmd() *cobra.Command {
 			createAwsIngressClass, _ := cmd.Flags().GetBool("create-aws-ingress-class")
 			createAwsStorageClass, _ := cmd.Flags().GetBool("create-aws-storage-class")
 			telemetryConfig := telemetryConfigFrom(cmd)
-			wait, _ := cmd.Flags().GetBool("wait")
 
 			// The CR only reconciles this run when --include-cr is set; otherwise the
 			// operator stack still installs and an unusable manifest source is a warning.
@@ -447,7 +435,6 @@ func operatorDeployCmd() *cobra.Command {
 				installKubeStateMetricsMode,
 				enableGatewayAPI,
 				includeCR,
-				wait,
 				clusterName,
 				telemetryConfig,
 				f.wandbNamespace,
@@ -770,7 +757,6 @@ func performDeploy(
 	installKubeStateMetricsMode string,
 	enableGatewayAPI bool,
 	includeCR bool,
-	wait bool,
 	clusterName string,
 	telemetryConfig telemetry.Config,
 	wandbNamespace string,
@@ -1047,20 +1033,6 @@ func performDeploy(
 		}
 
 		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
-		currentStep++
-
-		// Step 6: Wait for CR to be ready (if requested)
-		if wait {
-			fmt.Printf("[%d/%d] Waiting for W&B instance to be ready...", currentStep, totalSteps)
-			start = time.Now()
-
-			if err := operator.WaitForCRReady(ctx, wandbCR.Namespace, wandbCR.Name, 30*time.Minute); err != nil {
-				fmt.Println(" ✗")
-				return err
-			}
-
-			fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
-		}
 	}
 
 	return nil

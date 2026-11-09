@@ -591,7 +591,7 @@ wsm registry push --registry <host> [--bundle ./bundle] [flags]
 | `--dry-run` | `false` | Print the source → target translations without pushing |
 | `--insecure` | `false` | Skip TLS verification when contacting the registry; use it for plain-HTTP or self-signed registries |
 
-Auth is read from your Docker config (`~/.docker/config.json`). An image the registry rejects as too large is skipped and listed at the end with the `docker push` commands to run by hand. The command exits non-zero if any other push fails.
+Auth is read from your Docker config (`~/.docker/config.json`). An image whose manifest exceeds the 4 MiB limit of the image library wsm uses is skipped and listed at the end with the `docker push` commands to run by hand. Skipped images still count as failed, so the command exits non-zero whenever any image, oversized or not, wasn't pushed.
 
 ### `wsm registry values`
 
@@ -792,7 +792,10 @@ wsm support-bundle --enabled=true
 
 ## `wsm user`
 
-Administers W&B user accounts on a running v2 instance. Both subcommands reach in-cluster Services (the app's GraphQL API, and for `migrate-email-domain` the instance's MySQL). Run them from inside the cluster network, or from outside through a port-forward plus `--app-address`.
+Administers W&B user accounts on a running v2 instance. Both subcommands reach in-cluster Services: the app's GraphQL API, and for `migrate-email-domain` also the instance's MySQL.
+
+- `user admin` only talks to the app, so it also works from outside the cluster through a port-forward plus `--app-address`.
+- `migrate-email-domain` connects directly to the MySQL host published in the CR's status, which is an in-cluster Service address. `--app-address` doesn't cover that connection, so run it from somewhere that can reach the cluster network (for example a pod in the cluster).
 
 Both authenticate as **you**, with the API key of an instance admin. Pass it in `WANDB_API_KEY` rather than `--api-key`: a flag value lands in shell history and process listings.
 

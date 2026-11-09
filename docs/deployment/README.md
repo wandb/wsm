@@ -7,7 +7,7 @@ Platform-specific instructions for deploying W&B with WSM.
 | Guide | Environment | Notes |
 |-------|-------------|-------|
 | [Local Kind Cluster](local-kind.md) | Docker / local | Quick local development and testing |
-| [On-Prem / Air-Gapped](on-prem.md) | Customer-controlled mirror | Mirror artifacts to your own registry and install with `--mirror-registry`. Includes laptop walkthrough against a local `registry:2`. |
+| [On-Prem / Air-Gapped](on-prem.md) | Customer-controlled mirror | Mirror artifacts to your own registry and install with `--mirror-registry`. Includes laptop walkthrough against a local `registry:2`. For a shorter first run, start with [Try W&B Server on-prem, locally](../getting-started/Beginner-on-prem.md). |
 | [Google GKE](gke.md) | Cloud | Google Kubernetes Engine |
 | [Amazon EKS](eks.md) | Cloud | Amazon Elastic Kubernetes Service |
 | [Azure AKS](aks.md) | Cloud | Azure Kubernetes Service |

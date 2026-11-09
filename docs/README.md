@@ -20,10 +20,12 @@ WSM is a command-line tool that automates the deployment, upgrade, and managemen
 | [Operations](./operations/) | Managing, monitoring, and troubleshooting deployments |
 | [Reference](./reference/) | Command flags, CR fields, and sizing details |
 
+
 ## Recommended Reading Order
 
 1. [Install WSM](./getting-started/installation.md)
 2. [Quick Start — Local Kind Cluster](./getting-started/quickstart-kind.md)
+   - Or, to see an air-gapped install end to end on your laptop: [Try W&B Server on-prem, locally](./getting-started/Beginner-on-prem.md)
 3. [SSL / TLS Configuration](./configuration/ssl-tls.md)
 4. [Your Target Platform](./deployment/) (GKE, EKS, AKS, on-prem mirror, or existing Kind cluster)
 5. [Managing the Deployment](./operations/managing.md)
@@ -33,7 +35,7 @@ WSM is a command-line tool that automates the deployment, upgrade, and managemen
 
 - [kubectl](https://kubernetes.io/docs/tasks/tools/) — configured to access your target cluster
 - [Docker](https://docs.docker.com/get-docker/) — required for Kind cluster creation and image handling
-- [Go](https://go.dev/doc/install) + [pkg-config](https://www.freedesktop.org/wiki/Software/pkg-config/) — required for building WSM from source
+- [Go](https://go.dev/doc/install) 1.27.3+ — only if you build WSM from source instead of installing a [release binary](./getting-started/installation.md) (`make build` needs no system libraries)
 
 ## Architecture Overview
 

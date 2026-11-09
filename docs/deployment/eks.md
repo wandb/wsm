@@ -100,6 +100,7 @@ For non-production testing with the default internal CA:
 
 ```bash
 wsm deploy-v2 wandb get-ca-cert \
+  --context eks-my-cluster \
   --wandb-name wandb \
   --wandb-namespace wandb \
   --output-dir ./certs

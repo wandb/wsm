@@ -35,7 +35,7 @@ Tiers 1 and 2 are driven by `--mirror-registry` and land on `<registry>/<host-st
 - **Tier 2 — per-subchart Helm values, at operator install.** The managed-service operators are bundled Helm subcharts, each with its **own** image-value convention (no single `global.imageRegistry`), so wsm sets each one when `--mirror-registry` is given — `moco.image.repository` (+ its `agent`/`fluentbit`/`mysqldExporter` sidecars), `redis-operator.redisOperator.imageName`, `altinity-clickhouse-operator.operator.image.registry` + `metrics.image.registry`, and `seaweedfs-operator.image.registry`. (Kafka has no such subchart operator — Bufstream is reconciled directly, and its data-plane image is retargeted at tier 3.)
 - **Tier 3 — node/runtime registry mirror.** The data-plane image refs (ClickHouse, MySQL, Redis, SeaweedFS, and Kafka/Bufstream — broker, etcd, bucket-ensure) come from the server manifest with their **upstream** registry/repository (`docker.io/…`, `quay.io/…`, `ghcr.io/…`, `us-docker.pkg.dev/buf-images-1/…`). wsm does **not** rewrite these and does **not** set `spec.global.imageRegistry`. They reach the mirror through the container runtime's per-registry mirror: each node maps those registries to `<registry>/<host-stripped path>` — exactly where `wsm registry mirror` pushed them. wsm sets this up for Kind (`wsm cluster create --insecure-registry-host $REG`, or `wsm deploy-v2 operator --setup-k8s-cluster --insecure-registry`); on a real cluster you configure your runtime's registry mirror per node.
 
-> **Why not `spec.global.imageRegistry`?** That operator field is a *prepend*: `GetImage` builds `<imageRegistry>/<full-upstream-path>`, e.g. `<registry>/quay.io/opstree/redis` and `<registry>/us-docker.pkg.dev/buf-images-1/…/bufstream`. But `wsm registry mirror` pushes **host-stripped** (`<registry>/opstree/redis`, `<registry>/buf-images-1/…/bufstream`), so the prepended path doesn't exist in the mirror → `ImagePullBackOff`. It also double-prefixes the mirror-rewritten app refs (`<registry>/<registry>/wandb/*` → `InvalidImageName`). `--mirror-registry` therefore leaves the field unset and relies on the node/runtime mirror for the data plane. `--image-registry` / `--cr-set spec.global.imageRegistry=<host>` remains only for a registry that serves images at their **full upstream paths** (not `wsm registry mirror`'s host-stripped layout).
+> **Why not `spec.global.imageRegistry`?** That operator field is a *prepend*: `GetImage` builds `<imageRegistry>/<full-upstream-path>`, e.g. `<registry>/quay.io/opstree/redis` and `<registry>/us-docker.pkg.dev/buf-images-1/…/bufstream`. But `wsm registry mirror` pushes **host-stripped** (`<registry>/opstree/redis`, `<registry>/buf-images-1/…/bufstream`), so the prepended path doesn't exist in the mirror → `ImagePullBackOff`. It also double-prefixes the mirror-rewritten app refs (`<registry>/<registry>/wandb/*` → `InvalidImageName`). `--mirror-registry` therefore leaves the field unset and relies on the node/runtime mirror for the data plane. `--cr-set spec.global.imageRegistry=<host>` remains only for a registry that serves images at their **full upstream paths** (not `wsm registry mirror`'s host-stripped layout). (The `--image-registry` flag that also set it is deprecated.)
 
 ---
 
@@ -120,7 +120,7 @@ docker rm "$cid"
 # 2. repoint the APP image refs at your mirror (the same prefix wsm strips when it mirrors them).
 #    Managed DB refs (docker.io/…, quay.io/…, us-docker.pkg.dev/…) are left alone — they reach
 #    the mirror via the node's container-runtime registry mirror (--insecure-registry-host).
-sed -i '' "s#us-docker.pkg.dev/wandb-production/public/#$REG/#g" manifest.yaml   # Linux: drop the '' after -i
+sed -i.bak "s#us-docker.pkg.dev/wandb-production/public/#$REG/#g" manifest.yaml && rm -f manifest.yaml.bak   # portable across GNU and BSD/macOS sed
 
 # 3. mount the YAML onto the operator pod at /manifests/<v>
 OPNS=wandb-operators   # wsm default (--operator-namespace)
@@ -319,7 +319,7 @@ kubectl get wandb -n wandb
 The weave + database pods should reach `Running`, all pulled from `$REG`. If a pod is stuck in `ImagePullBackOff` while `registry check` reports everything present, the image is in the registry but a pod is still asking for a public host — check that you passed `--mirror-registry` on **both** phases (step 7). Note that `spec.global.imageRegistry` stays **empty**: `--mirror-registry` does not set it, and the data-plane pods keep their **upstream** image refs — the node's containerd registry mirror rewrites them to `$REG` at pull time. So a public-host `ImagePullBackOff` is a node-mirror problem, not a CR field to change:
 
 ```bash
-kubectl get wandb -n wandb -o jsonpath='{.spec.global.imageRegistry}{"\n"}'   # expected: empty (unless you set --cr-set/--image-registry)
+kubectl get wandb -n wandb -o jsonpath='{.spec.global.imageRegistry}{"\n"}'   # expected: empty (unless you set it with --cr-set)
 kubectl get pods -n wandb -o jsonpath='{range .items[*]}{.spec.containers[*].image}{"\n"}{end}' | sort -u   # data-plane refs stay upstream; the node mirror redirects them
 ```
 

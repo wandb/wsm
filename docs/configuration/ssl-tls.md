@@ -168,6 +168,7 @@ The `wandb-root-cert` secret contains the CA certificate under the `ca.crt` key.
 
 ```bash
 wsm deploy-v2 wandb get-ca-cert \
+  --context <ctx> \
   --wandb-name wandb \
   --wandb-namespace wandb \
   --output-dir ./certs

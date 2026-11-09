@@ -1,112 +1,64 @@
 # Installation
 
-WSM is currently distributed as source code. A pre-built binary release pipeline is planned.
+WSM ships as a pre-built binary for Linux, macOS and Windows, attached to each [GitHub release](https://github.com/wandb/wsm/releases). You can also build it from source.
 
-## Requirements
+## Option 1: Install a release binary (recommended)
 
-- **Operating System**: Linux, macOS, or Windows (with WSL)
-- **git**: to clone this repository
-- **Shell**: Bash or compatible shell
-- **Go**: Version 1.27.3 or later (matches `go.mod`; older toolchains will not build)
-- **C compiler** (`gcc`): the build uses cgo via the `gpgme` dependency
-- **pkg-config** and **gpgme**: Required for Go build dependencies
-
-### macOS Dependencies
+On Linux and macOS, `install.sh` downloads the latest release for your OS and architecture and installs it into `/usr/local/bin` (it uses `sudo` if that directory isn't writable):
 
 ```bash
-brew install go pkg-config gpgme 
+curl -fsSL https://raw.githubusercontent.com/wandb/wsm/main/install.sh | bash
 ```
 
-### Linux Dependencies
+To install somewhere else, pass the directory as the first argument:
 
-On Debian/Ubuntu:
 ```bash
-sudo add-apt-repository ppa:longsleep/golang-backports
-sudo apt update
-sudo apt install golang-go
-sudo apt-get install -y pkg-config libgpgme-dev
+curl -fsSL https://raw.githubusercontent.com/wandb/wsm/main/install.sh | bash -s -- "$HOME/.local/bin"
 ```
 
-On RHEL/CentOS/Fedora:
-```bash
-# gpgme-devel lives in the CodeReady Builder (CRB) repo, which is disabled by
-# default on RHEL — enable it first or the gpgme-devel install will fail.
-sudo dnf config-manager --set-enabled crb        # RHEL 9 / Rocky / Alma
-# On older RHEL the repo is named differently, e.g.:
-#   sudo subscription-manager repos --enable codeready-builder-for-rhel-9-$(arch)-rpms
+Or download the archive for your platform by hand from the [releases page](https://github.com/wandb/wsm/releases) (`wsm_<OS>_<arch>.tar.gz`, e.g. `wsm_Darwin_arm64.tar.gz`; on Windows `wsm_Windows_<arch>.zip`), extract it, and put `wsm` on your `PATH`. On Windows, download the `.zip` by hand: `install.sh` only fetches `.tar.gz` archives.
 
-sudo dnf install -y gcc pkgconfig gpgme-devel
-```
+## Option 2: Build from source
 
-> **Go version**: the distro `go-toolset` package is typically too old to build WSM
-> (`go.mod` pins **go 1.27.3**). Install an upstream Go 1.27.3+ from
-> <https://go.dev/dl/> instead of `go-toolset`, e.g.:
+### Requirements
+
+- **git**, to clone this repository
+- **Go 1.27.3 or later** (matches `go.mod`; older toolchains will not build)
+- **make**
+
+`make build` builds with `CGO_ENABLED=0 -tags containers_image_openpgp`, so no C compiler or system libraries are needed. Only a plain `go build` without that tag needs `gcc`, `pkg-config` and `gpgme`.
+
+> **Go version**: distro packages (for example RHEL's `go-toolset`) are often too old to build WSM.
+> Install an upstream Go 1.27.3+ from <https://go.dev/dl/> instead, e.g.:
 > ```bash
 > curl -fsSLO https://go.dev/dl/go1.27.3.linux-amd64.tar.gz
 > sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.27.3.linux-amd64.tar.gz
 > export PATH=$PATH:/usr/local/go/bin
 > ```
+> On macOS: `brew install go`.
 
-## Building from Source
-
-### Option 1: Build manually
+### Build
 
 ```bash
-# Clone the repository
 git clone https://github.com/wandb/wsm.git
 cd wsm
 
-# Checkout the operator-v2 branch
-git checkout operator-v2
+# Build ./wsm (stamps the version from git describe)
+make build
+./wsm version
 
-# Build the binary
-go build -o wsm ./cmd/wsm
-
-# Verify
-./wsm --help
-
-# (Optional) Install to your PATH
-sudo mv wsm /usr/local/bin/wsm
-```
-
-### Option 2: Use Makefile
-
-```bash
-# Clone and checkout (as above)
-git clone https://github.com/wandb/wsm.git
-cd wsm
-git checkout operator-v2
-
-# Build and install to /usr/local/bin
+# (Optional) Build and install to /usr/local/bin
 sudo make install
 ```
 
 ## Verify Installation
 
-After installation, confirm the CLI is available:
-
 ```bash
+wsm version
 wsm --help
 ```
 
-Expected output:
-```
-A utility for managing Weights & Biases Server deployments
-
-Usage:
-  wsm [command]
-
-Available Commands:
-  cluster     Manage Kubernetes clusters
-  completion  Generate the autocompletion script for the specified shell
-  console     Open the W&B console
-  deploy      Deploy W&B operator and resources (legacy)
-  deploy-v2   Deploy v2 operator and resources (recommended)
-  help        Help about any command
-
-Flags:
-  -h, --help   help for wsm
-```
+`wsm version` prints the version, commit and build date. `wsm --help` lists every command; see the [Command Reference](../reference/commands.md) for details.
 
 ## Shell Completion
 

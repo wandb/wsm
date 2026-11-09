@@ -30,6 +30,7 @@ wsm deploy-v2 operator [flags]
 | `--setup-k8s-cluster` | `false` | Create a Kind cluster before deploying |
 | `--cluster-name` | `kind` | Name of the Kind cluster (used with `--setup-k8s-cluster`) |
 | `--workers` | `0` | Number of Kind worker nodes |
+| `--kind-node-image` | upstream pinned image | Kind node image, e.g. `myreg.example.com/kindest/node:v1.35.1@sha256:…` (only used with `--setup-k8s-cluster`) |
 | `--operator-chart-version` | `2.0.0-beta.10` | Operator Helm chart version (a leading `v` is accepted) |
 | `--operator-install-timeout` | `0s` | Helm timeout in seconds, minutes, or hours, such as `30s`, `5m`, or `1h`. `0` uses Helm's default. |
 | `--operator-image-pull-policy` | `IfNotPresent` | Operator image pull policy: `Always`, `IfNotPresent`, or `Never` (case-insensitive). |
@@ -48,7 +49,7 @@ wsm deploy-v2 operator [flags]
 | `--allow-unsupported-arch` | `false` | Deploy even if the cluster has non-amd64 nodes. The wandb-operator image is amd64-only and crashes under emulation on arm64 (e.g. Kind on Apple Silicon); WSM fails fast on this by default. |
 | `--openshift` | `false` | Enable OpenShift compatibility for the operator and bundled managed-service pods (MySQL/moco, Redis, ClickHouse, SeaweedFS), and disables the telemetry pod-log agent (it needs hostPath and root). The bundled frontend still can't run on OpenShift, so bring your own ingress — see [On-Prem Deployment](../deployment/on-prem.md). |
 | `--watchtower-enable-secret-writes` | `false` | Set `WATCHTOWER_ENABLE_SECRET_WRITES` on the operator, granting Watchtower `create/update/patch/delete` on Secrets in the install namespace. **Broad** — that namespace holds the database, object-store, OIDC, license and operator-managed credentials. Off by default; Watchtower can still reference Secrets an admin created out of band. |
-| `--watchtower-enable-db-admin` | `false` | Set `WATCHTOWER_ENABLE_DB_ADMIN` on the operator, enabling Watchtower's email-domain migration, which writes directly to the W&B application database. **Irreversible** bulk rewrite of user records; cluster mode only. Off by default. |
+| `--watchtower-enable-db-admin` | `false` | Set `WATCHTOWER_ENABLE_DB_ADMIN` on the operator, enabling Watchtower's email-domain migration, which writes directly to the W&B application database. **Irreversible** bulk rewrite of user records; cluster mode only. Off by default. For the same migration from the CLI, without this flag, see [`wsm user migrate-email-domain`](#wsm-user-migrate-email-domain). |
 | `--observability-forward-endpoint` | — | OTLP endpoint to forward telemetry to. **Required** when `--observability-mode=forward` |
 | `--observability-otel-secret` | — | Name of the OTEL connection secret (`telemetry.otel.secretName`). Chart default `wandb-otel-connection` if unset. Applied when mode is `full` or `forward` |
 | `--observability-otel-protocol` | — | OTEL exporter protocol, e.g. `http/protobuf` or `grpc` (`telemetry.otel.protocol`). Chart default if unset |
@@ -152,7 +153,7 @@ wsm deploy-v2 operator kube-state-metrics-status --context prod --operator-names
 
 ### `wsm deploy-v2 operator destroy`
 
-Uninstalls the `wandb-operator` Helm release. cert-manager, nginx-gateway, and kube-state-metrics are shared infrastructure and are left in place by default; opt into removing them with `--include-cert-manager` / `--include-nginx-gateway` / `--include-kube-state-metrics`. To remove everything `wsm` deployed (operator, cert-manager, nginx-gateway, kube-state-metrics, **and** any W&B CRs) in one shot, use [`wsm cluster cleanup`](#wsm-cluster) instead. This command does not delete the W&B instance; destroy it first with [`wsm deploy-v2 wandb destroy`](#wsm-deploy-v2-wandb-destroy).
+Uninstalls the `wandb-operator` Helm release. cert-manager, nginx-gateway, and kube-state-metrics are shared infrastructure and are left in place by default; opt into removing them with `--include-cert-manager` / `--include-nginx-gateway` / `--include-kube-state-metrics`. To remove everything `wsm` deployed (operator, cert-manager, nginx-gateway, kube-state-metrics, **and** any W&B CRs) in one shot, use [`wsm cluster cleanup`](#wsm-cluster-cleanup) instead. This command does not delete the W&B instance; destroy it first with [`wsm deploy-v2 wandb destroy`](#wsm-deploy-v2-wandb-destroy).
 
 #### Flags
 
@@ -218,6 +219,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--proxy-https-secret` | — | Secret ref `<name>:<key>` for a credentialed `HTTPS_PROXY` URL (`spec.global.proxy.httpsProxy.valueFrom`) |
 | `--no-proxy` | — | Extra `NO_PROXY` entry appended to the operator's in-cluster exclusions (`spec.global.proxy.noProxy`); repeatable. Use for external endpoints (e.g. a BYOB object store) that must bypass the proxy |
 | `--objectstore-copies` | — | Managed object store replica copies (`spec.objectStore.managedObjectStore.copies`). Operator default applies when unset. Applies to the default managed instance only (see note below) |
+| `--object-store-storage-size` | — | Override the managed object store (SeaweedFS) storage size, e.g. `20Gi`. Must be under ~30Gi: the operator derives SeaweedFS `volumeSizeLimitMB` from it and the master rejects a limit ≥ 30000. Unset uses the size preset's default. Applies to the default managed instance only |
 | `--bucket-proxy` | — | Route object-store access through the W&B app instead of direct client access (`spec.wandb.bucketProxy`). Operator default applies when unset |
 | `--admin-console` | `true` | Enable the admin console (`spec.adminConsoleEnabled`). Disable it with `--admin-console=false` |
 | `--security-allow-user-team-creation` | — | Allow users to create teams (`spec.wandb.security.allowUserTeamCreation`) |
@@ -242,7 +244,7 @@ wsm deploy-v2 wandb deploy [flags]
 | `--create-aws-ingress-class` | `false` | Create an AWS ALB IngressClass (requires `--ingress-class`) |
 | `--create-aws-storage-class` | `false` | Create a default AWS `gp3` StorageClass |
 | `--add-ingress-annotations` | `false` | Add AWS load-balancer annotations to the managed Gateway (**Gateway API mode only**; ignored in Ingress mode) |
-| `--observability-mode` | `off` | Telemetry mode: `off`, `full` (in-cluster Victoria Metrics stack **+ local Grafana**), or `forward` (Victoria stack + forward OTLP externally). On this command it toggles per-service telemetry on the CR (unset keeps the operator default, enabled; `off` disables it); the chart-level `--observability-otel-*` / `--observability-forward-*` knobs live on [`wsm deploy-v2 operator`](#wsm-deploy-v2-operator). |
+| `--observability-mode` | unset | Telemetry mode: `off`, `full` (in-cluster Victoria Metrics stack **+ local Grafana**), or `forward` (Victoria stack + forward OTLP externally). On this command it toggles per-service telemetry on the CR (unset keeps the operator default, enabled; `off` disables it); the chart-level `--observability-otel-*` / `--observability-forward-*` knobs live on [`wsm deploy-v2 operator`](#wsm-deploy-v2-operator). |
 | `--retention-policy` | `detach` | Behavior on CR deletion: `detach` (leave infrastructure running) or `purge` (delete all managed resources and PVCs) |
 
 > **Default managed instance.** Managed `mysql`, `redis`, `objectStore`, and `clickhouse` are keyed by instance name; `wsm` builds a single instance under the reserved key `default`. Flags that tune managed infra — `--observability-mode` (per-service telemetry) and `--objectstore-copies` — only affect that `default` instance. To run multiple instances or tune a differently-keyed one, supply the full shape via `--cr-file`.
@@ -441,6 +443,16 @@ wsm cluster destroy [flags]
 
 ---
 
+### `wsm cluster list`
+
+Lists the local Kind clusters that carry the WSM deployment marker, i.e. the ones `wsm cluster destroy` will accept. It switches to each Kind cluster's context to look for the marker, then restores your current context. No flags.
+
+```bash
+wsm cluster list
+```
+
+---
+
 ### `wsm cluster cleanup`
 
 Deletes **all** WSM-managed resources from a cluster.
@@ -496,7 +508,7 @@ Scope: the operator OCI chart + its images, and the cert-manager, nginx-gateway-
 | `--exclude-managed` | — | Comma-separated managed types to skip **entirely** — operator *and* data-plane images — for when you use an external service. |
 | `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store`. |
 
-The two exclusion flags cover independent cases: `--exclude-operators <type>` mirrors the managed data-plane service but not W&B's operator for it (you bring your own); `--exclude-managed <type>` skips the type completely (you bring an external service).
+The two exclusion flags cover independent cases: `--exclude-operators <type>` mirrors the managed data-plane service but not W&B's operator for it (you bring your own); `--exclude-managed <type>` skips the type completely (you bring an external service). Kafka can't be excluded with either flag: `kafka` is rejected, and its images are always mirrored.
 
 Re-runs are idempotent: before copying, `mirror` compares the upstream manifest digest with the one already at the destination and skips the artifact when they match (reported as `• already mirrored` and counted under `skipped` in the summary). Only missing or changed artifacts are pushed, so a run that failed partway can simply be repeated. If either digest can't be read, the artifact is copied. The rewritten server manifest is always re-pushed, since its refs point at your mirror and it never matches upstream.
 
@@ -520,7 +532,7 @@ wsm registry check --registry <host> --wandb-version <version> [flags]
 | `--wandb-version` | — | W&B server version that was mirrored; when set, also check the server manifest and every application image it references. |
 | `--operator-chart-version` | `2.0.0-beta.10` | Operator chart version that was mirrored (must match `wsm registry mirror`). |
 | `--exclude-operators` | — | Managed types whose operator images to skip checking (match `--exclude-operators` you mirrored with). |
-| `--exclude-managed` | — | Managed types to skip checking entirely (match `--exclude-managed` you mirrored with). |
+| `--exclude-managed` | — | Managed types to skip checking entirely (match `--exclude-managed` you mirrored with). Kafka cannot be excluded. |
 | `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store` (match the flag you mirrored with). |
 | `--insecure` | `false` | Skip TLS certificate verification while keeping HTTPS. Does not enable HTTP or an HTTP fallback. |
 | `--plain-http` | `false` | Use HTTP for all requests to the mirror, including server-manifest readback with `--wandb-version`. |
@@ -557,10 +569,29 @@ Shells out to the `aws` CLI using your AWS config (env / `~/.aws` / IRSA); the c
 | `--operator-chart-version` | `2.0.0-beta.10` | Operator chart version (must match `wsm registry mirror`). |
 | `--wandb-version` | — | W&B server version; when set, also create the server-manifest repo and every application-image repo the manifest references. |
 | `--exclude-operators` | — | Managed types whose operator repos to skip (match `--exclude-operators` you mirror with). |
-| `--exclude-managed` | — | Managed types whose operator **and** data-plane repos to skip (match `--exclude-managed` you mirror with). |
+| `--exclude-managed` | — | Managed types whose operator **and** data-plane repos to skip (match `--exclude-managed` you mirror with). Kafka cannot be excluded. |
 | `--skip-managed-images` | `false` | Alias for `--exclude-managed clickhouse,mysql,redis,object-store` (match the flag you mirror with). |
 | `--region` | parsed from `--to` | AWS region for `create-repository`; must match the region in the ECR host. |
 | `--dry-run` | `false` | Print the repositories that would be created, without creating them. |
+
+### `wsm registry push`
+
+Walks a bundle produced by [`wsm download`](#wsm-download) (legacy v1) and pushes every saved image into your registry, re-tagged with the same translation rule as `wsm registry check` / `wsm registry values`. For a v2 install use [`wsm registry mirror`](#wsm-registry-mirror) instead; it needs no bundle.
+
+```bash
+wsm registry push --registry <host> [--bundle ./bundle] [flags]
+```
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--registry` | — | **Required.** Your private registry to push into, e.g. `harbor.mycorp.internal` |
+| `--bundle` | `./bundle` | Path to the bundle directory produced by `wsm download` |
+| `--dry-run` | `false` | Print the source → target translations without pushing |
+| `--insecure` | `false` | Skip TLS verification when contacting the registry; use it for plain-HTTP or self-signed registries |
+
+Auth is read from your Docker config (`~/.docker/config.json`). An image whose manifest exceeds the 4 MiB limit of the image library wsm uses is skipped and listed at the end with the `docker push` commands to run by hand. Skipped images still count as failed, so the command exits non-zero whenever any image, oversized or not, wasn't pushed.
 
 ### `wsm registry values`
 
@@ -568,6 +599,50 @@ Emits a `values.yaml` fragment that overrides each image reference to use your m
 
 ```bash
 wsm registry values --registry <host> [-o overrides.yaml]
+```
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--registry` | — | **Required.** Target registry, e.g. `myreg.example.com` |
+| `-o`, `--output` | `-` (stdout) | Output path |
+| `--keep-cache` | `false` | Don't delete `./bundle/charts` after running; speeds up repeated runs. Defined on the `wsm registry` group, but only `values` uses it |
+
+---
+
+## `wsm set-version`
+
+Upgrades (or, with `--force`, downgrades) a running W&B instance by patching only `spec.wandb.version` on its live CR. Every other field stays as deployed, unlike [`wsm deploy-v2 wandb deploy --wandb-version`](#wsm-deploy-v2-wandb-deploy), which rebuilds the CR from flags.
+
+```bash
+wsm set-version --context <kubeconfig-context> --wandb-version <version> [flags]
+```
+
+It refuses a namespace without the WSM `wandb-cr` deployment marker, exits early if the instance is already at that version, prints the change (`spec.wandb.version: <old> → <new>`) and asks `Proceed? [y/N]` before applying. There is no flag to skip the prompt.
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | — | **Required.** Name of the kubeconfig context to use |
+| `--wandb-version` | — | **Required.** Target server manifest version; must be at least `0.80.0` unless `--force` |
+| `--wandb-name` | `wandb` | Name of the W&B instance |
+| `--wandb-namespace` | `wandb` | Namespace of the W&B instance |
+| `--dry-run` | `false` | Show the change without applying it (no prompt) |
+| `--force` | `false` | Allow downgrades, versions below the minimum, and versions that don't parse as semver |
+| `--wait` | `false` | Wait for the instance to report ready after applying |
+| `--timeout` | `30m` | How long `--wait` waits |
+
+#### Examples
+
+```bash
+# Preview, then upgrade
+wsm set-version --context my-cluster --wandb-version 0.86.0 --dry-run
+wsm set-version --context my-cluster --wandb-version 0.86.0
+
+# Roll back to an earlier release
+wsm set-version --context my-cluster --wandb-version 0.85.1 --force
 ```
 
 ---
@@ -715,6 +790,97 @@ wsm support-bundle --enabled=true
 
 ---
 
+## `wsm user`
+
+Administers W&B user accounts on a running v2 instance. Both subcommands reach in-cluster Services: the app's GraphQL API, and for `migrate-email-domain` also the instance's MySQL.
+
+- `user admin` only talks to the app, so it also works from outside the cluster through a port-forward plus `--app-address`.
+- `migrate-email-domain` connects directly to the MySQL host published in the CR's status, which is an in-cluster Service address. `--app-address` doesn't cover that connection, so run it from somewhere that can reach the cluster network (for example a pod in the cluster).
+
+Both authenticate as **you**, with the API key of an instance admin. Pass it in `WANDB_API_KEY` rather than `--api-key`: a flag value lands in shell history and process listings.
+
+### Persistent flags (all subcommands)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | — | **Required.** Name of the kubeconfig context to use |
+| `--wandb-name` | `wandb` | Name of the W&B instance |
+| `--wandb-namespace` | `wandb` | Namespace of the W&B instance |
+
+Both subcommands also take:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--app-address` | `$WANDB_APP_ADDRESS`, else `api:8080` | The W&B app's GraphQL endpoint: `host:port` for an in-cluster Service, or `https://host` for anything outside the cluster network |
+| `--api-key` | `$WANDB_API_KEY` | API key of an instance admin |
+
+### `wsm user admin`
+
+Grants or revokes instance-admin for one user, through the app's own `updateUser` mutation. Prints whether anything changed.
+
+```bash
+wsm user admin <email-or-username> --grant|--revoke --context <kubeconfig-context>
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--grant` | `false` | Make the user an instance admin |
+| `--revoke` | `false` | Remove the user's instance-admin status |
+
+Pass exactly one of `--grant` or `--revoke`.
+
+### `wsm user migrate-email-domain`
+
+Rewrites every account's email address from one domain to another, for example after a company rename. It writes directly to the instance's MySQL (connection read from the CR's `status.mysqlStatus`), but first checks that your API key belongs to an instance admin, so the change always has an accountable W&B account behind it.
+
+```bash
+wsm user migrate-email-domain --from old-corp.com --to new-corp.com --context <kubeconfig-context> [--confirm]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | — | **Required.** Domain to migrate away from, e.g. `old-corp.com` |
+| `--to` | — | **Required.** Domain to migrate to, e.g. `new-corp.com` |
+| `--confirm` | `false` | Perform the rewrite instead of a dry run |
+
+Without `--confirm` it is a dry run: it reports how many accounts and rows match across every table that holds the address, shows a sample, and writes nothing. With `--confirm` it asks once more, then rewrites.
+
+> **Irreversible.** No record of the previous domain survives the rewrite. It is refused if the matching rows changed between the preview and the confirmation. This is the CLI counterpart of Watchtower's email-domain migration, and it doesn't need [`--watchtower-enable-db-admin`](#wsm-deploy-v2-operator).
+
+---
+
+## `wsm telemetry`
+
+View the in-cluster telemetry UIs deployed by the v2 operator. The telemetry stack is deployed when the operator is installed with `--observability-mode=full` (Grafana + Victoria stack) or `forward` (Victoria stack only). The services are ClusterIP-only, so each subcommand port-forwards to a service (natively, via client-go — **no `kubectl` binary required**) and opens it in your browser. It first reads the installed telemetry mode from the operator release and prints it; if telemetry is off (or Grafana is requested under `forward`) it exits with a clear message instead of a failed forward. Grafana opens straight to the W&B overview dashboard as an anonymous Viewer (dashboards can be edited but not saved) — no login.
+
+```bash
+wsm telemetry grafana  --context <kubeconfig-context>   # Grafana dashboards (localhost:3000)
+wsm telemetry victoria --context <kubeconfig-context>   # VictoriaMetrics VMUI (localhost:8428/vmui/)
+wsm telemetry logs     --context <kubeconfig-context>   # VictoriaLogs VMUI (localhost:9428/select/vmui/)
+wsm telemetry vmagent  --context <kubeconfig-context>   # VMAgent scrape-status UI (localhost:8429/)
+```
+
+### Persistent flags (all subcommands)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--context` | — | Name of the kubeconfig context to use (defaults to the current context) |
+| `--wandb-namespace` | `wandb` | Namespace where the telemetry stack is deployed |
+| `--operator-namespace` | `wandb-operators` | Namespace of the operator Helm release (read to report the installed telemetry mode) |
+
+### Subcommands
+
+| Subcommand | Default service | Port | Path | Mode |
+|------------|-----------------|------|------|------|
+| `grafana` | `grafana-service` | 3000 | | `full` |
+| `victoria` | `vmsingle-victoria-instance` | 8428 | `/vmui/` | `full` or `forward` |
+| `logs` | `vlsingle-victoria-logs` | 9428 | `/select/vmui/` | `full` or `forward` |
+| `vmagent` | `vmagent-victoria-agent` | 8429 | `/` | `full` or `forward` |
+
+Each subcommand takes `--service` (override the resolved Service name), `--local-port` (0 for an OS-assigned port), `--remote-port`, and `--no-browser`. Services are looked up by their well-known names (above); if the operator has renamed one, pass `--service` to point at it.
+
+---
+
 ## Legacy Commands
 
 ### `wsm deploy` (Legacy v1 Operator)
@@ -732,52 +898,52 @@ For deploying the legacy v1 operator. The subcommands are:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-n, --namespace` | `wandb` | Namespace to deploy into |
-| `-c, --chart` | — | Path to a custom W&B Helm chart |
+| `-a, --airgapped` | `false` | Air-gapped mode: also runs `chart-cm`, storing the chart in the `wandb-charts` ConfigMap |
+| `-b, --bundle` | — | Path to a bundle produced by [`wsm download`](#wsm-download) to deploy from |
+| `-c, --chart` | — | Path to a custom W&B Helm chart. Takes precedence over the chart in `--bundle` |
 | `-v, --values` | — | Path to a values file |
 
 ---
 
 ### `wsm console`
 
-Opens the W&B admin console in your default browser.
+Opens the v1 W&B admin console in your default browser.
 
 ```bash
 wsm console
 ```
 
-This command port-forwards the `wandb-console` service on `localhost:8082` and opens the login URL.
+This command port-forwards the `wandb-console` service on `localhost:8082` and opens the login URL. It reads the `wandb-password` Secret from the `default` namespace, shells out to the `kubectl` binary, and uses the current kubeconfig context (there is no `--context` flag). On a v2 install the admin console is Watchtower; use [`wsm telemetry`](#wsm-telemetry) for the telemetry UIs.
 
 ---
 
-### `wsm telemetry`
+### `wsm list`
 
-View the in-cluster telemetry UIs deployed by the v2 operator. The telemetry stack is deployed when the operator is installed with `--observability-mode=full` (Grafana + Victoria stack) or `forward` (Victoria stack only). The services are ClusterIP-only, so each subcommand port-forwards to a service (natively, via client-go — **no `kubectl` binary required**) and opens it in your browser. It first reads the installed telemetry mode from the operator release and prints it; if telemetry is off (or Grafana is requested under `forward`) it exits with a clear message instead of a failed forward. Grafana opens straight to the W&B overview dashboard as an anonymous Viewer (dashboards can be edited but not saved) — no login.
+Prints the operator and W&B container images a fresh v1 install would pull. It reads the chart versions from the deployer channel API and the latest operator tag from Docker Hub, renders both charts client-side, and lists every image. The optional `weave-trace` component is included. No cluster is needed.
 
 ```bash
-wsm telemetry grafana  --context <kubeconfig-context>   # Grafana dashboards (localhost:3000)
-wsm telemetry victoria --context <kubeconfig-context>   # VictoriaMetrics VMUI (localhost:8428/vmui/)
-wsm telemetry logs     --context <kubeconfig-context>   # VictoriaLogs VMUI (localhost:9428/select/vmui/)
-wsm telemetry vmagent  --context <kubeconfig-context>   # VMAgent scrape-status UI (localhost:8429/)
+wsm list
 ```
-
-#### Persistent flags (all subcommands)
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--context` | — | Name of the kubeconfig context to use (defaults to the current context) |
-| `--wandb-namespace` | `wandb` | Namespace where the telemetry stack is deployed |
-| `--operator-namespace` | `wandb-operators` | Namespace of the operator Helm release (read to report the installed telemetry mode) |
+| `-p, --platform` | `linux/amd64` | Accepted for symmetry with `wsm download`, but currently ignored |
 
-#### Subcommands
+For a v2 install, list what will be mirrored with [`wsm registry mirror --dry-run`](#wsm-registry-mirror) instead.
 
-| Subcommand | Default service | Port | Path | Mode |
-|------------|-----------------|------|------|------|
-| `grafana` | `grafana-service` | 3000 | | `full` |
-| `victoria` | `vmsingle-victoria-instance` | 8428 | `/vmui/` | `full` or `forward` |
-| `logs` | `vlsingle-victoria-logs` | 9428 | `/select/vmui/` | `full` or `forward` |
-| `vmagent` | `vmagent-victoria-agent` | 8429 | `/` | `full` or `forward` |
+---
 
-Each subcommand takes `--service` (override the resolved Service name), `--local-port` (0 for an OS-assigned port), `--remote-port`, and `--no-browser`. Services are looked up by their well-known names (above); if the operator has renamed one, pass `--service` to point at it.
+### `wsm download`
+
+Builds a `./bundle/` directory for an offline v1 install: the charts under `charts/`, each image saved as `images/<image>/image.tgz`, and the resolved `spec.yaml`. An existing `./bundle` is deleted first. Requires `docker` on your `PATH` (images are fetched with `docker pull` and `docker save`). Push the bundle into your registry with [`wsm registry push`](#wsm-registry-push), and deploy from it with `wsm deploy --bundle`.
+
+```bash
+wsm download [-p linux/amd64]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-p, --platform` | `linux/amd64` | Platform of the images to pull |
 
 ---
 
@@ -848,11 +1014,19 @@ Like `wsm preflight`, it exits non-zero when a preflight check fails or is unkno
 
 ## Flag Precedence
 
-When multiple configuration sources specify the same value, the resolution order is:
+When multiple configuration sources specify the same CR value (`wsm deploy-v2 wandb deploy`, or `wsm deploy-v2 operator --include-cr`), the resolution order is:
 
-1. Command-line flags (highest priority)
-2. Custom CR file (`--cr-file`)
-3. WSM built-in defaults (lowest priority)
+1. `--cr-set <path>=<value>` (highest priority; applied last, so it always wins)
+2. Typed command-line flags
+3. Custom CR file (`--cr-file`)
+4. WSM built-in defaults (lowest priority)
+
+Exceptions where `--cr-file` beats a typed flag:
+
+- The OIDC leaves (`--oidc-client-id`, `--oidc-client-secret`, `--oidc-issuer-url`, `--oidc-auth-method`): a flag is ignored for any leaf the CR file already sets.
+- `--oidc-session-length`: ignored, with a notice, when the CR file already sets `spec.wandb.oidc.sessionLength`.
+
+`--cr-set` still overrides both.
 
 ---
 
@@ -860,6 +1034,5 @@ When multiple configuration sources specify the same value, the resolution order
 
 | Code | Meaning |
 |------|---------|
-| `0` | Success |
-| `1` | General error (deployment failure, missing prerequisites) |
-| Other | Subcommand-specific errors (refer to error message)
+| `0` | Success. Dry runs and declined confirmation prompts also exit `0`, except `wsm user migrate-email-domain`, which exits `1` when you decline |
+| `1` | Any error (deployment failure, missing prerequisites, failed or inconclusive check); the error message says which |

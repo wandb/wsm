@@ -86,6 +86,7 @@ If you used the default internal CA, clients will see certificate warnings. To f
 
 ```bash
 wsm deploy-v2 wandb get-ca-cert \
+  --context gke-my-cluster \
   --wandb-name wandb \
   --wandb-namespace wandb \
   --output-dir ./certs

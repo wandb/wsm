@@ -14,7 +14,7 @@ deploying W&B entirely from a registry *you* control, with zero public pulls at 
 You'll need, on your PATH:
 
 - **Docker**
-- **[kind](https://kind.sigs.k8s.io/)** (local Kubernetes in Docker)
+- **kubectl**
 - **`wsm`** ([install it here](installation.md))
 
 > **Run this on an amd64 (x86_64) machine.** The W&B operator image is amd64-only today, so
@@ -72,9 +72,9 @@ wsm deploy-v2 operator --context kind-wandb --mirror-registry $REG --insecure-re
 
 ```bash
 # grab the published server manifest, point its image refs at your registry
-# (it's just YAML in a scratch image — architecture doesn't matter, so no --platform)
-docker pull us-docker.pkg.dev/wandb-production/public/wandb/server-manifest:$VER
-cid=$(docker create us-docker.pkg.dev/wandb-production/public/wandb/server-manifest:$VER x)
+# (a scratch image published for linux/amd64 only, so --platform is required on Apple Silicon)
+docker pull --platform linux/amd64 us-docker.pkg.dev/wandb-production/public/wandb/server-manifest:$VER
+cid=$(docker create --platform linux/amd64 us-docker.pkg.dev/wandb-production/public/wandb/server-manifest:$VER x)
 docker cp "$cid:/manifest.yaml" . && docker cp "$cid:/sizing.yaml" . && docker rm "$cid"
 sed -i.bak "s#us-docker.pkg.dev/wandb-production/public/#$REG/#g" manifest.yaml
 rm -f manifest.yaml.bak
@@ -101,7 +101,7 @@ should all reach `Running` — **every one pulled from your local registry.**
 ## Tear down
 
 ```bash
-kind delete cluster --name wandb
+wsm cluster destroy --cluster-name wandb
 docker rm -f wandb-registry
 ```
 

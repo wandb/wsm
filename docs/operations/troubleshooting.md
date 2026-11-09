@@ -188,6 +188,7 @@ wsm deploy-v2 wandb deploy --context kind-wandb-local --wandb-hostname http://lo
 **Fix**: Retrieve and trust the CA certificate:
 ```bash
 wsm deploy-v2 wandb get-ca-cert \
+  --context <ctx> \
   --wandb-name wandb \
   --wandb-namespace wandb \
   --output-dir ./certs

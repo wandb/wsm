@@ -8,13 +8,15 @@ Use the `--size` flag to select a resource profile for your W&B deployment:
 
 | Profile | Recommended For | Description |
 |---------|----------------|-------------|
-| `dev` | Local testing, single user | Minimal resources, all services on shared nodes |
-| `small` | Small team, early production | Default profile, suitable for ~10–50 users |
+| `dev` | Local testing, single user | Default profile. Minimal resources, all services on shared nodes |
+| `micro` | Lightweight testing / CI | Smaller than `small`; for short-lived or evaluation deployments |
+| `small` | Small team, early production | Suitable for ~10–50 users |
 | `medium` | Growing team | Increased CPU/memory for core services |
 | `large` | Multi-team organization | Dedicated resources per service |
 | `xlarge` | Large organization | High availability, horizontal scaling enabled |
-| `2xlarge` | Enterprise | Maximum throughput, replicated data stores |
-| `4xlarge` | Maximum scale | Full isolation, extensive resource allocation |
+| `xxlarge` | Enterprise | Maximum throughput, replicated data stores |
+
+These are the only profile names accepted; `wsm` rejects any other `--size` (or `spec.size`) up front.
 
 ```bash
 wsm deploy-v2 wandb deploy \
@@ -40,7 +42,7 @@ wsm deploy-v2 wandb deploy \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--wandb-hostname` | `http://localhost:8080` | External URL for accessing W&B |
-| `--wandb-version` | `0.81.0` | Server manifest version to deploy |
+| `--wandb-version` | `0.86.0` | Server manifest version to deploy |
 
 ### Networking
 
@@ -96,7 +98,7 @@ spec:
   size: medium
   wandb:
     hostname: https://wandb.example.com
-    version: "0.79.2"
+    version: "0.86.0"
     license: "YOUR_LICENSE_HERE"
   networking:
     mode: gateway
@@ -108,7 +110,6 @@ spec:
       secretName: wandb-tls-secret
       certManager:
         issuer: letsencrypt-prod
-        kind: Issuer
   retentionPolicy:
     onDelete: detach
   mysql:
@@ -212,7 +213,7 @@ When running `wsm deploy-v2 operator`, you can control infrastructure installati
 | `--install-cert-manager` | `auto` | `auto` (detect/reuse), `true` (force install), `false` (skip) |
 | `--install-nginx-gateway` | `auto` | `auto` (detect/reuse), `true` (force install), `false` (skip) |
 | `--enable-gateway-api` | `true` | Enable Gateway API support in cert-manager |
-| `--operator-chart-version` | `2.0.0-alpha.2` | Operator Helm chart version |
+| `--operator-chart-version` | `2.0.0-beta.10` | Operator Helm chart version |
 | `--operator-namespace` | `wandb-operators` | Namespace for the operator |
 
 ### Example: Use Existing cert-manager

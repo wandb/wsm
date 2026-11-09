@@ -42,7 +42,7 @@ wsm deploy-v2 wandb deploy \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--wandb-hostname` | `http://localhost:8080` | External URL for accessing W&B |
-| `--wandb-version` | `0.81.0` | Server manifest version to deploy |
+| `--wandb-version` | `0.86.0` | Server manifest version to deploy |
 
 ### Networking
 
@@ -213,7 +213,7 @@ When running `wsm deploy-v2 operator`, you can control infrastructure installati
 | `--install-cert-manager` | `auto` | `auto` (detect/reuse), `true` (force install), `false` (skip) |
 | `--install-nginx-gateway` | `auto` | `auto` (detect/reuse), `true` (force install), `false` (skip) |
 | `--enable-gateway-api` | `true` | Enable Gateway API support in cert-manager |
-| `--operator-chart-version` | `2.0.0-alpha.2` | Operator Helm chart version |
+| `--operator-chart-version` | `2.0.0-beta.10` | Operator Helm chart version |
 | `--operator-namespace` | `wandb-operators` | Namespace for the operator |
 
 ### Example: Use Existing cert-manager

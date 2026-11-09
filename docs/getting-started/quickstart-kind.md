@@ -40,7 +40,8 @@ wsm deploy-v2 wandb deploy \
 
 | Flag | Description |
 |------|-------------|
-| `--setup-k8s-cluster` | Creates a new Kind cluster named `kind` before deploying (phase 1) |
+| `--setup-k8s-cluster` | Creates a new Kind cluster before deploying (phase 1) |
+| `--cluster-name wandb` | Names that cluster `wandb`; its kubectl context is `kind-wandb` (the default name is `kind`) |
 | `wandb deploy` | Deploys the `WeightsAndBiases` custom resource — the actual W&B instance (phase 2) |
 | `--size dev` | Sets the size of the `WeightsAndBiases` deployment to dev |
 | `--context kind-wandb` | Uses the `kind-wandb` kubectl context (auto-created by Kind) |

@@ -18,7 +18,14 @@ New deployments should use **v2**.
 
 ## Install
 
-Requires **Go 1.27.3+**. Build from source:
+Install the latest release binary (Linux / macOS; on Windows download the `.zip` from the
+[releases page](https://github.com/wandb/wsm/releases)):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/wandb/wsm/main/install.sh | bash
+```
+
+Or build from source, which requires **Go 1.27.3+**:
 
 ```bash
 git clone https://github.com/wandb/wsm
@@ -50,15 +57,19 @@ CR field reference: [`docs/reference/cr-fields.md`](./docs/reference/cr-fields.m
 | `wsm convert-v2` | v2 | Diff the live v1 CR against the v2 CR the conversion webhook would produce, then preflight it. |
 | `wsm preflight` | v2 | Run the operator's preflight checks against a v2 CR file before applying it. |
 | `wsm telemetry` | v2 | Open the in-cluster telemetry UIs (Grafana, VictoriaMetrics). |
-| `wsm set-version` | — | Set the version of a wsm-managed W&B instance. |
+| `wsm set-version` | v2 | Upgrade (or, with `--force`, roll back) the W&B version of a wsm-managed instance. |
+| `wsm license` | v2 | Show or set the license on a W&B instance. |
+| `wsm support-bundle` | v2 | Collect, list, download and delete support bundles. |
+| `wsm user` | v2 | Grant or revoke instance-admin, or migrate users' email domain. |
 | `wsm console` | v1 | Port-forward and open the W&B console in a browser. |
 | [`wsm version`](#wsm-version) | — | Print the wsm version, commit, and build date. |
 | [`wsm deploy`](#wsm-deploy) | v1 | Legacy three-phase install (operator → chart ConfigMap → v1 CR). |
 | [`wsm list`](#wsm-list) | v1 | List the container images a fresh install would pull. |
 | [`wsm download`](#wsm-download) | v1 | Build an air-gapped `./bundle/` (charts + images + spec). |
 
-Every `deploy-v2`, `cluster cleanup`, and `convert-v2` invocation requires
-`--context <kubeconfig-context>`.
+Every `deploy-v2`, `cluster cleanup`, `license`, `set-version`, and `user`
+invocation requires `--context <kubeconfig-context>`. `convert-v2`, `preflight`,
+`support-bundle`, and `telemetry` accept it but default to the current context.
 
 ---
 
@@ -90,11 +101,11 @@ wsm deploy-v2 wandb deploy|destroy|get-ca-cert --context <ctx> [flags]
 **`wandb deploy` — key flags:**
 - `--wandb-name string` / `--wandb-namespace string`: instance name / namespace
   (both default `wandb`).
-- `--wandb-version string`: server manifest version (defaults to `0.82.2`; must
+- `--wandb-version string`: server manifest version (defaults to `0.86.0`; must
   be ≥ `0.80.0`).
 - `--cr-file string`: path to a `WeightsAndBiases` CR YAML (built-in default
   otherwise).
-- `--cr-set path=value`: set any CR field, e.g. `--cr-set spec.wandb.version=0.82.2`;
+- `--cr-set path=value`: set any CR field, e.g. `--cr-set spec.wandb.version=0.86.0`;
   repeatable, YAML-typed, overrides the template, `--cr-file`, and typed flags.
 - `--license string` / `--license-file string`: inject `spec.wandb.license`.
 - `--manifest-repository string`, `--bucket-proxy`, `--mirror-registry` — see the
@@ -130,7 +141,7 @@ Artifactory, ECR, …) for on-prem / air-gapped installs. Pair with
 [on-prem guide](./docs/deployment/on-prem.md).
 
 ```bash
-wsm registry mirror|check|values|push [flags]
+wsm registry mirror|check|create-repos|values|push [flags]
 ```
 
 - `mirror`: pull every chart/image `deploy-v2 operator` needs and re-push to your
@@ -140,6 +151,8 @@ wsm registry mirror|check|values|push [flags]
 - `check`: verify all required images exist in your mirror. `--registry <host>`
   (required), `--fail-on-missing`, `--insecure`, `--plain-http`. Both `mirror`
   and `check` accept `--wandb-version` with HTTP targets.
+- `create-repos`: pre-create every repository `mirror` pushes to, for Amazon ECR
+  (which doesn't create repositories on first push). `--to <ecr-host>[/<prefix>]`.
 - `values`: emit a `values.yaml` fragment that re-points images at your registry.
 - `push`: push images from a bundle directory into your mirror.
 
@@ -232,8 +245,9 @@ make lint    # go vet + golangci-lint
 make fmt     # gofmt (CI fails if this leaves a diff)
 ```
 
-There is no unit-test suite; CI (`.github/workflows/checks.yaml`) runs build,
-lint, format, and `go mod tidy` checks. `.github/workflows/pr-checks.yml`
+Unit tests live next to the code (`*_test.go`); run them with `go test ./...`.
+CI (`.github/workflows/checks.yaml`) runs build, lint, format, and `go mod tidy`
+checks, but not the tests yet. `.github/workflows/pr-checks.yml`
 additionally gates every PR on a Conventional-Commit title/commits, a filled-in
 PR body (see [`.github/pull_request_template.md`](./.github/pull_request_template.md)),
 and exactly one `release:*` label. The `/ship` Claude Code skill drives

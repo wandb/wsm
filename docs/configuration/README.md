@@ -15,12 +15,12 @@ Configuration can be applied at three layers:
 
 1. **WSM CLI flags** — Quick overrides for common settings (hostname, size, license, etc.)
 2. **Custom CR file** — Full control over the `WeightsAndBiases` resource spec
-3. **Operator chart values** — Advanced operator-level configuration (passed via `--operator-chart-version`)
+3. **Operator install flags** — Operator-level settings on `wsm deploy-v2 operator`: chart version (`--operator-chart-version`), telemetry, OpenShift, Watchtower permissions. WSM has no flag for arbitrary operator chart values
 
 ## Precedence
 
 When multiple layers configure the same field:
 
 ```
-CLI flags > Custom CR values > WSM defaults
+--cr-set > CLI flags > Custom CR values > WSM defaults
 ```

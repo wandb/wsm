@@ -44,20 +44,24 @@ kubectl get httproute -n wandb
 ```bash
 wsm deploy-v2 operator \
   --context <ctx> \
-  --operator-chart-version 2.0.0-alpha.2
+  --operator-chart-version 2.0.0-beta.10
 ```
 
 ### Upgrade W&B Version
 
+Use `wsm set-version`. It changes only `spec.wandb.version` on the live CR, refuses downgrades, shows the change and asks for confirmation:
+
 ```bash
-wsm deploy-v2 wandb deploy \
+wsm set-version \
   --context <ctx> \
-  --wandb-version 0.81.0 \
+  --wandb-version 0.86.0 \
   --wandb-name wandb \
   --wandb-namespace wandb
 ```
 
-The operator will perform a rolling update of the W&B instance.
+Add `--dry-run` to preview without applying, or `--wait` to block until the instance reports ready. The operator performs a rolling update of the W&B instance.
+
+Re-running `wsm deploy-v2 wandb deploy --wandb-version <ver>` also upgrades, but it rebuilds the whole CR from the flags you pass, so any field you set at install time and leave out now changes. Use it when you also mean to change other settings.
 
 ## Destroy the W&B Instance
 
@@ -80,11 +84,10 @@ To remove **all** WSM-managed resources from the cluster:
 wsm cluster cleanup --context <ctx>
 ```
 
-This deletes:
+It asks for confirmation first; pass `--yes` in scripts. This deletes:
 - W&B CRs and their namespaces (where markers exist)
 - W&B operator Helm releases
-- cert-manager
-- nginx-gateway-fabric
+- cert-manager, nginx-gateway-fabric and kube-state-metrics, each only if a WSM marker claims it
 - Deployment markers
 
 > Note: `cluster cleanup` only removes resources that have WSM deployment markers. It will not delete user-created resources.
@@ -107,10 +110,20 @@ If you need to see which namespaces and resources WSM considers managed, check f
 
 ## Rolling Back
 
-WSM does not currently support automatic rollback. To revert to a previous version:
+WSM does not roll back automatically.
 
-1. Destroy the W&B instance (preserving data with `--retention-policy detach`)
-2. Re-deploy with the desired `--wandb-version` or `--operator-chart-version`
+To return the W&B server to an earlier version, set it explicitly with `--force`, which `set-version` requires for a downgrade:
+
+```bash
+wsm set-version \
+  --context <ctx> \
+  --wandb-version <previous-version> \
+  --force
+```
+
+> A downgrade runs the older server against a database the newer one may already have migrated. Check the W&B Server release notes before rolling back across a release with schema changes.
+
+To roll back the operator, re-run `wsm deploy-v2 operator --context <ctx> --operator-chart-version <previous-chart-version>`.
 
 ## See Also
 

@@ -120,7 +120,7 @@ docker rm "$cid"
 # 2. repoint the APP image refs at your mirror (the same prefix wsm strips when it mirrors them).
 #    Managed DB refs (docker.io/…, quay.io/…, us-docker.pkg.dev/…) are left alone — they reach
 #    the mirror via the node's container-runtime registry mirror (--insecure-registry-host).
-sed -i '' "s#us-docker.pkg.dev/wandb-production/public/#$REG/#g" manifest.yaml   # Linux: drop the '' after -i
+sed -i.bak "s#us-docker.pkg.dev/wandb-production/public/#$REG/#g" manifest.yaml && rm -f manifest.yaml.bak   # portable across GNU and BSD/macOS sed
 
 # 3. mount the YAML onto the operator pod at /manifests/<v>
 OPNS=wandb-operators   # wsm default (--operator-namespace)

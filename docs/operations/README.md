@@ -17,7 +17,7 @@ Day-to-day management, monitoring, and troubleshooting of W&B deployments.
 | Check W&B status | `kubectl get wandb -n wandb` |
 | Check all pods | `kubectl get pods -n wandb` |
 | Upgrade operator | `wsm deploy-v2 operator --context <ctx>` |
-| Upgrade W&B | `wsm deploy-v2 wandb deploy --context <ctx> --wandb-version <ver>` |
+| Upgrade W&B | `wsm set-version --context <ctx> --wandb-version <ver>` |
 | Destroy W&B only | `wsm deploy-v2 wandb destroy --context <ctx>` |
 | Full cleanup | `wsm cluster cleanup --context <ctx>` |
 | List support bundles | `wsm support-bundle list --context <ctx>` |

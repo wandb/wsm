@@ -7,6 +7,8 @@ This guide covers two deployment models:
 
 Both install the same thing (the operator, its dependencies, and a W&B instance). The difference is *where the bytes come from*.
 
+For a one-page overview of the air-gapped flow (public sources → your registry → your cluster), open [`wsm-airgap-diagram.html`](../wsm-airgap-diagram.html) in a browser. GitHub shows `.html` files as source, so download the file or view it from a local clone.
+
 > If you just want a local laptop walkthrough against a throwaway `registry:2`, jump to [Column 1 in Airgap Walkthrough](#pick-your-registry-setup-first).
 >
 > See also the [Local Kind guide](local-kind.md) for cluster setup details.

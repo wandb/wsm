@@ -49,7 +49,8 @@ func DownloadCmd() *cobra.Command {
 	var platform string
 
 	cmd := &cobra.Command{
-		Use: "download",
+		Use:   "download",
+		Short: "(Legacy v1) Download charts and images into ./bundle for an offline install",
 		Run: func(cmd *cobra.Command, args []string) {
 			_ = os.RemoveAll("bundle")
 			// Fetch the latest tag for the controller

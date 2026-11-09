@@ -33,7 +33,8 @@ var airgapped bool
 var temporaryDirectory string
 
 var operatorCmd = &cobra.Command{
-	Use: "operator",
+	Use:   "operator",
+	Short: "(Legacy v1) Install the v1 operator Helm chart",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Deploying operator")
 		releaseName := "operator"
@@ -72,7 +73,8 @@ var operatorCmd = &cobra.Command{
 }
 
 var chartsCmd = &cobra.Command{
-	Use: "chart-cm",
+	Use:   "chart-cm",
+	Short: "(Legacy v1) Store the operator-wandb chart in the wandb-charts ConfigMap for air-gapped installs",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Deploying charts")
 		var wandbChartPath string
@@ -99,7 +101,8 @@ var chartsCmd = &cobra.Command{
 }
 
 var wandbCRCmd = &cobra.Command{
-	Use: "wandb-cr",
+	Use:   "wandb-cr",
+	Short: "(Legacy v1) Apply the apps.wandb.com/v1 WeightsAndBiases CR",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Deploying W&B CR")
 
@@ -150,7 +153,8 @@ func DeployCmd() *cobra.Command {
 	//var operatorChartPath string
 
 	cmd := &cobra.Command{
-		Use: "deploy",
+		Use:   "deploy",
+		Short: "(Legacy v1) Install the v1 operator and W&B CR (plus the chart ConfigMap with --airgapped)",
 		Run: func(cmd *cobra.Command, args []string) {
 			if airgapped {
 				chartsCmd.Run(cmd, args)

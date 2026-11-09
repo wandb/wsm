@@ -92,7 +92,7 @@ jobs:
                 `PR title "${title}" is not a valid Conventional Commit.\n` +
                 `Format: type(scope)!: description\n` +
                 `Types: ${types.replace(/\|/g, ", ")}\n` +
-                `Example: feat(deploy-v2): add kind cluster picker\n` +
+                `Example: feat(deploy-v2): Add kind cluster picker\n` +
                 `See https://www.conventionalcommits.org/en/v1.0.0/`
               );
               return;
@@ -103,7 +103,8 @@ jobs:
             if (desc.length < 10) errors.push(`Description "${desc}" is too short (< 10 chars). Be specific.`);
             if (fillers.includes(desc.toLowerCase())) errors.push(`Description "${desc}" is filler — say what actually changed.`);
             if (/[.]$/.test(desc)) errors.push(`Drop the trailing period on the description.`);
-            if (/^[A-Z]/.test(desc)) errors.push(`Start the description lowercase, e.g. "add ..." not "Add ...".`);
+            // Matches the wandb/operator PR title check (subjectPattern: ^[A-Z].+$).
+            if (!/^[A-Z]/.test(desc)) errors.push(`Start the description with an uppercase letter, e.g. "Add ..." not "add ...".`);
             if (/^(added|fixed|updated|removed|changed|created|deleted|refactored|implemented|renamed|moved)\b/i.test(desc)) {
               errors.push(`Use imperative mood ("add/fix/update/remove"), not past tense ("${desc.split(/\s+/)[0]}").`);
             }

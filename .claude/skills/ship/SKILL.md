@@ -115,7 +115,8 @@ Stage and commit. Every commit message:
 
 - **First line** = Conventional Commit: `type(scope): description`
   - types: `feat fix build chore ci docs perf refactor revert style test`
-  - imperative, lowercase, no trailing period, ≤ 72 chars (the gate enforces this).
+  - imperative, description starts with an uppercase letter, no trailing period,
+    ≤ 72 chars (the gate enforces this on the PR title).
 - **Body** = **at most two sentences** explaining the *why* / non-obvious parts.
   Skip the body entirely for trivial changes. Never pad it.
 - **Trailer** (only when Claude authored/co-authored the change): a blank line, then
@@ -126,7 +127,7 @@ Use a HEREDOC so the body and trailer format cleanly:
 ```sh
 git add <paths>
 git commit -m "$(cat <<'EOF'
-feat(deploy-v2): add managed-clickhouse flags
+feat(deploy-v2): Add managed-clickhouse flags
 
 The operator's CR now nests ClickHouse under ManagedClickHouseSpec, so surface
 the common knobs as typed flags with --cr-set as the escape hatch.

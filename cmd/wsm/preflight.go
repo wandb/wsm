@@ -28,11 +28,13 @@ func PreflightCmd() *cobra.Command {
 		Use:   "preflight <cr-file>",
 		Short: "Run the operator's preflight checks against a v2 WeightsAndBiases CR file",
 		Args:  cobra.ExactArgs(1),
+		// Hidden until the operator ships pkg/preflight; until then every run fails.
+		Hidden: !preflight.Available,
 		Long: `Run the operator's preflight checks client-side against a v2 WeightsAndBiases CR file.
 		
 		  Checks are selected from the operator's preflight registry: each registered CR field
-		  present in the file triggers its check. Currently only spec.mysql.<instance>.externalMysql
-		  is checked; other external services report "No preflight checks apply".
+		  present in the file triggers its check. A CR with no matching field reports
+		  "No preflight checks apply".
 		
 		  Checks run from the machine running wsm, not from inside the cluster. An endpoint
 		  reachable only from the cluster network (e.g. *.svc, private VPC hosts) may FAIL here

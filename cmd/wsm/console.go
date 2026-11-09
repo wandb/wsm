@@ -35,7 +35,8 @@ func openBrowser(url string) error {
 
 func ConsoleCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use: "console",
+		Use:   "console",
+		Short: "(Legacy v1) Port-forward the v1 W&B console and open it in a browser, logged in",
 		Run: func(cmd *cobra.Command, args []string) {
 			pwd, err := kubectl.GetSecret("wandb-password", "default")
 			if err != nil {

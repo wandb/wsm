@@ -24,7 +24,7 @@ var rootCmd = &cobra.Command{
 	  
 	  Common commands:
 		wsm deploy-v2 operator   Deploy the v2 operator (and optionally a W&B CR).
-		wsm upgrade              Bump the W&B version on an existing install.
+		wsm set-version          Bump the W&B version on an existing install.
 		wsm cluster cleanup      Remove everything wsm deployed.
 		wsm list                 List the container images required for a deploy.
 	

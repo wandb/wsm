@@ -13,6 +13,10 @@ import (
 	sigsyaml "sigs.k8s.io/yaml"
 )
 
+// Available reports whether the operator's preflight checks are compiled in;
+// callers hide or skip preflight while it is false.
+const Available = false
+
 // ErrUnavailable is returned while the operator's preflight checks are unreleased.
 var ErrUnavailable = errors.New("preflight checks are not available with this operator version")
 

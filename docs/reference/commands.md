@@ -244,7 +244,6 @@ wsm deploy-v2 wandb deploy [flags]
 | `--add-ingress-annotations` | `false` | Add AWS load-balancer annotations to the managed Gateway (**Gateway API mode only**; ignored in Ingress mode) |
 | `--observability-mode` | `off` | Telemetry mode: `off`, `full` (in-cluster Victoria Metrics stack **+ local Grafana**), or `forward` (Victoria stack + forward OTLP externally). On this command it toggles per-service telemetry on the CR (unset keeps the operator default, enabled; `off` disables it); the chart-level `--observability-otel-*` / `--observability-forward-*` knobs live on [`wsm deploy-v2 operator`](#wsm-deploy-v2-operator). |
 | `--retention-policy` | `detach` | Behavior on CR deletion: `detach` (leave infrastructure running) or `purge` (delete all managed resources and PVCs) |
-| `--wait` | `false` | Wait for the W&B instance to report Ready |
 
 > **Default managed instance.** Managed `mysql`, `redis`, `objectStore`, and `clickhouse` are keyed by instance name; `wsm` builds a single instance under the reserved key `default`. Flags that tune managed infra — `--observability-mode` (per-service telemetry) and `--objectstore-copies` — only affect that `default` instance. To run multiple instances or tune a differently-keyed one, supply the full shape via `--cr-file`.
 >
@@ -455,15 +454,15 @@ wsm cluster cleanup [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--context` | — | **Required.** Name of the kubeconfig context to use |
+| `-y`, `--yes` | `false` | Don't ask for confirmation |
 
-This removes:
+It asks for confirmation first unless `--yes` is passed. This removes:
 - W&B CRs and their namespaces
 - W&B operator releases
-- cert-manager
-- nginx-gateway-fabric
+- cert-manager, nginx-gateway-fabric and kube-state-metrics, each only if a WSM deployment marker claims it
 - WSM deployment markers
 
-> Resources without WSM markers are not deleted.
+> Resources without WSM markers are not deleted. A shared component wsm didn't install (for example a cert-manager that was already on the cluster) is left in place.
 
 ---
 
@@ -799,6 +798,8 @@ The values are stamped in at build time (GoReleaser on tagged releases; `make bu
 
 ### `wsm preflight`
 
+> **Not available in this release.** The operator's preflight checks are not yet in a released operator version (wandb/operator#402), so `wsm preflight` is hidden from `wsm --help` and exits non-zero with `preflight checks are not available with this operator version`. The rest of this section describes the command once it is enabled.
+
 Runs the operator's preflight checks client-side against a v2 `WeightsAndBiases` CR file, before you apply it. Which checks run comes from the operator's preflight registry (`github.com/wandb/operator/pkg/preflight`): each registered CR field present in the file triggers its check, so new upstream checks arrive with a dependency bump. Today only `spec.mysql.<instance>.externalMysql` is checked — it connects and authenticates with the configured host, port, database, credentials and TLS settings. A CR with no matching field prints `No preflight checks apply to this CR.`
 
 ```bash
@@ -831,18 +832,19 @@ An example CR is at `hack/preflight-example.yaml`.
 Diffs the live v1 CR against the v2 CR the conversion webhook would produce, then runs [`wsm preflight`](#wsm-preflight)'s checks against the converted v2 CR.
 
 ```bash
-wsm convert-v2 --context <kubeconfig-context> [flags]
+wsm convert-v2 [--context <kubeconfig-context>] [flags]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--context` | current context | Kubeconfig context to read the v1 CR from |
 | `--wandb-name` | `wandb` | Name of the W&B CR to convert |
 | `--wandb-namespace` | `default` | Namespace of the W&B CR to convert |
 | `-o`, `--output` | — | Output path: the diff file (unified) or the base path for the two files (split) |
 | `--strip-roundtrip` | `false` | Drop the legacy v1-chart/v1-values round-trip annotations that bloat the output |
 | `--skip-preflight` | `false` | Don't run preflight checks against the converted v2 CR |
 
-Like `wsm preflight`, it exits non-zero when a preflight check fails or is unknown; pass `--skip-preflight` to only produce the conversion.
+Like `wsm preflight`, it exits non-zero when a preflight check fails or is unknown; pass `--skip-preflight` to only produce the conversion. While preflight is [not available](#wsm-preflight), `convert-v2` skips the checks, prints a note and exits zero after writing the conversion.
 
 ## Flag Precedence
 

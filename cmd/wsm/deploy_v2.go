@@ -96,8 +96,8 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("ingress-class", "", "Enable Ingress support with the specified ingress class")
 	cmd.PersistentFlags().String("ingress-name", "", "Override the generated Ingress resource name (defaults to the CR name)")
 	cmd.PersistentFlags().String("gateway-class", "nginx", "Enable Gateway API support with the specified gateway class")
-	cmd.PersistentFlags().String("issuer-name", "", "TLS issuer name for Gateway API")
-	cmd.PersistentFlags().Bool("add-ingress-annotations", false, "Add cloud provider annotations to Ingress or Gateway API")
+	cmd.PersistentFlags().String("issuer-name", "", "cert-manager Issuer name for TLS on an https:// hostname; only used with --create-ca=false")
+	cmd.PersistentFlags().Bool("add-ingress-annotations", false, "Add AWS load-balancer annotations to the managed Gateway (Gateway API mode only; ignored in Ingress mode)")
 	cmd.PersistentFlags().String("license", "", "W&B license string (optional, injected into spec.wandb.license)")
 	cmd.PersistentFlags().String("license-file", "", "Path to W&B license file (optional, injected into spec.wandb.license)")
 	// --observability-mode is persistent: on `wandb deploy` it toggles CR telemetry.enabled,
@@ -110,8 +110,8 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.PersistentFlags().String("wandb-hostname", "http://localhost:8080", "Hostname to use for the W&B instance")
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
 	cmd.PersistentFlags().String("wandb-version", "", fmt.Sprintf("Server manifest version (defaults to %s when unset; must be >= %s; a leading v is accepted)", defaultWandbVersion, minWandbVersion))
-	cmd.PersistentFlags().String("manifest-repository", "", "OCI repository for the server manifest (e.g. oci://harbor.corp/wandb/server-manifest). Defaults to oci://<mirror>/wandb/server-manifest when --mirror-registry is set, else the operator default.")
-	cmd.PersistentFlags().String("mirror-registry", "", "Install everything (charts, operator/infra images, and the W&B app/DB images) from this air-gapped mirror registry, e.g. harbor.corp:5443. Populate it first with 'wsm registry mirror --to <same-host>'.")
+	cmd.PersistentFlags().String("manifest-repository", "", "Server manifest source: an OCI repository (e.g. oci://harbor.corp/wandb/server-manifest) or a file:// path mounted onto the operator pod. Defaults to oci://<mirror>/wandb/server-manifest when --mirror-registry is set, else the operator default.")
+	cmd.PersistentFlags().String("mirror-registry", "", "Install charts, operator/infra images, and the W&B app images from this air-gapped mirror registry, e.g. harbor.corp:5443. Managed data-plane images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) keep upstream refs and reach the mirror via each node's container-runtime registry mirror. Populate it first with 'wsm registry mirror --to <same-host>'.")
 	cmd.PersistentFlags().Bool("insecure-registry", false, "Use plain HTTP / skip TLS verification when talking to --mirror-registry")
 	cmd.PersistentFlags().String("registry-ca-file", "", "PEM CA bundle to trust for an HTTPS --mirror-registry with a self-signed / internal-CA cert")
 	cmd.PersistentFlags().String("wandb-namespace", "wandb", "Namespace for CR")
@@ -291,7 +291,6 @@ func wandbCreateCmd() *cobra.Command {
 			f := wandbCRFlagsFrom(cmd)
 			createAwsIngressClass, _ := cmd.Flags().GetBool("create-aws-ingress-class")
 			createAwsStorageClass, _ := cmd.Flags().GetBool("create-aws-storage-class")
-			wait, _ := cmd.Flags().GetBool("wait")
 
 			if err := validateObservabilityMode(f.telemetryMode); err != nil {
 				return err
@@ -331,16 +330,6 @@ func wandbCreateCmd() *cobra.Command {
 			err = deployWandbCR(ctx, f.createCA, createAwsStorageClass, createAwsIngressClass, f.ingressClass, crOverrides)
 			if err != nil {
 				return err
-			}
-
-			// Step 6: Wait for CR to be ready (if requested)
-			if wait {
-				fmt.Println("Waiting for W&B instance to be ready...")
-
-				if err := operator.WaitForCRReady(ctx, wandbCR.Namespace, wandbCR.Name, 30*time.Minute); err != nil {
-					fmt.Println(" ✗")
-					return err
-				}
 			}
 
 			return nil
@@ -385,7 +374,6 @@ func operatorDeployCmd() *cobra.Command {
 			createAwsIngressClass, _ := cmd.Flags().GetBool("create-aws-ingress-class")
 			createAwsStorageClass, _ := cmd.Flags().GetBool("create-aws-storage-class")
 			telemetryConfig := telemetryConfigFrom(cmd)
-			wait, _ := cmd.Flags().GetBool("wait")
 
 			// The CR only reconciles this run when --include-cr is set; otherwise the
 			// operator stack still installs and an unusable manifest source is a warning.
@@ -447,7 +435,6 @@ func operatorDeployCmd() *cobra.Command {
 				installKubeStateMetricsMode,
 				enableGatewayAPI,
 				includeCR,
-				wait,
 				clusterName,
 				telemetryConfig,
 				f.wandbNamespace,
@@ -476,7 +463,6 @@ func operatorDeployCmd() *cobra.Command {
 				fmt.Printf("\n✗ Operator install failed: %v\n", err)
 				return err
 			}
-
 			totalTime := time.Since(deployStart).Round(time.Second)
 			fmt.Printf("\n✓ Deployment complete! (%s total)\n\n", totalTime)
 
@@ -771,7 +757,6 @@ func performDeploy(
 	installKubeStateMetricsMode string,
 	enableGatewayAPI bool,
 	includeCR bool,
-	wait bool,
 	clusterName string,
 	telemetryConfig telemetry.Config,
 	wandbNamespace string,
@@ -1022,16 +1007,21 @@ func performDeploy(
 		return err
 	}
 
-	markers := "cert-manager,operator"
+	// Add to the marker rather than overwrite it: a re-run that skips a component
+	// (e.g. --install-nginx-gateway=false) leaves an earlier install in place, so
+	// wsm must keep owning it or cluster cleanup would strand it.
+	markers := []string{"cert-manager", "operator"}
 	if installNginxGatewayMode != nginxGatewayInstallModeFalse {
-		markers += ",nginx-gateway"
+		markers = append(markers, "nginx-gateway")
 	}
 	if ksmOwned {
-		markers += ",kube-state-metrics"
+		markers = append(markers, "kube-state-metrics")
 	}
-	if err := kubectl.CreateDeploymentMarker(ctx, "", operatorNamespace, markers); err != nil {
-		fmt.Println(" ✗")
-		return err
+	for _, component := range markers {
+		if err := kubectl.AddDeploymentMarker(ctx, operatorNamespace, component); err != nil {
+			fmt.Println(" ✗")
+			return err
+		}
 	}
 
 	fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
@@ -1048,20 +1038,6 @@ func performDeploy(
 		}
 
 		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
-		currentStep++
-
-		// Step 6: Wait for CR to be ready (if requested)
-		if wait {
-			fmt.Printf("[%d/%d] Waiting for W&B instance to be ready...", currentStep, totalSteps)
-			start = time.Now()
-
-			if err := operator.WaitForCRReady(ctx, wandbCR.Namespace, wandbCR.Name, 30*time.Minute); err != nil {
-				fmt.Println(" ✗")
-				return err
-			}
-
-			fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
-		}
 	}
 
 	return nil
@@ -2037,8 +2013,8 @@ func clusterDestroyCmd() *cobra.Command {
 	var clusterName string
 	cmd := &cobra.Command{
 		Use:   "destroy",
-		Short: "Destroy Kind cluster and cleanup",
-		Long:  `Delete the Kind cluster and cleanup resources`,
+		Short: "Destroy a wsm-managed Kind cluster",
+		Long:  `Delete a Kind cluster created by wsm. Clusters without the wsm deployment marker are refused.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			kubectl.SetContext(fmt.Sprintf("kind-%s", clusterName))
@@ -2190,60 +2166,60 @@ func performCleanup() error {
 		}
 	}
 
-	// 3. Delete cert-manager
-	fmt.Println("→ Deleting cert-manager...")
-	if _, err := operator.DeleteCertManager(ctx); err != nil {
-		fmt.Printf("  ✗ Failed to delete cert-manager: %v\n", err)
+	// 3. Delete shared infra only when a wsm marker claims it, so a cert-manager,
+	// nginx-gateway or kube-state-metrics that wsm didn't install is left in place.
+	// Each one is attempted even if an earlier one fails; cleanup then exits non-zero.
+	return errors.Join(
+		deleteSharedIfMarked(ctx, "cert-manager", operator.DeleteCertManager),
+		deleteSharedIfMarked(ctx, "nginx-gateway", operator.DeleteNginxGateway),
+		deleteSharedIfMarked(ctx, "kube-state-metrics", operator.DeleteKubeStateMetrics),
+	)
+}
+
+// deleteSharedIfMarked uninstalls a shared component and drops its markers, but
+// only when some namespace's wsm marker lists it. The markers are kept when the
+// uninstall fails, so a later cleanup still owns the release and retries it.
+func deleteSharedIfMarked(ctx context.Context, component string, uninstall func(context.Context) (bool, error)) error {
+	namespaces, err := kubectl.FindNamespacesWithMarker(ctx, component)
+	if err != nil {
+		fmt.Printf("  ✗ Failed to look up %s markers, leaving it in place: %v\n", component, err)
+		return fmt.Errorf("look up %s markers: %w", component, err)
+	}
+	if len(namespaces) == 0 {
+		fmt.Printf("! No wsm marker for %s; leaving it in place.\n", component)
+		return nil
 	}
 
-	cmNamespaces, err := kubectl.FindNamespacesWithMarker(ctx, "cert-manager")
-	if err == nil {
-		for _, ns := range cmNamespaces {
-			if err := kubectl.DeleteDeploymentMarker(ctx, ns, "cert-manager"); err != nil {
-				fmt.Printf("  ✗ Failed to remove cert-manager marker in %s: %v\n", ns, err)
-			}
+	fmt.Printf("→ Deleting %s...\n", component)
+	// uninstall reports a release that is already gone as success, so its marker
+	// is dropped in that case too.
+	if _, err := uninstall(ctx); err != nil {
+		fmt.Printf("  ✗ Failed to delete %s, keeping its marker: %v\n", component, err)
+		return fmt.Errorf("delete %s: %w", component, err)
+	}
+
+	var errs []error
+	for _, ns := range namespaces {
+		if err := kubectl.DeleteDeploymentMarker(ctx, ns, component); err != nil {
+			fmt.Printf("  ✗ Failed to remove %s marker in %s: %v\n", component, ns, err)
+			errs = append(errs, fmt.Errorf("remove %s marker in %s: %w", component, ns, err))
 		}
 	}
-
-	// 4. Delete nginx-gateway
-	fmt.Println("→ Deleting nginx-gateway...")
-	if _, err := operator.DeleteNginxGateway(ctx); err != nil {
-		fmt.Printf("  ✗ Failed to delete nginx-gateway: %v\n", err)
-	}
-
-	ngNamespaces, err := kubectl.FindNamespacesWithMarker(ctx, "nginx-gateway")
-	if err == nil {
-		for _, ns := range ngNamespaces {
-			if err := kubectl.DeleteDeploymentMarker(ctx, ns, "nginx-gateway"); err != nil {
-				fmt.Printf("  ✗ Failed to remove nginx-gateway marker in %s: %v\n", ns, err)
-			}
-		}
-	}
-
-	// Delete kube-state-metrics only when a wsm marker claims it, and skip the delete for non-marked KSM.
-	ksmNamespaces, err := kubectl.FindNamespacesWithMarker(ctx, "kube-state-metrics")
-	if err == nil && len(ksmNamespaces) > 0 {
-		fmt.Println("→ Deleting kube-state-metrics...")
-		if _, err := operator.DeleteKubeStateMetrics(ctx); err != nil {
-			fmt.Printf("  ✗ Failed to delete kube-state-metrics: %v\n", err)
-		}
-		for _, ns := range ksmNamespaces {
-			if err := kubectl.DeleteDeploymentMarker(ctx, ns, "kube-state-metrics"); err != nil {
-				fmt.Printf("  ✗ Failed to remove kube-state-metrics marker in %s: %v\n", ns, err)
-			}
-		}
-	}
-
-	return nil
+	return errors.Join(errs...)
 }
 
 func clusterCleanupCmd() *cobra.Command {
-	var kubeContext string
+	var (
+		kubeContext string
+		yes         bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "cleanup",
 		Short: "Cleanup wsm-managed resources",
-		Long:  `Delete all resources deployed by wsm, including operator and CR`,
+		Long: `Delete all resources deployed by wsm, including operator and CR.
+Shared infra (cert-manager, nginx-gateway, kube-state-metrics) is removed only
+when a wsm deployment marker claims it.`,
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if kubeContext == "" {
 				return errors.New("context is required")
@@ -2253,6 +2229,11 @@ func clusterCleanupCmd() *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			prompt := fmt.Sprintf("Delete every wsm-managed W&B CR, operator and shared component in context %q?", kubeContext)
+			if ok, err := confirm(cmd.Context(), yes, prompt); !ok || err != nil {
+				return err
+			}
+
 			if err := performCleanup(); err != nil {
 				fmt.Printf("✗ Cleanup failed: %v\n", err)
 				return err
@@ -2264,6 +2245,7 @@ func clusterCleanupCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&kubeContext, "context", "", "name of the kubeconfig context to use (Required)")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Don't ask for confirmation")
 
 	return cmd
 }

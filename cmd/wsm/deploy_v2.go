@@ -89,68 +89,11 @@ func DeployV2Cmd() *cobra.Command {
 		},
 	}
 	cmd.PersistentFlags().StringVar(&kubeContext, "context", "", "name of the kubeconfig context to use (Required)")
-	// CR deployment
-	cmd.PersistentFlags().String("cr-file", "", "Path to WeightsAndBiases CR YAML (uses built-in default if not provided)")
-	cmd.PersistentFlags().Bool("create-ca", true, "Create a self-signed CA certificate for the W&B instance")
-	cmd.PersistentFlags().Bool("create-aws-ingress-class", false, "Create an AWS Ingress Class for the W&B instance (requires --ingress-class to be set)")
-	cmd.PersistentFlags().Bool("create-aws-storage-class", false, "Create a Storage class for the W&B instance")
-	cmd.PersistentFlags().String("ingress-class", "", "Enable Ingress support with the specified ingress class")
-	cmd.PersistentFlags().String("ingress-name", "", "Override the generated Ingress resource name (defaults to the CR name)")
-	cmd.PersistentFlags().String("gateway-class", "nginx", "Enable Gateway API support with the specified gateway class")
-	cmd.PersistentFlags().String("issuer-name", "", "cert-manager Issuer name for TLS on an https:// hostname; only used with --create-ca=false")
-	cmd.PersistentFlags().Bool("add-ingress-annotations", false, "Add AWS load-balancer annotations to the managed Gateway (Gateway API mode only; ignored in Ingress mode)")
-	cmd.PersistentFlags().String("license", "", "W&B license string (optional, injected into spec.wandb.license)")
-	cmd.PersistentFlags().String("license-file", "", "Path to W&B license file (optional, injected into spec.wandb.license)")
-	// --observability-mode is persistent: on `wandb deploy` it toggles CR telemetry.enabled,
-	// on `operator` it also drives the chart. The chart-only otel/forwarding knobs below live on
-	// `operator` alone (see operatorDeployCmd) since that is the only command that applies them.
-	cmd.PersistentFlags().String("observability-mode", "off", "Enable observability for applications (off, full, forward); unset keeps per-database exporters on, off disables them")
-	cmd.PersistentFlags().String("retention-policy", "detach", "Retention policy for W&B instance (detach, purge) - defaults to detach")
-	cmd.PersistentFlags().String("size", string(defaultWandbSize), "W&B instance size (dev, micro, small, medium, large, xlarge, xxlarge)")
-	cmd.PersistentFlags().String("object-store-storage-size", "", "Override the managed object store (SeaweedFS) storage size, e.g. 20Gi. Must be < 30Gi: the operator derives SeaweedFS volumeSizeLimitMB from this and the master rejects a limit >= 30000. Leave empty to use the size preset's default.")
-	cmd.PersistentFlags().String("wandb-hostname", "http://localhost:8080", "Hostname to use for the W&B instance")
 	cmd.PersistentFlags().String("wandb-name", "wandb", "Name of the W&B instance")
-	cmd.PersistentFlags().String("wandb-version", "", fmt.Sprintf("Server manifest version (defaults to %s when unset; must be >= %s; a leading v is accepted)", defaultWandbVersion, minWandbVersion))
-	cmd.PersistentFlags().String("manifest-repository", "", "Server manifest source: an OCI repository (e.g. oci://harbor.corp/wandb/server-manifest) or a file:// path mounted onto the operator pod. Defaults to oci://<mirror>/wandb/server-manifest when --mirror-registry is set, else the operator default.")
-	cmd.PersistentFlags().String("mirror-registry", "", "Install charts, operator/infra images, and the W&B app images from this air-gapped mirror registry, e.g. harbor.corp:5443. Managed data-plane images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) keep upstream refs and reach the mirror via each node's container-runtime registry mirror. Populate it first with 'wsm registry mirror --to <same-host>'.")
-	cmd.PersistentFlags().Bool("insecure-registry", false, "Use plain HTTP / skip TLS verification when talking to --mirror-registry")
-	cmd.PersistentFlags().String("registry-ca-file", "", "PEM CA bundle to trust for an HTTPS --mirror-registry with a self-signed / internal-CA cert")
 	cmd.PersistentFlags().String("wandb-namespace", "wandb", "Namespace for CR")
-	cmd.PersistentFlags().String("oidc-client-id", "", "OIDC client ID as <secret-name>:<key> (spec.wandb.oidc.clientId; optional)")
-	cmd.PersistentFlags().String("oidc-client-secret", "", "OIDC client secret as <secret-name>:<key> (spec.wandb.oidc.clientSecret; optional)")
-	cmd.PersistentFlags().String("oidc-issuer-url", "", "OIDC issuer URL as <secret-name>:<key> (spec.wandb.oidc.issuerUrl; optional)")
-	cmd.PersistentFlags().String("oidc-auth-method", "", "OIDC auth method as <secret-name>:<key> (spec.wandb.oidc.authMethod; optional)")
-	cmd.PersistentFlags().String("oidc-session-length", "", "OIDC session length, e.g. 720h (spec.wandb.oidc.sessionLength; optional)")
-	cmd.PersistentFlags().String("image-registry", "", "Retarget container images to this registry for air-gapped installs (spec.global.imageRegistry; optional). Usually you only need --mirror-registry, which does not set spec.global.imageRegistry.")
-	_ = cmd.PersistentFlags().MarkDeprecated("image-registry", "use --mirror-registry, or --cr-set spec.global.imageRegistry=<host> for a different data-plane registry")
-	cmd.PersistentFlags().StringArray("custom-ca-cert-file", nil, "Path to a PEM CA certificate to trust in W&B workloads; repeatable (spec.global.customCACerts; optional)")
-	cmd.PersistentFlags().StringArray("image-pull-secret", nil, "Name of a dockerconfigjson Secret for private-registry image pulls; repeatable (spec.global.imagePullSecrets; optional)")
-	cmd.PersistentFlags().String("custom-ca-configmap", "", "Name of a ConfigMap holding CA certificates to trust in W&B workloads (spec.global.caCertsConfigMap; optional)")
-	cmd.PersistentFlags().Int32("objectstore-copies", 0, "Managed object store replica copies (spec.objectStore.managedObjectStore.copies; optional, operator default when unset)")
-	cmd.PersistentFlags().Bool("bucket-proxy", false, "Route object-store access through the W&B app instead of direct client access (spec.wandb.bucketProxy; optional, operator default when unset)")
-	cmd.PersistentFlags().Bool("admin-console", true, "Enable the admin console (spec.adminConsoleEnabled; disable with --admin-console=false)")
-	cmd.PersistentFlags().Bool("security-allow-user-team-creation", false, "Allow users to create teams (spec.wandb.security.allowUserTeamCreation; optional)")
-	cmd.PersistentFlags().Bool("security-disable-code-saving", false, "Disable code saving (spec.wandb.security.disableCodeSaving; optional)")
-	cmd.PersistentFlags().Bool("security-allow-anonymous-public-projects", false, "Allow anonymous access to public projects (spec.wandb.security.allowAnonymousPublicProjects; optional)")
-	cmd.PersistentFlags().Bool("security-disable-sso-provisioning", false, "Disable SSO user provisioning (spec.wandb.security.disableSSOProvisioning; optional)")
-	cmd.PersistentFlags().Bool("security-insecure-allow-apikey-admin-access", false, "Allow admin access via API key (insecure) (spec.wandb.security.insecureAllowAPIKeyAdminAccess; optional)")
-	cmd.PersistentFlags().Bool("security-hide-upgrade-banner", false, "Hide the upgrade banner (spec.wandb.security.hideUpgradeBanner; optional)")
-	cmd.PersistentFlags().Bool("artifact-gc", false, "Enable artifact garbage collection (spec.wandb.retention.artifactGarbageCollection; optional)")
-	cmd.PersistentFlags().String("data-retention-period", "", "Data retention period, e.g. 720h; units: h (hours), m (minutes), s (seconds) (spec.wandb.retention.dataRetentionPeriod; optional)")
-	cmd.PersistentFlags().String("email-sink", "", "Email notification sink URL as <secret-name>:<key>; mutually exclusive with --smtp-* (spec.wandb.notifications.email.sink; optional)")
-	cmd.PersistentFlags().String("smtp-host", "", "SMTP host (spec.wandb.notifications.email.smtp.host; optional)")
-	cmd.PersistentFlags().String("smtp-port", "", "SMTP port (spec.wandb.notifications.email.smtp.port; optional)")
-	cmd.PersistentFlags().String("smtp-username", "", "SMTP username (spec.wandb.notifications.email.smtp.username; optional)")
-	cmd.PersistentFlags().String("smtp-password", "", "SMTP password as <secret-name>:<key> (spec.wandb.notifications.email.smtp.password; optional)")
-	cmd.PersistentFlags().String("slack-client-id", "", "Slack client ID (spec.wandb.notifications.slack.clientId; optional)")
-	cmd.PersistentFlags().String("slack-client-secret", "", "Slack client secret as <secret-name>:<key> (spec.wandb.notifications.slack.clientSecret; optional)")
-	// Forward-proxy egress (spec.global.proxy).
-	cmd.PersistentFlags().String("proxy-http-url", "", "Literal HTTP_PROXY URL, no credentials (spec.global.proxy.httpProxy.value; optional)")
-	cmd.PersistentFlags().String("proxy-https-url", "", "Literal HTTPS_PROXY URL, no credentials (spec.global.proxy.httpsProxy.value; optional)")
-	cmd.PersistentFlags().String("proxy-http-secret", "", "Secret ref <name>:<key> for a credentialed HTTP_PROXY URL (spec.global.proxy.httpProxy.valueFrom; optional)")
-	cmd.PersistentFlags().String("proxy-https-secret", "", "Secret ref <name>:<key> for a credentialed HTTPS_PROXY URL (spec.global.proxy.httpsProxy.valueFrom; optional)")
-	cmd.PersistentFlags().StringArray("no-proxy", nil, "Extra NO_PROXY entry appended to the operator's in-cluster exclusions; repeatable (spec.global.proxy.noProxy; optional)")
-	cmd.PersistentFlags().StringArray("cr-set", nil, "Set an arbitrary CR field as <path>=<value>, e.g. spec.wandb.version=0.85.1; repeatable, YAML-typed, overrides the built-in template, --cr-file, and the typed flags above")
+	// Only the flags every subcommand needs are persistent; the CR-shaping flags are
+	// added by addWandbCRFlags to the two commands that build the CR.
+	setFlagGroup(cmd.PersistentFlags(), flagGroupTarget, "context", "wandb-name", "wandb-namespace")
 	// TODO readd this when the CR reports ready properly
 	//cmd.Flags().Bool("wait", false, "Wait for the W&B instance to be ready (status.ready == true)")
 
@@ -158,6 +101,93 @@ func DeployV2Cmd() *cobra.Command {
 	cmd.AddCommand(wandbCmd())
 
 	return cmd
+}
+
+// addWandbCRFlags declares the flags that shape the WeightsAndBiases CR on cmd. Only
+// `wandb deploy` and `operator` (for --include-cr) build the CR, so only they get these
+// flags; wandbCRFlagsFrom reads them back.
+func addWandbCRFlags(cmd *cobra.Command) {
+	fs := cmd.Flags()
+	fs.String("cr-file", "", "Path to WeightsAndBiases CR YAML (uses built-in default if not provided)")
+	fs.Bool("create-ca", true, "Create a self-signed CA certificate for the W&B instance")
+	fs.Bool("create-aws-ingress-class", false, "Create an AWS Ingress Class for the W&B instance (requires --ingress-class to be set)")
+	fs.Bool("create-aws-storage-class", false, "Create a Storage class for the W&B instance")
+	fs.String("ingress-class", "", "Enable Ingress support with the specified ingress class")
+	fs.String("ingress-name", "", "Override the generated Ingress resource name (defaults to the CR name)")
+	fs.String("gateway-class", "nginx", "Enable Gateway API support with the specified gateway class")
+	fs.String("issuer-name", "", "cert-manager Issuer name for TLS on an https:// hostname; only used with --create-ca=false")
+	fs.Bool("add-ingress-annotations", false, "Add AWS load-balancer annotations to the managed Gateway (Gateway API mode only; ignored in Ingress mode)")
+	fs.String("license", "", "W&B license string (optional, injected into spec.wandb.license)")
+	fs.String("license-file", "", "Path to W&B license file (optional, injected into spec.wandb.license)")
+	// --observability-mode is shared: on `wandb deploy` it toggles CR telemetry.enabled,
+	// on `operator` it also drives the chart. The chart-only otel/forwarding knobs live on
+	// `operator` alone (see operatorDeployCmd) since that is the only command that applies them.
+	fs.String("observability-mode", "off", "Enable observability for applications (off, full, forward); unset keeps per-database exporters on, off disables them")
+	fs.String("retention-policy", "detach", "Retention policy for W&B instance (detach, purge) - defaults to detach")
+	fs.String("size", string(defaultWandbSize), "W&B instance size (dev, micro, small, medium, large, xlarge, xxlarge)")
+	fs.String("object-store-storage-size", "", "Override the managed object store (SeaweedFS) storage size, e.g. 20Gi. Must be < 30Gi: the operator derives SeaweedFS volumeSizeLimitMB from this and the master rejects a limit >= 30000. Leave empty to use the size preset's default.")
+	fs.String("wandb-hostname", "http://localhost:8080", "Hostname to use for the W&B instance")
+	fs.String("wandb-version", "", fmt.Sprintf("Server manifest version (defaults to %s when unset; must be >= %s; a leading v is accepted)", defaultWandbVersion, minWandbVersion))
+	fs.String("manifest-repository", "", "Server manifest source: an OCI repository (e.g. oci://harbor.corp/wandb/server-manifest) or a file:// path mounted onto the operator pod. Defaults to oci://<mirror>/wandb/server-manifest when --mirror-registry is set, else the operator default.")
+	fs.String("mirror-registry", "", "Install charts, operator/infra images, and the W&B app images from this air-gapped mirror registry, e.g. harbor.corp:5443. Managed data-plane images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) keep upstream refs and reach the mirror via each node's container-runtime registry mirror. Populate it first with 'wsm registry mirror --to <same-host>'.")
+	fs.Bool("insecure-registry", false, "Use plain HTTP / skip TLS verification when talking to --mirror-registry")
+	fs.String("registry-ca-file", "", "PEM CA bundle to trust for an HTTPS --mirror-registry with a self-signed / internal-CA cert")
+	fs.String("oidc-client-id", "", "OIDC client ID as <secret-name>:<key> (spec.wandb.oidc.clientId; optional)")
+	fs.String("oidc-client-secret", "", "OIDC client secret as <secret-name>:<key> (spec.wandb.oidc.clientSecret; optional)")
+	fs.String("oidc-issuer-url", "", "OIDC issuer URL as <secret-name>:<key> (spec.wandb.oidc.issuerUrl; optional)")
+	fs.String("oidc-auth-method", "", "OIDC auth method as <secret-name>:<key> (spec.wandb.oidc.authMethod; optional)")
+	fs.String("oidc-session-length", "", "OIDC session length, e.g. 720h (spec.wandb.oidc.sessionLength; optional)")
+	fs.String("image-registry", "", "Retarget container images to this registry for air-gapped installs (spec.global.imageRegistry; optional). Usually you only need --mirror-registry, which does not set spec.global.imageRegistry.")
+	_ = fs.MarkDeprecated("image-registry", "use --mirror-registry, or --cr-set spec.global.imageRegistry=<host> for a different data-plane registry")
+	fs.StringArray("custom-ca-cert-file", nil, "Path to a PEM CA certificate to trust in W&B workloads; repeatable (spec.global.customCACerts; optional)")
+	fs.StringArray("image-pull-secret", nil, "Name of a dockerconfigjson Secret for private-registry image pulls; repeatable (spec.global.imagePullSecrets; optional)")
+	fs.String("custom-ca-configmap", "", "Name of a ConfigMap holding CA certificates to trust in W&B workloads (spec.global.caCertsConfigMap; optional)")
+	fs.Int32("objectstore-copies", 0, "Managed object store replica copies (spec.objectStore.managedObjectStore.copies; optional, operator default when unset)")
+	fs.Bool("bucket-proxy", false, "Route object-store access through the W&B app instead of direct client access (spec.wandb.bucketProxy; optional, operator default when unset)")
+	fs.Bool("admin-console", true, "Enable the admin console (spec.adminConsoleEnabled; disable with --admin-console=false)")
+	fs.Bool("security-allow-user-team-creation", false, "Allow users to create teams (spec.wandb.security.allowUserTeamCreation; optional)")
+	fs.Bool("security-disable-code-saving", false, "Disable code saving (spec.wandb.security.disableCodeSaving; optional)")
+	fs.Bool("security-allow-anonymous-public-projects", false, "Allow anonymous access to public projects (spec.wandb.security.allowAnonymousPublicProjects; optional)")
+	fs.Bool("security-disable-sso-provisioning", false, "Disable SSO user provisioning (spec.wandb.security.disableSSOProvisioning; optional)")
+	fs.Bool("security-insecure-allow-apikey-admin-access", false, "Allow admin access via API key (insecure) (spec.wandb.security.insecureAllowAPIKeyAdminAccess; optional)")
+	fs.Bool("security-hide-upgrade-banner", false, "Hide the upgrade banner (spec.wandb.security.hideUpgradeBanner; optional)")
+	fs.Bool("artifact-gc", false, "Enable artifact garbage collection (spec.wandb.retention.artifactGarbageCollection; optional)")
+	fs.String("data-retention-period", "", "Data retention period, e.g. 720h; units: h (hours), m (minutes), s (seconds) (spec.wandb.retention.dataRetentionPeriod; optional)")
+	fs.String("email-sink", "", "Email notification sink URL as <secret-name>:<key>; mutually exclusive with --smtp-* (spec.wandb.notifications.email.sink; optional)")
+	fs.String("smtp-host", "", "SMTP host (spec.wandb.notifications.email.smtp.host; optional)")
+	fs.String("smtp-port", "", "SMTP port (spec.wandb.notifications.email.smtp.port; optional)")
+	fs.String("smtp-username", "", "SMTP username (spec.wandb.notifications.email.smtp.username; optional)")
+	fs.String("smtp-password", "", "SMTP password as <secret-name>:<key> (spec.wandb.notifications.email.smtp.password; optional)")
+	fs.String("slack-client-id", "", "Slack client ID (spec.wandb.notifications.slack.clientId; optional)")
+	fs.String("slack-client-secret", "", "Slack client secret as <secret-name>:<key> (spec.wandb.notifications.slack.clientSecret; optional)")
+	// Forward-proxy egress (spec.global.proxy).
+	fs.String("proxy-http-url", "", "Literal HTTP_PROXY URL, no credentials (spec.global.proxy.httpProxy.value; optional)")
+	fs.String("proxy-https-url", "", "Literal HTTPS_PROXY URL, no credentials (spec.global.proxy.httpsProxy.value; optional)")
+	fs.String("proxy-http-secret", "", "Secret ref <name>:<key> for a credentialed HTTP_PROXY URL (spec.global.proxy.httpProxy.valueFrom; optional)")
+	fs.String("proxy-https-secret", "", "Secret ref <name>:<key> for a credentialed HTTPS_PROXY URL (spec.global.proxy.httpsProxy.valueFrom; optional)")
+	fs.StringArray("no-proxy", nil, "Extra NO_PROXY entry appended to the operator's in-cluster exclusions; repeatable (spec.global.proxy.noProxy; optional)")
+	fs.StringArray("cr-set", nil, "Set an arbitrary CR field as <path>=<value>, e.g. spec.wandb.version=0.85.1; repeatable, YAML-typed, overrides the built-in template, --cr-file, and the typed flags above")
+
+	setFlagGroup(fs, flagGroupInstance, "wandb-version", "wandb-hostname", "size", "license", "license-file", "retention-policy", "admin-console")
+	setFlagGroup(fs, flagGroupNetworking, "gateway-class", "ingress-class", "ingress-name", "add-ingress-annotations", "create-aws-ingress-class", "create-ca", "issuer-name", "custom-ca-cert-file", "custom-ca-configmap")
+	setFlagGroup(fs, flagGroupAirgap, "mirror-registry", "insecure-registry", "registry-ca-file", "manifest-repository", "image-pull-secret")
+	setFlagGroup(fs, flagGroupStorage, "object-store-storage-size", "objectstore-copies", "bucket-proxy", "create-aws-storage-class")
+	setFlagGroup(fs, flagGroupOIDC, "oidc-client-id", "oidc-client-secret", "oidc-issuer-url", "oidc-auth-method", "oidc-session-length")
+	setFlagGroup(fs, flagGroupSecurity, "security-allow-user-team-creation", "security-disable-code-saving", "security-allow-anonymous-public-projects", "security-disable-sso-provisioning", "security-insecure-allow-apikey-admin-access", "security-hide-upgrade-banner", "artifact-gc", "data-retention-period")
+	setFlagGroup(fs, flagGroupNotifications, "email-sink", "smtp-host", "smtp-port", "smtp-username", "smtp-password", "slack-client-id", "slack-client-secret")
+	setFlagGroup(fs, flagGroupProxy, "proxy-http-url", "proxy-https-url", "proxy-http-secret", "proxy-https-secret", "no-proxy")
+	setFlagGroup(fs, flagGroupObservability, "observability-mode")
+	setFlagGroup(fs, flagGroupAdvanced, "cr-file", "cr-set")
+
+	// Only exclusivity is declared here. SMTP and Slack values can be completed by
+	// --cr-file, so "required together" rules would reject valid installs; the
+	// merge in operator.MergeNotifications checks completeness instead.
+	cmd.MarkFlagsMutuallyExclusive("license", "license-file")
+	for _, smtp := range []string{"smtp-host", "smtp-port", "smtp-username", "smtp-password"} {
+		cmd.MarkFlagsMutuallyExclusive("email-sink", smtp)
+	}
+	cmd.MarkFlagsMutuallyExclusive("proxy-http-url", "proxy-http-secret")
+	cmd.MarkFlagsMutuallyExclusive("proxy-https-url", "proxy-https-secret")
 }
 
 func wandbCmd() *cobra.Command {
@@ -299,6 +329,9 @@ func wandbCreateCmd() *cobra.Command {
 			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), f.gatewayClass, f.ingressClass); err != nil {
 				return err
 			}
+			if err := validateCRFlagDependencies(f, createAwsIngressClass); err != nil {
+				return err
+			}
 			crOverrides, err := operator.ParseCROverrides(f.crSet)
 			if err != nil {
 				return err
@@ -337,6 +370,7 @@ func wandbCreateCmd() *cobra.Command {
 		},
 	}
 
+	addWandbCRFlags(cmd)
 	return cmd
 }
 
@@ -364,7 +398,12 @@ func operatorDeployCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "operator",
 		Short: "Deploy the v2 operator",
-		Long:  `Deploy the v2 operator with specified versions and configuration`,
+		Long: `Deploy the v2 operator with specified versions and configuration.
+
+The W&B instance flags (W&B instance through Egress proxy, plus the raw CR
+overrides) only take effect with --include-cr; without it, deploy the instance
+afterwards with 'wsm deploy-v2 wandb deploy'. The air-gapped and observability
+flags also configure the operator install itself.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// By default (--include-cr=false) this phase installs only the operator
 			// stack (cert-manager, nginx-gateway, the wandb-operator + the
@@ -392,6 +431,9 @@ func operatorDeployCmd() *cobra.Command {
 				return fmt.Errorf("--observability-mode=forward requires --observability-forward-endpoint")
 			}
 			if err := validateNetworkingFlags(cmd.Flags().Changed("gateway-class"), f.gatewayClass, f.ingressClass); err != nil {
+				return err
+			}
+			if err := validateCRFlagDependencies(f, createAwsIngressClass); err != nil {
 				return err
 			}
 			operatorPullPolicy, err := operator.ParseImagePullPolicy(operatorImagePullPolicy)
@@ -514,6 +556,14 @@ func operatorDeployCmd() *cobra.Command {
 	cmd.Flags().String("observability-otel-resource-attributes", "", "Additional OTEL resource attributes, comma-separated key=value (telemetry.otel.resourceAttributes; chart default if unset)")
 	cmd.Flags().String("observability-forward-protocol", "", "OTLP forwarding protocol, e.g. http/protobuf or grpc (telemetry.forwarding.otlp.protocol; only applied when --observability-mode=forward)")
 	cmd.Flags().StringToString("observability-forward-headers", nil, "OTLP forwarding headers as key=value pairs, e.g. Authorization=Bearer... (telemetry.forwarding.otlp.headers; only applied when --observability-mode=forward)")
+
+	addWandbCRFlags(cmd)
+	fs := cmd.Flags()
+	setFlagGroup(fs, flagGroupOperator, "operator-chart-version", "operator-namespace", "operator-install-timeout", "operator-image-pull-policy", "include-cr", "allow-unsupported-arch", "openshift")
+	setFlagGroup(fs, flagGroupSharedInfra, "install-cert-manager", "install-nginx-gateway", "install-kube-state-metrics", "enable-gateway-api", "gateway-api-crd-url", "skip-gateway-api-crds")
+	setFlagGroup(fs, flagGroupKind, "setup-k8s-cluster", "cluster-name", "workers", "kind-node-image")
+	setFlagGroup(fs, flagGroupObservability, "observability-forward-endpoint", "observability-otel-secret", "observability-otel-protocol", "observability-otel-service-name", "observability-otel-resource-attributes", "observability-forward-protocol", "observability-forward-headers")
+	setFlagGroup(fs, flagGroupWatchtower, "watchtower-enable-secret-writes", "watchtower-enable-db-admin")
 
 	cmd.AddCommand(operatorOpenShiftStatusCmd())
 	cmd.AddCommand(operatorKubeStateMetricsStatusCmd())
@@ -1427,8 +1477,8 @@ type wandbCRFlags struct {
 	crSet []string
 }
 
-// wandbCRFlagsFrom reads the CR-shaping flags off cmd. Flags are declared on the
-// shared persistent flag set, so both subcommands see the same names.
+// wandbCRFlagsFrom reads the CR-shaping flags off cmd. Both subcommands declare
+// them through addWandbCRFlags, so they see the same names.
 func wandbCRFlagsFrom(cmd *cobra.Command) wandbCRFlags {
 	str := func(name string) string { v, _ := cmd.Flags().GetString(name); return v }
 	boolean := func(name string) bool { v, _ := cmd.Flags().GetBool(name); return v }

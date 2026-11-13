@@ -71,3 +71,15 @@ func validateNetworkingFlags(gatewayClassChanged bool, gatewayClass, ingressClas
 	}
 	return nil
 }
+
+// Rejects flag combinations where one flag would be silently ignored. These depend on
+// flag values, so Cobra's MarkFlags* helpers (see addWandbCRFlags) can't express them.
+func validateCRFlagDependencies(f wandbCRFlags, createAwsIngressClass bool) error {
+	if createAwsIngressClass && f.ingressClass == "" {
+		return fmt.Errorf("--create-aws-ingress-class requires --ingress-class")
+	}
+	if f.issuerName != "" && f.createCA {
+		return fmt.Errorf("--issuer-name requires --create-ca=false (with the default --create-ca=true, wsm creates its own CA issuer and ignores --issuer-name)")
+	}
+	return nil
+}

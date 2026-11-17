@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -93,10 +93,8 @@ func PreflightCmd() *cobra.Command {
 	return cmd
 }
 
-var errPreflightDeclined = errors.New("preflight aborted: checks that create resources were not confirmed; no checks were run")
-
 // runPreflight lists the checks found and, before running anything, asks once
-// for all checks that create resources. Declining aborts the whole run.
+// for all checks that create resources. Declining still runs local checks
 func runPreflight(ctx context.Context, cr *unstructured.Unstructured, opts preflight.ExecOptions) ([]preflight.CheckRun, error) {
 	plan := preflight.PlanChecks(cr)
 	printPreflightPlan(plan, opts)
@@ -106,8 +104,14 @@ func runPreflight(ctx context.Context, cr *unstructured.Unstructured, opts prefl
 		for _, c := range needs {
 			fmt.Printf("  %s (%s)\n", c.Name, joinResourceReqs(c.ResourceReqs))
 		}
-		if !confirmOnStdin("Run them?") {
-			return nil, errPreflightDeclined
+		if !confirmOnStdin("Run them? (If no, these will be skipped, all others will still run") {
+			declined := make(map[string]bool, len(needs))
+			for _, c := range needs {
+				declined[c.Name] = true
+			}
+			plan = slices.DeleteFunc(plan, func(p preflight.PlannedRun) bool {
+				return declined[p.Check.Name]
+			})
 		}
 		fmt.Println()
 	}

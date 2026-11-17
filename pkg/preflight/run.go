@@ -9,20 +9,21 @@ import (
 	"strings"
 
 	v2 "github.com/wandb/operator/api/v2"
-	operatorPreflight "github.com/wandb/operator/pkg/preflight"
+	preflight "github.com/wandb/operator/pkg/preflight"
 	"github.com/wandb/operator/pkg/wandb/manifest"
 	"github.com/wandb/wsm/pkg/kubectl"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes"
 	"oras.land/oras-go/v2/registry/remote/credentials"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	sigsyaml "sigs.k8s.io/yaml"
 )
 
 // CheckRun is one registered check run against one CR field it matched.
 type CheckRun struct {
 	FieldPath string
-	Result    operatorPreflight.Result
+	Result    preflight.Result
 }
 
 // ReadCR parses CR YAML and requires apps.wandb.com/v2. Callers reading from a
@@ -41,7 +42,7 @@ func ReadCR(data []byte) (*unstructured.Unstructured, error) {
 
 // PlannedRun is a registered check matched to one CR field, before it runs.
 type PlannedRun struct {
-	Check     operatorPreflight.Check
+	Check     preflight.Check
 	FieldPath string
 	value     any
 }
@@ -51,7 +52,7 @@ type ExecOptions struct {
 	// Resolve resolves ValueOrSecret fields. Nil reads Secrets from the CR's
 	// metadata.namespace via wsm's kubectl client, or rejects Secret references
 	// when Offline is set.
-	Resolve operatorPreflight.ValueResolver
+	Resolve preflight.ValueResolver
 	// Offline skips TypeCluster checks and never reads Secrets, so the cluster is
 	// never contacted. Static and connection checks still run from this machine.
 	Offline bool
@@ -70,15 +71,15 @@ type ExecOptions struct {
 // running any, so new upstream checks land on `go get` and callers can show users
 // what will run before anything touches the cluster.
 func PlanChecks(cr *unstructured.Unstructured) []PlannedRun {
-	names := make([]string, 0, len(operatorPreflight.Checks))
-	for name := range operatorPreflight.Checks {
+	names := make([]string, 0, len(preflight.Checks))
+	for name := range preflight.Checks {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
 	var plan []PlannedRun
 	for _, name := range names {
-		check := operatorPreflight.Checks[name]
+		check := preflight.Checks[name]
 		for _, m := range matchCRField(cr.Object, strings.Split(check.CRField, "."), "") {
 			plan = append(plan, PlannedRun{Check: check, FieldPath: m.path, value: m.value})
 		}
@@ -87,16 +88,16 @@ func PlanChecks(cr *unstructured.Unstructured) []PlannedRun {
 }
 
 // NeedsConfirmation reports whether wsm must ask the user before running a check.
-func NeedsConfirmation(c operatorPreflight.Check) bool {
-	return c.Requires(operatorPreflight.ReqResourceCreate)
+func NeedsConfirmation(c preflight.Check) bool {
+	return c.Requires(preflight.ReqResourceCreate)
 }
 
 // RequiringConfirmation returns the distinct checks in plan that would run under
 // opts and need confirmation, in plan order.
-func RequiringConfirmation(cr *unstructured.Unstructured, plan []PlannedRun, opts ExecOptions) []operatorPreflight.Check {
+func RequiringConfirmation(cr *unstructured.Unstructured, plan []PlannedRun, opts ExecOptions) []preflight.Check {
 	skip := skipList(cr)
 	seen := map[string]bool{}
-	var out []operatorPreflight.Check
+	var out []preflight.Check
 	for _, p := range plan {
 		if seen[p.Check.Name] || skip[p.Check.Name] || !willRun(p.Check, opts) || !NeedsConfirmation(p.Check) {
 			continue
@@ -107,15 +108,15 @@ func RequiringConfirmation(cr *unstructured.Unstructured, plan []PlannedRun, opt
 	return out
 }
 
-func willRun(c operatorPreflight.Check, opts ExecOptions) bool {
-	return !opts.Offline || c.Type != operatorPreflight.TypeCluster
+func willRun(c preflight.Check, opts ExecOptions) bool {
+	return !opts.Offline || c.Type != preflight.TypeCluster
 }
 
 // plansClusterCheck avoids discovery (and a cluster connection) when no cluster
 // check will run.
 func plansClusterCheck(plan []PlannedRun, opts ExecOptions) bool {
 	for _, p := range plan {
-		if p.Check.Type == operatorPreflight.TypeCluster && willRun(p.Check, opts) {
+		if p.Check.Type == preflight.TypeCluster && willRun(p.Check, opts) {
 			return true
 		}
 	}
@@ -133,7 +134,7 @@ func ExecuteChecks(ctx context.Context, cr *unstructured.Unstructured, plan []Pl
 	default:
 		resolve = SecretResolver(cr.GetNamespace())
 	}
-	env := operatorPreflight.Env{
+	env := preflight.Env{
 		Resolve:         resolve,
 		Mapper:          opts.Mapper,
 		OperatorVersion: opts.OperatorVersion,
@@ -145,6 +146,17 @@ func ExecuteChecks(ctx context.Context, cr *unstructured.Unstructured, plan []Pl
 			env.Mapper = m
 		}
 	}
+	if plansClusterCheck(plan, opts) {
+		// Left nil on error: checks that read objects then report skipped instead of aborting the run.
+		if cfg, err := kubectl.GetConfig(); err == nil {
+			if c, err := client.New(cfg, client.Options{}); err == nil {
+				env.Reader = c
+				// Safe to hand out: runPreflight already got confirmation for resourceCreate checks.
+				env.Client = c
+			}
+		}
+	}
+	env.Namespace = cr.GetNamespace()
 	skip := skipList(cr)
 
 	runs := make([]CheckRun, 0, len(plan))
@@ -153,11 +165,11 @@ func ExecuteChecks(ctx context.Context, cr *unstructured.Unstructured, plan []Pl
 		run := CheckRun{FieldPath: p.FieldPath}
 		switch spec := p.Check.NewSpec(); {
 		case skip[name]:
-			run.Result = operatorPreflight.Result{Check: name, Outcome: operatorPreflight.OutcomeSkipped}
+			run.Result = preflight.Result{Check: name, Outcome: preflight.OutcomeSkipped}
 		case !willRun(p.Check, opts):
-			run.Result = operatorPreflight.Result{Check: name, Outcome: operatorPreflight.OutcomeSkipped, Message: fmt.Sprintf("%s check not run offline", p.Check.Type)}
+			run.Result = preflight.Result{Check: name, Outcome: preflight.OutcomeSkipped, Message: fmt.Sprintf("%s check not run offline", p.Check.Type)}
 		case decodeInto(p.value, spec) != nil:
-			run.Result = operatorPreflight.Result{Check: name, Outcome: operatorPreflight.OutcomeUnknown, Message: fmt.Sprintf("cannot decode %s", p.FieldPath)}
+			run.Result = preflight.Result{Check: name, Outcome: preflight.OutcomeUnknown, Message: fmt.Sprintf("cannot decode %s", p.FieldPath)}
 		default:
 			run.Result = p.Check.Run(ctx, spec, env)
 		}
@@ -167,7 +179,7 @@ func ExecuteChecks(ctx context.Context, cr *unstructured.Unstructured, plan []Pl
 }
 
 // RunChecks plans and runs every matching check without confirmation.
-func RunChecks(ctx context.Context, cr *unstructured.Unstructured, resolve operatorPreflight.ValueResolver) []CheckRun {
+func RunChecks(ctx context.Context, cr *unstructured.Unstructured, resolve preflight.ValueResolver) []CheckRun {
 	return ExecuteChecks(ctx, cr, PlanChecks(cr), ExecOptions{Resolve: resolve})
 }
 
@@ -178,7 +190,7 @@ func offlineResolver(_ context.Context, v v2.ValueOrSecret) (string, error) {
 		return v.Value, nil
 	}
 	if ref := v.SecretKeyRef(); ref != nil {
-		return "", fmt.Errorf("secret %s is not read offline: %w", ref.Name, operatorPreflight.ErrSecretUnavailable)
+		return "", fmt.Errorf("secret %s is not read offline: %w", ref.Name, preflight.ErrSecretUnavailable)
 	}
 	return "", nil
 }
@@ -199,15 +211,15 @@ func DockerRegistryAuth() *manifest.RegistryAuth {
 // and an unset field resolves to "" so the check decides whether it's required.
 // Checks never read Secrets themselves; they only call the resolver they're
 // handed, so new checks reuse this unchanged.
-func SecretResolver(namespace string) operatorPreflight.ValueResolver {
+func SecretResolver(namespace string) preflight.ValueResolver {
 	return resolverFor(namespace, kubectl.NewSecretReader(namespace))
 }
 
-func SecretResolverWithClient(namespace string, cs kubernetes.Interface) operatorPreflight.ValueResolver {
+func SecretResolverWithClient(namespace string, cs kubernetes.Interface) preflight.ValueResolver {
 	return resolverFor(namespace, kubectl.NewSecretReaderWithClient(namespace, cs))
 }
 
-func resolverFor(namespace string, secrets *kubectl.SecretReader) operatorPreflight.ValueResolver {
+func resolverFor(namespace string, secrets *kubectl.SecretReader) preflight.ValueResolver {
 	return func(ctx context.Context, v v2.ValueOrSecret) (string, error) {
 		if v.Value != "" {
 			return v.Value, nil
@@ -229,9 +241,9 @@ func Err(runs []CheckRun) error {
 	for _, r := range runs {
 		label := r.Result.Check + " (" + r.FieldPath + ")"
 		switch r.Result.Outcome {
-		case operatorPreflight.OutcomeFail:
+		case preflight.OutcomeFail:
 			failed = append(failed, label)
-		case operatorPreflight.OutcomeUnknown:
+		case preflight.OutcomeUnknown:
 			inconclusive = append(inconclusive, label)
 		}
 	}
@@ -300,5 +312,5 @@ func decodeInto(value, spec any) error {
 // RequiringConfirmation and ExecuteChecks use it so a skipped check is never
 // confirmed nor run.
 func skipList(cr *unstructured.Unstructured) map[string]bool {
-	return operatorPreflight.ParseSkipList(cr.GetAnnotations()[operatorPreflight.SkipPreflightsAnnotation])
+	return preflight.ParseSkipList(cr.GetAnnotations()[preflight.SkipPreflightsAnnotation])
 }

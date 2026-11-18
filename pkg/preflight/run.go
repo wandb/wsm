@@ -65,6 +65,10 @@ type ExecOptions struct {
 	// RegistryAuth pulls the server manifest from a private registry; nil pulls
 	// anonymously.
 	RegistryAuth *manifest.RegistryAuth
+	// Client reads cluster objects for TypeCluster checks and creates probe pods.
+	// Set it to pin the run to one cluster; nil builds one from wsm's kubectl
+	// config, i.e. whatever context wsm currently targets.
+	Client client.Client
 }
 
 // PlanChecks lists every registered check whose CRField is present in cr without
@@ -140,13 +144,22 @@ func ExecuteChecks(ctx context.Context, cr *unstructured.Unstructured, plan []Pl
 		OperatorVersion: opts.OperatorVersion,
 		RegistryAuth:    opts.RegistryAuth,
 	}
-	if env.Mapper == nil && plansClusterCheck(plan, opts) {
-		// Left nil on error: cluster checks then report unknown instead of aborting the run.
-		if m, err := kubectl.RefreshRESTMapper(); err == nil {
-			env.Mapper = m
+	switch {
+	case opts.Client != nil:
+		env.Reader = opts.Client
+		// Only reachable for resourceCreate checks the caller kept in the plan,
+		// i.e. ones the user confirmed.
+		env.Client = opts.Client
+		if env.Mapper == nil {
+			env.Mapper = opts.Client.RESTMapper()
 		}
-	}
-	if plansClusterCheck(plan, opts) {
+	case plansClusterCheck(plan, opts):
+		// Left nil on error: cluster checks then report unknown instead of aborting the run.
+		if env.Mapper == nil {
+			if m, err := kubectl.RefreshRESTMapper(); err == nil {
+				env.Mapper = m
+			}
+		}
 		// Left nil on error: checks that read objects then report skipped instead of aborting the run.
 		if cfg, err := kubectl.GetConfig(); err == nil {
 			if c, err := client.New(cfg, client.Options{}); err == nil {

@@ -23,7 +23,7 @@ on:
 jobs:
   tag:
     if: github.event.pull_request.merged == true && github.repository_owner == 'wandb'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LIGHT || 'ubuntu-latest' }}
     permissions:
       contents: write # push the tag
     outputs:

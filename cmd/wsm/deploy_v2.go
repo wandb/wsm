@@ -918,6 +918,11 @@ func performDeploy(
 		}
 
 		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
+		if installNginxGatewayMode == nginxGatewayInstallModeAuto {
+			if installed, err := operator.InstalledNginxGatewayVersion(ctx); err == nil && operator.NginxGatewayOutdated(installed) {
+				fmt.Printf("  ! Reused existing nginx-gateway-fabric %s; wsm pins %s. Rerun with --install-nginx-gateway true to upgrade it.\n", installed, operator.NginxGatewayVersion)
+			}
+		}
 		currentStep++
 	}
 

@@ -217,6 +217,17 @@ func IsConnectedToCluster() bool {
 }
 
 func ApplyYAML(ctx context.Context, yamlContent []byte) error {
+	return applyYAML(ctx, yamlContent, false)
+}
+
+// ApplyYAMLForce is ApplyYAML with server-side apply conflicts forced, taking
+// ownership of fields another manager (e.g. Helm or kubectl) set. Use it to
+// upgrade CRDs that wsm did not originally install.
+func ApplyYAMLForce(ctx context.Context, yamlContent []byte) error {
+	return applyYAML(ctx, yamlContent, true)
+}
+
+func applyYAML(ctx context.Context, yamlContent []byte, force bool) error {
 	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(yamlContent), 4096)
 	for {
 		obj := &unstructured.Unstructured{}
@@ -231,7 +242,7 @@ func ApplyYAML(ctx context.Context, yamlContent []byte) error {
 			continue
 		}
 
-		if err := ApplyUnstructured(ctx, obj); err != nil {
+		if err := applyUnstructured(ctx, obj, force); err != nil {
 			return err
 		}
 	}
@@ -307,6 +318,10 @@ func DeleteYAML(ctx context.Context, yamlContent []byte) error {
 }
 
 func ApplyUnstructured(ctx context.Context, obj *unstructured.Unstructured) error {
+	return applyUnstructured(ctx, obj, false)
+}
+
+func applyUnstructured(ctx context.Context, obj *unstructured.Unstructured, force bool) error {
 	_, dyn, err := GetDynamicClientset()
 	if err != nil {
 		return err
@@ -344,6 +359,7 @@ func ApplyUnstructured(ctx context.Context, obj *unstructured.Unstructured) erro
 
 	_, err = dr.Patch(ctx, obj.GetName(), types.ApplyPatchType, data, metav1.PatchOptions{
 		FieldManager: "wsm",
+		Force:        &force,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to apply object %s %s/%s: %w", gvk, obj.GetNamespace(), obj.GetName(), err)

@@ -47,6 +47,32 @@ wsm deploy-v2 operator \
   --operator-chart-version 2.0.0-beta.10
 ```
 
+### Upgrade nginx-gateway-fabric
+
+By default (`--install-nginx-gateway auto`) `wsm deploy-v2 operator` reuses an existing nginx-gateway-fabric install and does **not** upgrade it; it prints a warning when the running version is older than the one wsm pins (2.9.0). To upgrade, rerun with `--install-nginx-gateway true`:
+
+```bash
+wsm deploy-v2 operator \
+  --context <ctx> \
+  --operator-chart-version 2.0.0-beta.10 \
+  --install-nginx-gateway true
+```
+
+This upgrades, in order:
+
+1. **Gateway API CRDs** to v1.7.0 (standard channel), if older ones are installed. With `--skip-gateway-api-crds`, or if the cluster runs the experimental channel, wsm stops instead; apply the v1.7.0 CRDs yourself, then rerun.
+2. **nginx-gateway-fabric CRDs** from the new chart (Helm does not upgrade `crds/` on its own).
+3. **The `nginx-gateway` Helm release** to 2.9.0. Data-plane pods for each Gateway roll to the new NGINX image; the Gateway's Service and its load balancer are kept.
+
+nginx-gateway-fabric 2.9.0 requires Kubernetes 1.32 or later. For air-gapped clusters, run `wsm registry mirror` from the new wsm first so the 2.9.0 chart and images are in your mirror, and pass the same `--mirror-registry` flags you installed with.
+
+Verify the running images:
+
+```bash
+kubectl get deploy -n nginx-gateway nginx-gateway-nginx-gateway-fabric -o jsonpath='{.spec.template.spec.containers[0].image}'
+kubectl get pods -A -l app.kubernetes.io/name=nginx-gateway-fabric -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\t"}{.status.containerStatuses[*].imageID}{"\n"}{end}'
+```
+
 ### Upgrade W&B Version
 
 Use `wsm set-version`. It changes only `spec.wandb.version` on the live CR, refuses downgrades, shows the change and asks for confirmation:

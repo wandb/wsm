@@ -61,7 +61,7 @@ application image into your registry.
 ```bash
 wsm cluster create --cluster-name wandb --insecure-registry-host $REG
 
-kubectl --context kind-wandb apply -f  https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml
+kubectl --context kind-wandb apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.7.0/standard-install.yaml
 
 wsm deploy-v2 operator --context kind-wandb --mirror-registry $REG --insecure-registry --skip-gateway-api-crds
 ```

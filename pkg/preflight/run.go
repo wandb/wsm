@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -130,6 +131,8 @@ func plansClusterCheck(plan []PlannedRun, opts ExecOptions) bool {
 // ExecuteChecks runs a plan from PlanChecks. Confirmation is the caller's job:
 // ExecuteChecks runs every check opts allows.
 func ExecuteChecks(ctx context.Context, cr *unstructured.Unstructured, plan []PlannedRun, opts ExecOptions) []CheckRun {
+	plan = orderByDependsOn(plan)
+	passed := map[string]bool{}
 	resolve := opts.Resolve
 	switch {
 	case resolve != nil:
@@ -179,6 +182,8 @@ func ExecuteChecks(ctx context.Context, cr *unstructured.Unstructured, plan []Pl
 		switch spec := p.Check.NewSpec(); {
 		case skip[name]:
 			run.Result = preflight.Result{Check: name, Outcome: preflight.OutcomeSkipped}
+		case unmetDependency(p.Check, passed) != "":
+			run.Result = preflight.Result{Check: name, Outcome: preflight.OutcomeSkipped, Message: "requires " + unmetDependency(p.Check, passed) + " to pass"}
 		case !willRun(p.Check, opts):
 			run.Result = preflight.Result{Check: name, Outcome: preflight.OutcomeSkipped, Message: fmt.Sprintf("%s check not run offline", p.Check.Type)}
 		case decodeInto(p.value, spec) != nil:
@@ -187,13 +192,20 @@ func ExecuteChecks(ctx context.Context, cr *unstructured.Unstructured, plan []Pl
 			run.Result = p.Check.Run(ctx, spec, env)
 		}
 		runs = append(runs, run)
+		prev, seen := passed[name]
+		passed[name] = (!seen || prev) && run.Result.Outcome == preflight.OutcomePass
 	}
+	collapse(runs)
 	return runs
 }
 
-// RunChecks plans and runs every matching check without confirmation.
+// RunChecks plans and runs every matching check that doesn't create resources. It never asks for confirmation, so
+// checks that would (e.g. a probe pod) are left out of the plan: an unprompted run, including `go test` against
+// whatever kubeconfig is current, must never create anything in a cluster. To run them, confirm with the user,
+// then call ExecuteChecks.
 func RunChecks(ctx context.Context, cr *unstructured.Unstructured, resolve preflight.ValueResolver) []CheckRun {
-	return ExecuteChecks(ctx, cr, PlanChecks(cr), ExecOptions{Resolve: resolve})
+	plan := slices.DeleteFunc(PlanChecks(cr), func(p PlannedRun) bool { return NeedsConfirmation(p.Check) })
+	return ExecuteChecks(ctx, cr, plan, ExecOptions{Resolve: resolve})
 }
 
 // offlineResolver keeps checks off the cluster: literals resolve, and a Secret
@@ -326,4 +338,72 @@ func decodeInto(value, spec any) error {
 // confirmed nor run.
 func skipList(cr *unstructured.Unstructured) map[string]bool {
 	return preflight.ParseSkipList(cr.GetAnnotations()[preflight.SkipPreflightsAnnotation])
+}
+
+// collapse lets a passing check stand in for an unreachable failure of a check it covers on the same FieldPath.
+// A rejected failure (wrong password, missing database) stays a failure: the covering check can't vouch for it.
+func collapse(runs []CheckRun) {
+	idx := make(map[string]int, len(runs))
+	for i, r := range runs {
+		idx[r.Result.Check+"\x00"+r.FieldPath] = i
+	}
+	for _, r := range runs {
+		if r.Result.Outcome != preflight.OutcomePass {
+			continue
+		}
+		for _, name := range preflight.Checks[r.Result.Check].Covers {
+			i, ok := idx[name+"\x00"+r.FieldPath]
+			if !ok {
+				continue
+			}
+			c := &runs[i].Result
+			if c.Outcome != preflight.OutcomeFail || c.Failure != preflight.FailureUnreachable {
+				continue
+			}
+			c.Outcome = preflight.OutcomeSkipped
+			c.CoveredBy = r.Result.Check
+			c.Message = "not reachable from this machine: " + c.Message
+		}
+	}
+}
+
+// unmetDependency names the first prerequisite that ran and didn't pass. A prerequisite that never matched the CR
+// doesn't block: there's nothing it could have reported.
+func unmetDependency(c preflight.Check, passed map[string]bool) string {
+	for _, d := range c.DependsOn {
+		if ok, ran := passed[d]; ran && !ok {
+			return d
+		}
+	}
+	return ""
+}
+
+// orderByDependsOn stably moves each check after its prerequisites. Dependencies come from the planned checks
+// themselves, falling back to the registry for a prerequisite that isn't in the plan. TestRegistryRelations rules
+// out cycles in the registry.
+func orderByDependsOn(plan []PlannedRun) []PlannedRun {
+	deps := make(map[string][]string, len(plan))
+	for _, p := range plan {
+		deps[p.Check.Name] = p.Check.DependsOn
+	}
+	depth := map[string]int{}
+	var depthOf func(string) int
+	depthOf = func(name string) int {
+		if d, ok := depth[name]; ok {
+			return d
+		}
+		names, ok := deps[name]
+		if !ok {
+			names = preflight.Checks[name].DependsOn
+		}
+		d := 0
+		for _, dep := range names {
+			d = max(d, depthOf(dep)+1)
+		}
+		depth[name] = d
+		return d
+	}
+	out := slices.Clone(plan)
+	slices.SortStableFunc(out, func(a, b PlannedRun) int { return depthOf(a.Check.Name) - depthOf(b.Check.Name) })
+	return out
 }

@@ -94,7 +94,8 @@ func PreflightCmd() *cobra.Command {
 }
 
 // runPreflight lists the checks found and, before running anything, asks once
-// for all checks that create resources. Declining still runs local checks
+// for all checks that create resources. Declining skips only those checks;
+// every other check still runs.
 func runPreflight(ctx context.Context, cr *unstructured.Unstructured, opts preflight.ExecOptions) ([]preflight.CheckRun, error) {
 	plan := preflight.PlanChecks(cr)
 	printPreflightPlan(plan, opts)
@@ -104,7 +105,7 @@ func runPreflight(ctx context.Context, cr *unstructured.Unstructured, opts prefl
 		for _, c := range needs {
 			fmt.Printf("  %s (%s)\n", c.Name, joinResourceReqs(c.ResourceReqs))
 		}
-		if !confirmOnStdin("Run them? (If no, these will be skipped, all others will still run") {
+		if !confirmOnStdin("Run them? (If no, these will be skipped and all other checks will still run)") {
 			declined := make(map[string]bool, len(needs))
 			for _, c := range needs {
 				declined[c.Name] = true
@@ -147,11 +148,19 @@ func printPreflightResults(runs []preflight.CheckRun) {
 		fmt.Println("No preflight checks apply to this CR.")
 		return
 	}
+	var unverified []string
 	for _, r := range runs {
 		line := fmt.Sprintf("[%s] %s (%s)", strings.ToUpper(string(r.Result.Outcome)), r.Result.Check, r.FieldPath)
 		if r.Result.Message != "" {
 			line += ": " + r.Result.Message
 		}
+		if r.Result.CoveredBy != "" {
+			line += fmt.Sprintf("\n    covered by %s", r.Result.CoveredBy)
+			unverified = append(unverified, r.FieldPath)
+		}
 		fmt.Println(line)
+	}
+	if len(unverified) > 0 {
+		fmt.Printf("\nNot verified: credentials for %s. Run wsm from a host on the cluster network to verify them.\n", strings.Join(unverified, ", "))
 	}
 }

@@ -99,6 +99,49 @@ func TestRunChecksSkipAnnotation(t *testing.T) {
 	}
 }
 
+// RunChecks never asks, so it must never create resources, whatever kubeconfig is current on a laptop or CI runner.
+func TestRunChecksDropsResourceCreateChecks(t *testing.T) {
+	var creating []string
+	for name, c := range operatorPreflight.Checks {
+		if NeedsConfirmation(c) {
+			creating = append(creating, name)
+		}
+	}
+	if len(creating) == 0 {
+		t.Skip("no registered check creates resources")
+	}
+
+	// Skip every other check that matches, so a resolver call can only come from a resource-creating check.
+	cr := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps.wandb.com/v2",
+		"kind":       "WeightsAndBiases",
+		"metadata": map[string]any{
+			"name":      "wandb",
+			"namespace": "wandb",
+			"annotations": map[string]any{operatorPreflight.SkipPreflightsAnnotation: strings.Join([]string{
+				operatorPreflight.ExternalMysqlCheck, operatorPreflight.ServerManifestCheck, operatorPreflight.ClusterCapacityCheck,
+			}, ",")},
+		},
+		"spec": map[string]any{
+			"mysql": map[string]any{
+				"default": map[string]any{"externalMysql": map[string]any{
+					"host": map[string]any{"value": "127.0.0.1"},
+					"port": map[string]any{"value": "3306"},
+				}},
+			},
+		},
+	}}
+	resolve := func(context.Context, v2.ValueOrSecret) (string, error) {
+		t.Fatal("resolver called: a resource-creating check ran without confirmation")
+		return "", nil
+	}
+	for _, r := range RunChecks(context.Background(), cr, resolve) {
+		if NeedsConfirmation(operatorPreflight.Checks[r.Result.Check]) {
+			t.Errorf("RunChecks returned %s (%s); resource-creating checks must be left out", r.Result.Check, r.FieldPath)
+		}
+	}
+}
+
 func TestErr(t *testing.T) {
 	result := func(o operatorPreflight.Outcome) CheckRun {
 		return CheckRun{FieldPath: "spec.mysql.default.externalMysql", Result: operatorPreflight.Result{Check: "c", Outcome: o}}

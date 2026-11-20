@@ -211,7 +211,7 @@ When running `wsm deploy-v2 operator`, you can control infrastructure installati
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--install-cert-manager` | `auto` | `auto` (detect/reuse), `true` (force install), `false` (skip) |
-| `--install-nginx-gateway` | `auto` | `auto` (detect/reuse), `true` (force install), `false` (skip) |
+| `--install-nginx-gateway` | `auto` | `auto` (detect/reuse; never upgrades), `true` (install or upgrade to the pinned version), `false` (skip). See [Upgrade nginx-gateway-fabric](../operations/managing.md#upgrade-nginx-gateway-fabric). |
 | `--enable-gateway-api` | `true` | Enable Gateway API support in cert-manager |
 | `--operator-chart-version` | `2.0.0-beta.10` | Operator Helm chart version |
 | `--operator-namespace` | `wandb-operators` | Namespace for the operator |

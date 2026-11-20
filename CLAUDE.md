@@ -71,7 +71,7 @@ Constants in `cmd/wsm/deploy_v2.go` need updating each W&B/operator release. The
 - `minWandbVersion` (currently `"0.80.0"`) — the oldest server wsm will deploy; a resolved version below it (via `--wandb-version`, `--cr-file`, or `--cr-set spec.wandb.version`) is rejected up front by `validateWandbVersion`. Raise it when dropping support for old servers.
 - The default of `--operator-chart-version` flag (currently `"2.0.0-beta.10"`).
 
-cert-manager (`v1.20.3`) and nginx-gateway-fabric (`2.5.1`) versions are pinned as constants in `pkg/operator/operator.go:53-64`. Gateway API CRDs come from a hardcoded URL at line 66.
+cert-manager (`v1.20.3`), nginx-gateway-fabric (`2.9.0`) and the Gateway API release it requires (`GatewayAPIVersion`, `v1.7.0`) are pinned as constants in `pkg/operator/operator.go`. Bump `GatewayAPIVersion` with `NginxGatewayVersion` from the COMPATIBILITY section of the nginx-gateway-fabric release notes; the Gateway API CRD URL is derived from it. Also update `gatewayAPIStandardCRDs` to the CRD names in that release's `standard-install.yaml`; wsm rejects a bundle that is missing any of them.
 
 ## v1 CLI surface (legacy, still present)
 

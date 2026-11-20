@@ -895,21 +895,16 @@ func performDeploy(
 	}
 
 	// Step: Ensure nginx-gateway-fabric
+	var nginxGateway operator.NginxGatewayResult
 	if installNginxGatewayMode != nginxGatewayInstallModeFalse {
 		fmt.Printf("[%d/%d] Ensuring nginx-gateway-fabric...", currentStep, totalSteps)
 		start := time.Now()
 
-		switch installNginxGatewayMode {
-		case nginxGatewayInstallModeAuto:
-			if err := operator.InstallNginxGateway(ctx, true, mirror, gatewayCRDURL, skipGatewayCRDs); err != nil {
-				fmt.Println(" ✗")
-				return err
-			}
-		case nginxGatewayInstallModeTrue:
-			if err := operator.InstallNginxGateway(ctx, false, mirror, gatewayCRDURL, skipGatewayCRDs); err != nil {
-				fmt.Println(" ✗")
-				return err
-			}
+		var err error
+		nginxGateway, err = operator.InstallNginxGateway(ctx, installNginxGatewayMode == nginxGatewayInstallModeAuto, mirror, gatewayCRDURL, skipGatewayCRDs)
+		if err != nil {
+			fmt.Println(" ✗")
+			return err
 		}
 
 		if err := operator.WaitForNginxGateway(ctx, 5*time.Minute); err != nil {
@@ -918,6 +913,13 @@ func performDeploy(
 		}
 
 		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
+		if nginxGateway.Reused && nginxGateway.Outdated {
+			if nginxGateway.WsmOwned {
+				fmt.Printf("  ! Reused existing nginx-gateway-fabric %s; wsm pins %s. Rerun with --install-nginx-gateway true to upgrade it.\n", nginxGateway.Version, operator.NginxGatewayVersion)
+			} else {
+				fmt.Printf("  ! Reused nginx-gateway-fabric %s, which wsm did not install; wsm pins %s. Upgrade it through the tool that installed it: see docs/operations/managing.md#upgrade-nginx-gateway-fabric\n", nginxGateway.Version, operator.NginxGatewayVersion)
+			}
+		}
 		currentStep++
 	}
 
@@ -1062,7 +1064,7 @@ func performDeploy(
 	// (e.g. --install-nginx-gateway=false) leaves an earlier install in place, so
 	// wsm must keep owning it or cluster cleanup would strand it.
 	markers := []string{"cert-manager", "operator"}
-	if installNginxGatewayMode != nginxGatewayInstallModeFalse {
+	if nginxGateway.WsmOwned {
 		markers = append(markers, "nginx-gateway")
 	}
 	if ksmOwned {

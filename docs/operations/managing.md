@@ -47,6 +47,50 @@ wsm deploy-v2 operator \
   --operator-chart-version 2.0.0-beta.10
 ```
 
+### Upgrade nginx-gateway-fabric
+
+By default (`--install-nginx-gateway auto`) `wsm deploy-v2 operator` reuses an existing nginx-gateway-fabric install and does **not** upgrade it; it prints a warning when the running version is older than the one wsm pins (2.9.0). Merging or installing a newer wsm therefore changes nothing on a running cluster until you rerun with `--install-nginx-gateway true`.
+
+Before upgrading, check:
+
+```bash
+kubectl version                                  # server must be 1.32 or later
+helm list -A | grep nginx-gateway-fabric         # wsm's release is `nginx-gateway` in namespace `nginx-gateway`
+```
+
+If nginx-gateway-fabric runs under any other release name or namespace, wsm didn't install it: `auto` reuses it (warning if it's outdated, and without recording it as wsm-owned), and `true` stops without changing anything. Uninstall it and rerun wsm, or upgrade it yourself (use `oci://<mirror>/nginx/charts/nginx-gateway-fabric` instead of the public chart if you install from a mirror):
+
+```bash
+kubectl apply --server-side -f <gateway-api v1.7.0 standard-install.yaml>
+helm pull oci://ghcr.io/nginx/charts/nginx-gateway-fabric --version 2.9.0 --untar
+kubectl apply --server-side --force-conflicts -f nginx-gateway-fabric/crds/    # Helm won't upgrade these itself
+helm upgrade <release> oci://ghcr.io/nginx/charts/nginx-gateway-fabric --version 2.9.0 -n <namespace>
+```
+
+To upgrade a wsm-installed release:
+
+```bash
+wsm deploy-v2 operator \
+  --context <ctx> \
+  --operator-chart-version 2.0.0-beta.10 \
+  --install-nginx-gateway true
+```
+
+This upgrades, in order:
+
+1. **Gateway API CRDs** to v1.7.0 (standard channel), if older ones are installed. wsm stops instead, and you apply the v1.7.0 CRDs yourself and rerun, when `--skip-gateway-api-crds` is set, when the cluster runs the experimental channel, or when something other than wsm or kubectl manages the CRDs (a platform addon such as GKE's managed Gateway API, or another gateway controller's chart). CRDs without a `gateway.networking.k8s.io/bundle-version` annotation are left as is, with a warning.
+2. **nginx-gateway-fabric CRDs** from the new chart (Helm does not upgrade `crds/` on its own).
+3. **The `nginx-gateway` Helm release** to 2.9.0. Data-plane pods for each Gateway roll to the new NGINX image; the Gateway's Service and its load balancer are kept.
+
+nginx-gateway-fabric 2.9.0 requires Kubernetes 1.32 or later. For air-gapped clusters, run `wsm registry mirror` from the new wsm first so the 2.9.0 chart and images are in your mirror, and pass the same `--mirror-registry` flags you installed with.
+
+Verify the running images. The first command shows the control plane; the second shows the NGINX data-plane pods (the ones that serve traffic) with their image digests:
+
+```bash
+kubectl get deploy -A -l app.kubernetes.io/name=nginx-gateway-fabric -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\t"}{.spec.template.spec.containers[0].image}{"\n"}{end}'
+kubectl get pods -A -l gateway.networking.k8s.io/gateway-name -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\t"}{.status.containerStatuses[*].imageID}{"\n"}{end}'
+```
+
 ### Upgrade W&B Version
 
 Use `wsm set-version`. It changes only `spec.wandb.version` on the live CR, refuses downgrades, shows the change and asks for confirmation:

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/docker/go-connections/tlsconfig"
 	appsv1 "github.com/wandb/operator/api/v1"
 	v2 "github.com/wandb/operator/api/v2"
@@ -18,10 +19,13 @@ import (
 	"github.com/wandb/wsm/pkg/observability/telemetry"
 	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v4/pkg/action"
+	"helm.sh/helm/v4/pkg/chart"
 	"helm.sh/helm/v4/pkg/chart/loader"
+	chartv2 "helm.sh/helm/v4/pkg/chart/v2"
 	"helm.sh/helm/v4/pkg/cli"
 	"helm.sh/helm/v4/pkg/registry"
 	v1 "helm.sh/helm/v4/pkg/release/v1"
+	k8sappsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,9 +77,15 @@ const (
 	nginxGatewayChartRef       = "oci://ghcr.io/nginx/charts/nginx-gateway-fabric"
 	// NginxGatewayVersion is the nginx-gateway-fabric chart and image tag wsm
 	// installs. Exported for the same reason as CertManagerVersion.
-	NginxGatewayVersion = "2.5.1"
+	NginxGatewayVersion = "2.9.0"
+	// GatewayAPIVersion must match NginxGatewayVersion's release notes.
+	GatewayAPIVersion = "v1.7.0"
 
-	gatewayApiCRDURL = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml"
+	gatewayApiCRDURL = "https://github.com/kubernetes-sigs/gateway-api/releases/download/" + GatewayAPIVersion + "/standard-install.yaml"
+
+	gatewayAPIBundleVersionAnnotation = "gateway.networking.k8s.io/bundle-version"
+	gatewayAPIChannelAnnotation       = "gateway.networking.k8s.io/channel"
+	addonManagerModeKey               = "addonmanager.kubernetes.io/mode"
 )
 
 // ParseImagePullPolicy validates the operator image pull policy and returns it as a corev1.PullPolicy
@@ -313,37 +323,32 @@ func DeleteCertManager(ctx context.Context) (removed bool, err error) {
 	return true, nil
 }
 
-// InstallNginxGateway installs nginx-gateway-fabric.
-// When skipIfPresent is true, installation is skipped if the nginx-gateway-fabric deployment already exists.
-func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *MirrorConfig, gatewayCRDURL string, skipGatewayCRDs bool) error {
-	if skipIfPresent {
-		deploymentExists, err := nginxGatewayDeploymentExists(ctx)
-		if err != nil {
-			return err
-		}
-		if deploymentExists {
-			return nil
-		}
-	}
+// NginxGatewayResult is what InstallNginxGateway found or did.
+type NginxGatewayResult struct {
+	Reused   bool
+	Outdated bool
+	Version  string
+}
 
-	exists, err := gatewayApiCRDsExist()
-	if err != nil {
-		return fmt.Errorf("failed to check if gateway api crds exist: %w", err)
+// InstallNginxGateway installs or upgrades nginx-gateway-fabric. With skipIfPresent
+// it reuses an existing install.
+func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *MirrorConfig, gatewayCRDURL string, skipGatewayCRDs bool) (NginxGatewayResult, error) {
+	if skipIfPresent {
+		existing, err := nginxGatewayDeployment(ctx)
+		if err != nil {
+			return NginxGatewayResult{}, err
+		}
+		if existing != nil {
+			version := nginxGatewayImageTag(existing)
+			return NginxGatewayResult{Reused: true, Outdated: versionOlder(version, NginxGatewayVersion), Version: version}, nil
+		}
 	}
-	if !exists {
-		// In an air-gapped network the default URL is unreachable. --skip-gateway-api-crds
-		// lets the customer pre-apply the CRDs (e.g. from a mirrored copy) and have wsm
-		// assume they're present; --gateway-api-crd-url points the fetch at an internal host.
-		if skipGatewayCRDs {
-			return fmt.Errorf("gateway API CRDs are not installed and --skip-gateway-api-crds was set; apply them first (kubectl apply -f <gateway-api standard-install.yaml>)")
-		}
-		crdURL := gatewayCRDURL
-		if crdURL == "" {
-			crdURL = gatewayApiCRDURL
-		}
-		if err := installGatewayApiCRDs(ctx, crdURL); err != nil {
-			return fmt.Errorf("failed to install gateway api crds: %w", err)
-		}
+	return NginxGatewayResult{}, installOrUpgradeNginxGateway(ctx, mirror, gatewayCRDURL, skipGatewayCRDs)
+}
+
+func installOrUpgradeNginxGateway(ctx context.Context, mirror *MirrorConfig, gatewayCRDURL string, skipGatewayCRDs bool) error {
+	if err := ensureGatewayApiCRDs(ctx, gatewayCRDURL, skipGatewayCRDs); err != nil {
+		return err
 	}
 
 	if err := CreateNamespace(ctx, nginxGatewayNamespace); err != nil {
@@ -424,6 +429,11 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *Mirror
 			return fmt.Errorf("failed to load nginx-gateway chart: %w", err)
 		}
 
+		// Helm doesn't upgrade crds/, so apply them first.
+		if err := applyChartCRDs(ctx, chartRequested); err != nil {
+			return fmt.Errorf("failed to upgrade nginx-gateway CRDs: %w", err)
+		}
+
 		// Run the upgrade
 		_, err = upgradeClient.RunWithContext(ctx, nginxGatewayReleaseName, chartRequested, releaseValues)
 		if err != nil {
@@ -436,6 +446,7 @@ func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *Mirror
 		installClient.ReleaseName = nginxGatewayReleaseName
 		installClient.Version = NginxGatewayVersion
 		installClient.WaitStrategy = "hookOnly"
+		installClient.ForceConflicts = true
 		installClient.SkipSchemaValidation = true
 
 		// Get the chart
@@ -484,20 +495,51 @@ func WaitForNginxGateway(ctx context.Context, timeout time.Duration) error {
 	})
 }
 
-func nginxGatewayDeploymentExists(ctx context.Context) (bool, error) {
+func nginxGatewayImageTag(deploy *k8sappsv1.Deployment) string {
+	for _, c := range deploy.Spec.Template.Spec.Containers {
+		if c.Name == "nginx-gateway" {
+			return imageTag(c.Image)
+		}
+	}
+	return ""
+}
+
+// imageTag returns an image's tag, ignoring any digest.
+func imageTag(image string) string {
+	image, _, _ = strings.Cut(image, "@")
+	if i := strings.LastIndex(image, ":"); i > strings.LastIndex(image, "/") {
+		return image[i+1:]
+	}
+	return ""
+}
+
+// versionOlder reports have < want; false if either isn't semver.
+func versionOlder(have, want string) bool {
+	h, err := semver.NewVersion(have)
+	if err != nil {
+		return false
+	}
+	w, err := semver.NewVersion(want)
+	if err != nil {
+		return false
+	}
+	return h.LessThan(w)
+}
+
+// nginxGatewayDeployment returns wsm's nginx-gateway-fabric control plane, or nil when it isn't installed.
+func nginxGatewayDeployment(ctx context.Context) (*k8sappsv1.Deployment, error) {
 	_, cs, err := kubectl.GetClientset()
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-
-	_, err = cs.AppsV1().Deployments(nginxGatewayNamespace).Get(ctx, nginxGatewayDeploymentName, metav1.GetOptions{})
-	if err == nil {
-		return true, nil
-	}
+	deploy, err := cs.AppsV1().Deployments(nginxGatewayNamespace).Get(ctx, nginxGatewayDeploymentName, metav1.GetOptions{})
 	if errors.IsNotFound(err) {
-		return false, nil
+		return nil, nil
 	}
-	return false, fmt.Errorf("failed to check nginx-gateway deployment %q: %w", nginxGatewayDeploymentName, err)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check nginx-gateway deployment %q: %w", nginxGatewayDeploymentName, err)
+	}
+	return deploy, nil
 }
 
 // DeleteNginxGateway uninstalls the nginx-gateway-fabric Helm release. removed is false
@@ -557,6 +599,107 @@ func gatewayApiCRDsExist() (bool, error) {
 	return found["gateways"] && found["httproutes"] && found["grpcroutes"], nil
 }
 
+// ensureGatewayApiCRDs installs or upgrades the Gateway API CRDs to GatewayAPIVersion.
+func ensureGatewayApiCRDs(ctx context.Context, gatewayCRDURL string, skipGatewayCRDs bool) error {
+	exists, err := gatewayApiCRDsExist()
+	if err != nil {
+		return fmt.Errorf("failed to check if gateway api crds exist: %w", err)
+	}
+	var installed, channel, owner string
+	if exists {
+		installed, channel, owner, err = gatewayApiBundle(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to read installed gateway api version: %w", err)
+		}
+		if installed == "" {
+			fmt.Printf("\n  ! Gateway API CRDs have no %s annotation, so wsm can't confirm they are %s or later as nginx-gateway-fabric %s requires; leaving them unchanged.\n", gatewayAPIBundleVersionAnnotation, GatewayAPIVersion, NginxGatewayVersion)
+		}
+	}
+	apply, err := gatewayCRDAction(exists, installed, channel, owner, skipGatewayCRDs)
+	if err != nil || !apply {
+		return err
+	}
+
+	crdURL := gatewayCRDURL
+	if crdURL == "" {
+		crdURL = gatewayApiCRDURL
+	}
+	if err := installGatewayApiCRDs(ctx, crdURL); err != nil {
+		return fmt.Errorf("failed to install gateway api crds: %w", err)
+	}
+	return nil
+}
+
+// gatewayCRDAction decides whether to apply the Gateway API CRDs.
+func gatewayCRDAction(exists bool, installed, channel, owner string, skipGatewayCRDs bool) (apply bool, err error) {
+	if !exists {
+		if skipGatewayCRDs {
+			return false, fmt.Errorf("gateway API CRDs are not installed and --skip-gateway-api-crds was set; apply the %s CRDs first (kubectl apply --server-side -f <gateway-api standard-install.yaml>)", GatewayAPIVersion)
+		}
+		return true, nil
+	}
+	if installed == "" || !versionOlder(installed, GatewayAPIVersion) {
+		return false, nil
+	}
+	if skipGatewayCRDs {
+		return false, fmt.Errorf("gateway API CRDs are %s but nginx-gateway-fabric %s requires %s, and --skip-gateway-api-crds was set; apply the %s CRDs first (kubectl apply --server-side -f <gateway-api standard-install.yaml>)", installed, NginxGatewayVersion, GatewayAPIVersion, GatewayAPIVersion)
+	}
+	if channel != "" && channel != "standard" {
+		return false, fmt.Errorf("gateway API CRDs are %s from the %s channel but nginx-gateway-fabric %s requires %s; upgrade them from the same channel first, then rerun", installed, channel, NginxGatewayVersion, GatewayAPIVersion)
+	}
+	if owner != "" {
+		return false, fmt.Errorf("gateway API CRDs are %s and managed by %s, so wsm won't overwrite them; upgrade them to %s through that tool, then rerun", installed, owner, GatewayAPIVersion)
+	}
+	return true, nil
+}
+
+// gatewayApiBundle reads the version, channel and foreign owner of the Gateway CRD.
+func gatewayApiBundle(ctx context.Context) (version, channel, owner string, err error) {
+	_, dyn, err := kubectl.GetDynamicClientset()
+	if err != nil {
+		return "", "", "", err
+	}
+	crdGVR := schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
+	crd, err := dyn.Resource(crdGVR).Get(ctx, "gateways.gateway.networking.k8s.io", metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		return "", "", "", nil
+	}
+	if err != nil {
+		return "", "", "", err
+	}
+	annotations := crd.GetAnnotations()
+	return annotations[gatewayAPIBundleVersionAnnotation], annotations[gatewayAPIChannelAnnotation], gatewayApiCRDOwner(crd), nil
+}
+
+// gatewayApiCRDOwner names an addon or non-wsm/kubectl manager of the CRD, or "".
+func gatewayApiCRDOwner(crd *unstructured.Unstructured) string {
+	// The addon manager applies via kubectl, so only its label gives it away.
+	if _, ok := crd.GetLabels()[addonManagerModeKey]; ok {
+		return "the cluster addon manager (" + addonManagerModeKey + ")"
+	}
+	for _, field := range crd.GetManagedFields() {
+		if field.Subresource != "" || field.Manager == "wsm" || field.Manager == "before-first-apply" || strings.HasPrefix(field.Manager, "kubectl") {
+			continue
+		}
+		return fmt.Sprintf("field manager %q", field.Manager)
+	}
+	return ""
+}
+
+// applyChartCRDs force-applies a chart's crds/.
+func applyChartCRDs(ctx context.Context, ch chart.Charter) error {
+	c, ok := ch.(*chartv2.Chart)
+	if !ok {
+		return fmt.Errorf("unsupported chart type %T", ch)
+	}
+	for _, crd := range c.CRDObjects() {
+		if err := kubectl.ApplyYAMLForce(ctx, crd.File.Data); err != nil {
+			return fmt.Errorf("%s: %w", crd.Name, err)
+		}
+	}
+	return nil
+}
+
 // installGatewayApiCRDs installs Gateway API CRDs from the given YAML URL.
 func installGatewayApiCRDs(ctx context.Context, crdURL string) error {
 	resp, err := http.Get(crdURL)
@@ -574,7 +717,7 @@ func installGatewayApiCRDs(ctx context.Context, crdURL string) error {
 		return fmt.Errorf("failed to read Gateway API CRDs: %w", err)
 	}
 
-	if err := kubectl.ApplyYAML(ctx, yamlContent); err != nil {
+	if err := kubectl.ApplyYAMLForce(ctx, yamlContent); err != nil {
 		return fmt.Errorf("failed to apply Gateway API CRDs: %w", err)
 	}
 

@@ -899,17 +899,10 @@ func performDeploy(
 		fmt.Printf("[%d/%d] Ensuring nginx-gateway-fabric...", currentStep, totalSteps)
 		start := time.Now()
 
-		switch installNginxGatewayMode {
-		case nginxGatewayInstallModeAuto:
-			if err := operator.InstallNginxGateway(ctx, true, mirror, gatewayCRDURL, skipGatewayCRDs); err != nil {
-				fmt.Println(" ✗")
-				return err
-			}
-		case nginxGatewayInstallModeTrue:
-			if err := operator.InstallNginxGateway(ctx, false, mirror, gatewayCRDURL, skipGatewayCRDs); err != nil {
-				fmt.Println(" ✗")
-				return err
-			}
+		nginxGateway, err := operator.InstallNginxGateway(ctx, installNginxGatewayMode == nginxGatewayInstallModeAuto, mirror, gatewayCRDURL, skipGatewayCRDs)
+		if err != nil {
+			fmt.Println(" ✗")
+			return err
 		}
 
 		if err := operator.WaitForNginxGateway(ctx, 5*time.Minute); err != nil {
@@ -918,6 +911,9 @@ func performDeploy(
 		}
 
 		fmt.Printf(" ✓ (%s)\n", time.Since(start).Round(time.Second))
+		if nginxGateway.Reused && nginxGateway.Outdated {
+			fmt.Printf("  ! Reused existing nginx-gateway-fabric %s; wsm pins %s. Rerun with --install-nginx-gateway true to upgrade it.\n", nginxGateway.Version, operator.NginxGatewayVersion)
+		}
 		currentStep++
 	}
 

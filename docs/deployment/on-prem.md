@@ -284,7 +284,7 @@ Even with everything mirrored, a few things default to an online source. Each ha
 
 | Still online | When | What the air-gapped customer does |
 |--------------|------|------------------------------------|
-| **Gateway API CRDs** (a YAML on `github.com`) | Whenever nginx-gateway installs | Pre-apply the CRDs from a copy you carried in, then pass `--skip-gateway-api-crds`; **or** host the YAML internally and pass `--gateway-api-crd-url <internal-url>`. |
+| **Gateway API CRDs** (a YAML on `github.com`) | Whenever nginx-gateway installs or upgrades, if the cluster has no Gateway API CRDs or older than v1.7.0 | Pre-apply the v1.7.0 `standard-install.yaml` from a copy you carried in (`kubectl apply --server-side -f`), then pass `--skip-gateway-api-crds`; **or** host the YAML internally and pass `--gateway-api-crd-url <internal-url>`. |
 | **Node container-runtime registry mirror** (required for the data plane) | Always, for the managed DB images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) | The operator emits these with upstream refs, so each node must mirror `docker.io`/`quay.io`/`ghcr.io`/`us-docker.pkg.dev` → `$REG/<host-stripped>`. `wsm cluster create --insecure-registry-host $REG` sets this up for Kind; on a real cluster you configure `certs.d` per node. Platforms with no node access (GKE Autopilot, EKS Fargate) can't run the managed databases air-gapped. |
 | **Kind node image** | Only if `--setup-k8s-cluster` | Mirror `kindest/node` and pass `--kind-node-image <reg>/kindest/node:...`. N/A for an existing cluster. |
 
@@ -295,7 +295,7 @@ Even with everything mirrored, a few things default to an online source. Each ha
 `wsm` installs the operator, dependencies, and the CR. These steps are the customer's, done out-of-band (kubectl / your platform tooling) — not by `wsm`:
 
 **Before / during the deploy**
-- **Gateway API CRDs** — carry in `standard-install.yaml` and `kubectl apply` it (then `--skip-gateway-api-crds`), or host it internally and use `--gateway-api-crd-url`.
+- **Gateway API CRDs** — carry in the v1.7.0 `standard-install.yaml` and `kubectl apply --server-side` it (then `--skip-gateway-api-crds`), or host it internally and use `--gateway-api-crd-url`.
 - **OpenShift** — pass `--openshift` so the managed-service operators are admitted under `restricted-v2`. This does **not** fix the frontend nginx pod (it rewrites root-owned files at startup, which an arbitrary UID can't write); that still requires BYO ingress / an upstream operator fix.
 - **Node container-runtime registry mirror** — how the managed DB images (ClickHouse/MySQL/Redis/SeaweedFS/Kafka) reach the mirror on **every** path (see the Phase 2 diagrams): each node mirrors `docker.io`/`quay.io`/`ghcr.io`/`us-docker.pkg.dev` → `$REG/<host-stripped>`. `wsm cluster create --insecure-registry-host $REG` sets this up for Kind; on a real cluster you configure `certs.d` per node. `--mirror-registry` does not retarget these (see the Tier-3 note above).
 - **Registry pull credentials** — for an auth'd registry, `docker login` + `helm registry login` for `wsm`, and create an `imagePullSecret` for the operator + W&B namespaces so in-cluster pulls and the manifest fetch authenticate.

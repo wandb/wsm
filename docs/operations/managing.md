@@ -55,9 +55,19 @@ Before upgrading, check:
 
 ```bash
 kubectl version                                  # server must be 1.32 or later
+helm list -A | grep nginx-gateway-fabric         # wsm's release is `nginx-gateway` in namespace `nginx-gateway`
 ```
 
-To upgrade:
+If nginx-gateway-fabric runs under any other release name or namespace, wsm didn't install it: `auto` reuses it (warning if it's outdated, and without recording it as wsm-owned), and `true` stops without changing anything. Uninstall it and rerun wsm, or upgrade it yourself (use `oci://<mirror>/nginx/charts/nginx-gateway-fabric` instead of the public chart if you install from a mirror):
+
+```bash
+kubectl apply --server-side -f <gateway-api v1.7.0 standard-install.yaml>
+helm pull oci://ghcr.io/nginx/charts/nginx-gateway-fabric --version 2.9.0 --untar
+kubectl apply --server-side --force-conflicts -f nginx-gateway-fabric/crds/    # Helm won't upgrade these itself
+helm upgrade <release> oci://ghcr.io/nginx/charts/nginx-gateway-fabric --version 2.9.0 -n <namespace>
+```
+
+To upgrade a wsm-installed release:
 
 ```bash
 wsm deploy-v2 operator \

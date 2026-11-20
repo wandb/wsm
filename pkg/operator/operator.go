@@ -71,10 +71,10 @@ const (
 	// exactly what `wsm deploy-v2 operator` will request.
 	CertManagerVersion = "v1.20.3"
 
-	nginxGatewayNamespace      = "nginx-gateway"
-	nginxGatewayDeploymentName = "nginx-gateway-nginx-gateway-fabric"
-	nginxGatewayReleaseName    = "nginx-gateway"
-	nginxGatewayChartRef       = "oci://ghcr.io/nginx/charts/nginx-gateway-fabric"
+	nginxGatewayNamespace   = "nginx-gateway"
+	instanceLabel           = "app.kubernetes.io/instance"
+	nginxGatewayReleaseName = "nginx-gateway"
+	nginxGatewayChartRef    = "oci://ghcr.io/nginx/charts/nginx-gateway-fabric"
 	// NginxGatewayVersion is the nginx-gateway-fabric chart and image tag wsm
 	// installs. Exported for the same reason as CertManagerVersion.
 	NginxGatewayVersion = "2.9.0"
@@ -326,24 +326,29 @@ func DeleteCertManager(ctx context.Context) (removed bool, err error) {
 // NginxGatewayResult is what InstallNginxGateway found or did.
 type NginxGatewayResult struct {
 	Reused   bool
+	WsmOwned bool
 	Outdated bool
 	Version  string
 }
 
 // InstallNginxGateway installs or upgrades nginx-gateway-fabric. With skipIfPresent
-// it reuses an existing install.
+// it reuses any existing install. It never touches a release wsm didn't create.
 func InstallNginxGateway(ctx context.Context, skipIfPresent bool, mirror *MirrorConfig, gatewayCRDURL string, skipGatewayCRDs bool) (NginxGatewayResult, error) {
-	if skipIfPresent {
-		existing, err := nginxGatewayDeployment(ctx)
-		if err != nil {
-			return NginxGatewayResult{}, err
+	existing, err := findNginxGateway(ctx)
+	if err != nil {
+		return NginxGatewayResult{}, err
+	}
+	if existing != nil {
+		version := nginxGatewayImageTag(existing)
+		if skipIfPresent {
+			return NginxGatewayResult{Reused: true, WsmOwned: isWsmNginxGateway(existing), Outdated: versionOlder(version, NginxGatewayVersion), Version: version}, nil
 		}
-		if existing != nil {
-			version := nginxGatewayImageTag(existing)
-			return NginxGatewayResult{Reused: true, Outdated: versionOlder(version, NginxGatewayVersion), Version: version}, nil
+		if !isWsmNginxGateway(existing) {
+			return NginxGatewayResult{}, fmt.Errorf("nginx-gateway-fabric %s is installed as Helm release %q in namespace %q, which wsm did not install, so wsm won't touch it; see docs/operations/managing.md#upgrade-nginx-gateway-fabric",
+				version, existing.Labels[instanceLabel], existing.Namespace)
 		}
 	}
-	return NginxGatewayResult{}, installOrUpgradeNginxGateway(ctx, mirror, gatewayCRDURL, skipGatewayCRDs)
+	return NginxGatewayResult{WsmOwned: true}, installOrUpgradeNginxGateway(ctx, mirror, gatewayCRDURL, skipGatewayCRDs)
 }
 
 func installOrUpgradeNginxGateway(ctx context.Context, mirror *MirrorConfig, gatewayCRDURL string, skipGatewayCRDs bool) error {
@@ -473,14 +478,9 @@ func installOrUpgradeNginxGateway(ctx context.Context, mirror *MirrorConfig, gat
 
 // WaitForNginxGateway waits for nginx-gateway-fabric to be ready
 func WaitForNginxGateway(ctx context.Context, timeout time.Duration) error {
-	_, cs, err := kubectl.GetClientset()
-	if err != nil {
-		return err
-	}
-
 	return wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-		deploy, err := cs.AppsV1().Deployments(nginxGatewayNamespace).Get(ctx, nginxGatewayDeploymentName, metav1.GetOptions{})
-		if err != nil {
+		deploy, err := findNginxGateway(ctx)
+		if err != nil || deploy == nil {
 			return false, nil
 		}
 
@@ -526,20 +526,29 @@ func versionOlder(have, want string) bool {
 	return h.LessThan(w)
 }
 
-// nginxGatewayDeployment returns wsm's nginx-gateway-fabric control plane, or nil when it isn't installed.
-func nginxGatewayDeployment(ctx context.Context) (*k8sappsv1.Deployment, error) {
+// findNginxGateway finds the control plane in any namespace, preferring wsm's release.
+func findNginxGateway(ctx context.Context) (*k8sappsv1.Deployment, error) {
 	_, cs, err := kubectl.GetClientset()
 	if err != nil {
 		return nil, err
 	}
-	deploy, err := cs.AppsV1().Deployments(nginxGatewayNamespace).Get(ctx, nginxGatewayDeploymentName, metav1.GetOptions{})
-	if errors.IsNotFound(err) {
+	list, err := cs.AppsV1().Deployments(metav1.NamespaceAll).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=nginx-gateway-fabric"})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list nginx-gateway-fabric deployments: %w", err)
+	}
+	if len(list.Items) == 0 {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to check nginx-gateway deployment %q: %w", nginxGatewayDeploymentName, err)
+	for i := range list.Items {
+		if isWsmNginxGateway(&list.Items[i]) {
+			return &list.Items[i], nil
+		}
 	}
-	return deploy, nil
+	return &list.Items[0], nil
+}
+
+func isWsmNginxGateway(deploy *k8sappsv1.Deployment) bool {
+	return deploy.Namespace == nginxGatewayNamespace && deploy.Labels[instanceLabel] == nginxGatewayReleaseName
 }
 
 // DeleteNginxGateway uninstalls the nginx-gateway-fabric Helm release. removed is false

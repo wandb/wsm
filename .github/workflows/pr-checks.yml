@@ -20,7 +20,7 @@ env:
 jobs:
   pr-body:
     name: PR Body
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LIGHT || 'ubuntu-latest' }}
     steps:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
@@ -69,7 +69,7 @@ jobs:
 
   pr-title:
     name: PR Title
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LIGHT || 'ubuntu-latest' }}
     steps:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
@@ -121,7 +121,7 @@ jobs:
 
   pr-release-label:
     name: Release Label
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LIGHT || 'ubuntu-latest' }}
     steps:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:

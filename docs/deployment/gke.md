@@ -11,7 +11,7 @@ This guide covers deploying W&B on GKE using WSM, with Gateway API and SSL termi
 
 ### GKE Cluster Requirements
 
-- **Kubernetes version**: 1.28 or later recommended
+- **Kubernetes version**: 1.32 or later (required by nginx-gateway-fabric 2.9.0)
 - **Node pools**: At least 3 nodes with sufficient resources (see [Sizing Reference](../reference/sizing.md))
 - **Gateway API**: Not required to be pre-installed; WSM installs `nginx-gateway-fabric` by default. You may use GKE Gateway if preferred.
 

@@ -11,7 +11,7 @@ This guide covers deploying W&B on Amazon EKS using WSM, with Gateway API and SS
 
 ### EKS Cluster Requirements
 
-- **Kubernetes version**: 1.28 or later recommended
+- **Kubernetes version**: 1.32 or later (required by nginx-gateway-fabric 2.9.0)
 - **Node groups**: At least 3 nodes across multiple availability zones
 - **IAM roles**: Worker nodes should have appropriate IAM roles for load balancing and storage
 - **Gateway API**: Not required to be pre-installed; WSM installs `nginx-gateway-fabric` by default.

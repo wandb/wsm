@@ -52,7 +52,7 @@ wsm deploy-v2 operator --context <ctx> --install-cert-manager true
 **Fix**: WSM installs Gateway API CRDs automatically when deploying nginx-gateway-fabric. If you skipped it, manually install:
 
 ```bash
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml
+kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.7.0/standard-install.yaml
 ```
 
 ---
